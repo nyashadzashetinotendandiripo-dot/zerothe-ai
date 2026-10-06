@@ -1,4 +1,4 @@
-/* OpenGrokBot download site. No dependencies. */
+/* ZerotheBot download site. No dependencies. */
 
 // ---- CONFIGURE ME ---------------------------------------------------------------------------------------
 // Set REPO to "<github-user>/<repo>" once the project is on GitHub. The page then reads the latest release
@@ -98,7 +98,7 @@ function pick(tab) {
   setTimeout(() => {
     img.src = "img/" + tab.dataset.img + ".png";
     cap.textContent = tab.dataset.cap;
-    img.alt = "OpenGrokBot: " + tab.textContent.toLowerCase();
+    img.alt = "ZerotheBot: " + tab.textContent.toLowerCase();
   }, 180);
   img.onload = () => (img.style.opacity = 1);
 }

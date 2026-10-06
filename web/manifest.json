@@ -1,6 +1,6 @@
 {
-  "name": "OpenGrokBot",
-  "short_name": "Bots",
+  "name": "ZerotheBot",
+  "short_name": "ZerotheBot",
   "description": "Message your always-on AI teammates from your phone.",
   "start_url": "/",
   "scope": "/",

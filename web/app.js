@@ -1,4 +1,4 @@
-// OpenGrokBot mobile web app. Plain JS, no build step. Talks to the same local service as the desktop app.
+// ZerotheBot mobile web app. Plain JS, no build step. Talks to the same local service as the desktop app.
 (() => {
   'use strict';
   const $ = (s, el = document) => el.querySelector(s);
