@@ -7,6 +7,9 @@
 - **Approval escalations.** Unanswered approvals no longer die silently: you get an urgent nudge at 75% of the approval timeout and again if something sits unanswered for three days (each escalation fires once).
 - **Routine safety limits.** Every routine can set a ceiling (max items per run), a tripwire (stop if more than X% of items look unusual) and a kill condition (an event that pauses the routine and notifies you). The limits are injected into every unattended run and shown in the routine list.
 - **Marketplace.** New Marketplace page with categorized Bot templates (category, creator, blurb on every template) plus four new templates: Social Media, Design Reviewer, Life Admin and Product Scout.
+- **Logins from chat.** New `login_fill` tool: a Bot that hits a login page shows an approval card right in the chat, you type (or paste from any password manager) the username and password, and it goes straight into the form. The password never reaches the model, chat history, or logs. Optional "Remember on this PC" stores it in the Windows Credential Manager so the next visit fills silently. Works on desktop and the phone PWA. Keep `request_takeover` for 2FA codes and CAPTCHAs.
+- **Google Docs, Sheets & Slides.** New built-in connector (`gdocs`): find, create, read and append Google Docs; read/create/append Sheets; create text-based Slide decks. Same Google sign-in as Gmail; files it creates can be attached to email.
+- **Email attachments, both ways.** `gmail_read` now lists attachments and `gmail_get_attachment` saves one into `shared/attachments/`; `gmail_create_draft` and `gmail_send` accept `attachments:` paths from the workspace.
 
 ## 1.5.0
 

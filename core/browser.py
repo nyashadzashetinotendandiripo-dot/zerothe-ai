@@ -389,6 +389,34 @@ class Screen:
         await self._settle(0.3)
         return await self.state()
 
+    async def fill_credentials(self, username: str, password: str,
+                               username_selector: str | None = None, password_selector: str | None = None) -> dict:
+        """Fill a login form with credentials the user typed in chat. Never logged, never returned to the model."""
+        page = await self.ensure_page()
+        p_sel = (password_selector or "").strip() or "input[type=password]"
+        u_sel = (username_selector or "").strip() or "input[type=email], input[type=text], input:not([type]), input[type=tel]"
+        ok_user = ok_pass = False
+        if username:
+            try:
+                await page.locator(u_sel).first.fill(username, timeout=3000)
+                ok_user = True
+            except Exception:  # noqa: BLE001 - fall through; password box is the critical one
+                pass
+        try:
+            await page.locator(p_sel).first.fill(password, timeout=3000)
+            ok_pass = True
+        except Exception:  # noqa: BLE001 - non-standard input: click it and keyboard-type
+            el = await page.query_selector(p_sel)
+            if el is not None:
+                try:
+                    await el.click(timeout=3000)
+                    await page.keyboard.type(password, delay=15)
+                    ok_pass = True
+                except Exception:  # noqa: BLE001
+                    pass
+        await self._settle(0.2)
+        return {"filled": ok_pass, "username_filled": ok_user}
+
     async def select_option(self, element: int, value: str) -> dict:
         page = await self.ensure_page()
         loc = page.locator(f'[data-gb-id="{int(element)}"]').first

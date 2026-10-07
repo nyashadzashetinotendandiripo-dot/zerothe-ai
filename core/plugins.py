@@ -15,6 +15,7 @@ import hashlib
 import importlib.util
 import inspect
 import json
+import mimetypes
 import re
 import secrets as pysecrets
 import shutil
@@ -200,6 +201,18 @@ def _gmail_text(payload: dict) -> str:
     return text
 
 
+def _gmail_parts(payload: dict) -> list[dict]:
+    """All MIME parts of a Gmail payload that carry a filename (i.e. attachments, inline or not)."""
+    out: list[dict] = []
+    for p in payload.get("parts", []) or []:
+        if p.get("filename"):
+            out.append(p)
+        out.extend(_gmail_parts(p))
+    if payload.get("filename") and payload not in out:
+        out.append(payload)
+    return out
+
+
 def build_gmail(c: Conn) -> list[ToolSpec]:
     base = "https://gmail.googleapis.com/gmail/v1/users/me"
 
@@ -220,11 +233,35 @@ def build_gmail(c: Conn) -> list[ToolSpec]:
     def read(ctx, a):
         d = c.http(ctx, "GET", f"{base}/messages/{a['message_id']}", headers=H(), params={"format": "full"})
         hd = {x["name"]: x["value"] for x in d.get("payload", {}).get("headers", [])}
+        parts = _gmail_parts(d.get("payload", {}))
+        atts = [{"filename": p.get("filename"), "mime": p.get("mimeType"),
+                 "size": (p.get("body") or {}).get("size"), "attachment_id": (p.get("body") or {}).get("attachmentId")}
+                for p in parts if p.get("filename")]
         return {"id": d["id"], "thread_id": d["threadId"], "from": hd.get("From"), "to": hd.get("To"), "cc": hd.get("Cc"),
                 "subject": hd.get("Subject"), "date": hd.get("Date"), "message_id_header": hd.get("Message-ID"),
-                "body": _gmail_text(d.get("payload", {}))[:10000]}
+                "attachments": atts, "body": _gmail_text(d.get("payload", {}))[:10000]}
 
-    def mime(a) -> str:
+    def get_attachment(ctx, a):
+        d = c.http(ctx, "GET", f"{base}/messages/{a['message_id']}", headers=H(), params={"format": "full"})
+        parts = [p for p in _gmail_parts(d.get("payload", {})) if (p.get("body") or {}).get("attachmentId")]
+        want = (a.get("attachment_id") or "").strip()
+        fname = (a.get("filename") or "").strip().lower()
+        part = next((p for p in parts if str((p.get("body") or {}).get("attachmentId")) == want), None) \
+            or next((p for p in parts if (p.get("filename") or "").lower() == fname), None)
+        if not part:
+            names = ", ".join(p.get("filename") or "?" for p in parts) or "none"
+            return {"error": "No such attachment on that message.", "available": names}
+        att = c.http(ctx, "GET", f"{base}/messages/{a['message_id']}/attachments/{part['body']['attachmentId']}", headers=H())
+        raw = base64.urlsafe_b64decode((att.get("data") or "") + "===")
+        safe = re.sub(r"[^A-Za-z0-9._ -]", "_", part.get("filename") or "attachment").strip()[:80] or "attachment.bin"
+        folder = Path(ctx.engine.computer.workspace) / "shared" / "attachments" / re.sub(r"[^A-Za-z0-9_-]", "_", a["message_id"])
+        folder.mkdir(parents=True, exist_ok=True)
+        fp = folder / safe
+        fp.write_bytes(raw)
+        return f"Saved {len(raw)} bytes to {fp} ({part.get('mimeType') or 'file'}). Read it with fs_read if it is text, " \
+               "or attach it to an email with gmail_create_draft / gmail_send attachments."
+
+    def mime(ctx, a) -> str:
         m = EmailMessage()
         m["To"], m["Subject"] = a["to"], a.get("subject", "")
         if a.get("cc"):
@@ -232,17 +269,29 @@ def build_gmail(c: Conn) -> list[ToolSpec]:
         if a.get("in_reply_to"):
             m["In-Reply-To"] = m["References"] = a["in_reply_to"]
         m.set_content(a.get("body", ""))
+        ws = Path(ctx.engine.computer.workspace)
+        for rel in a.get("attachments") or []:
+            fp = Path(str(rel))
+            if not fp.is_absolute():
+                fp = ws / fp
+            if not fp.is_file():
+                raise ConnectorError(f"Attachment not found in the workspace: {rel}")
+            if fp.stat().st_size > 20_000_000:
+                raise ConnectorError(f"Attachment is over Gmail's 20 MB limit: {rel}")
+            mt = mimetypes.guess_type(fp.name)[0] or "application/octet-stream"
+            maintype, _, subtype = mt.partition("/")
+            m.add_attachment(fp.read_bytes(), maintype=maintype, subtype=subtype, filename=fp.name)
         return base64.urlsafe_b64encode(m.as_bytes()).decode()
 
     def draft(ctx, a):
-        msg: dict[str, Any] = {"raw": mime(a)}
+        msg: dict[str, Any] = {"raw": mime(ctx, a)}
         if a.get("thread_id"):
             msg["threadId"] = a["thread_id"]
         d = c.http(ctx, "POST", f"{base}/drafts", headers=H(), json_body={"message": msg})
         return f"Draft created (id {d['id']}). It has NOT been sent."
 
     def send(ctx, a):
-        msg: dict[str, Any] = {"raw": mime(a)}
+        msg: dict[str, Any] = {"raw": mime(ctx, a)}
         if a.get("thread_id"):
             msg["threadId"] = a["thread_id"]
         d = c.http(ctx, "POST", f"{base}/messages/send", headers=H(), json_body=msg)
@@ -258,15 +307,23 @@ def build_gmail(c: Conn) -> list[ToolSpec]:
         return "Labels updated."
 
     mail_props = {"to": s("Recipient address(es), comma separated"), "subject": s("Subject"), "body": s("Plain-text body"),
-                  "cc": s("Cc addresses"), "thread_id": s("Gmail thread id when replying"), "in_reply_to": s("Message-ID header being replied to")}
+                  "cc": s("Cc addresses"), "thread_id": s("Gmail thread id when replying"), "in_reply_to": s("Message-ID header being replied to"),
+                  "attachments": {"type": "array", "items": {"type": "string"},
+                                  "description": "Workspace file paths to attach (max 20 MB each), e.g. shared/jobhunt/cv.pdf"}}
     send_risk = R("send", lambda a: f"Send email to {a.get('to')}: \"{short(a.get('subject', ''), 80)}\"", lambda a: str(a.get("to", "*")).lower(),
                   detail=lambda a: {"to": a.get("to"), "cc": a.get("cc"), "subject": a.get("subject"), "body": short(a.get("body", ""), 1500)})
     return [
         T("gmail_search", "Search Gmail with Gmail query syntax (e.g. 'is:unread newer_than:2d'). Returns message summaries.",
           {"query": s("Gmail search query"), "max_results": i("Max results (<=25)")}, ["query"], search, read=True, untrusted="Gmail",
           label=lambda a: f"Search Gmail: {a.get('query', '')}"),
-        T("gmail_read", "Read one email by id.", {"message_id": s("Message id")}, ["message_id"], read, read=True, untrusted="an email",
+        T("gmail_read", "Read one email by id (lists any attachments; save one with gmail_get_attachment).", {"message_id": s("Message id")}, ["message_id"], read, read=True, untrusted="an email",
           label=lambda a: "Read an email"),
+        T("gmail_get_attachment", "Download an attachment from an email into shared/attachments/ in the workspace.",
+          {"message_id": s("Message id"), "filename": s("Attachment filename (or use attachment_id)"), "attachment_id": s("Attachment id from gmail_read")},
+          ["message_id"], get_attachment,
+          risk=R("download", lambda a: f"Save attachment {a.get('filename') or a.get('attachment_id') or ''} from an email",
+                 lambda a: str(a.get("filename") or a.get("attachment_id") or "*")),
+          label=lambda a: f"Save attachment {a.get('filename') or a.get('attachment_id') or ''}"),
         T("gmail_create_draft", "Create a draft email (not sent). Use this to propose replies.", mail_props, ["to", "subject", "body"], draft,
           label=lambda a: f"Draft email to {a.get('to')}"),
         T("gmail_send", "Send an email. Requires user approval.", mail_props, ["to", "subject", "body"], send, risk=send_risk,
@@ -276,6 +333,141 @@ def build_gmail(c: Conn) -> list[ToolSpec]:
         T("gmail_label", "Add/remove labels on a message (e.g. archive = remove INBOX, mark read = remove UNREAD).",
           {"message_id": s("Message id"), "add": {"type": "array", "items": {"type": "string"}}, "remove": {"type": "array", "items": {"type": "string"}}},
           ["message_id"], label, label=lambda a: "Update Gmail labels"),
+    ]
+
+
+def build_gdocs(c: Conn) -> list[ToolSpec]:
+    """Google Docs, Sheets and Slides over the Google REST APIs."""
+    DOCS = "https://docs.googleapis.com/v1/documents"
+    SHEETS = "https://sheets.googleapis.com/v4/spreadsheets"
+    SLIDES = "https://slides.googleapis.com/v1/presentations"
+    DRIVE = "https://www.googleapis.com/drive/v3/files"
+    _KIND_MIME = {"doc": "application/vnd.google-apps.document",
+                  "sheet": "application/vnd.google-apps.spreadsheet",
+                  "slide": "application/vnd.google-apps.presentation"}
+
+    def H() -> dict:
+        return c.google_headers()
+
+    def search(ctx, a):
+        kind = a.get("kind") if a.get("kind") in _KIND_MIME else "doc"
+        q = f"mimeType='{_KIND_MIME[kind]}' and trashed=false"
+        if a.get("name"):
+            q += " and name contains '" + str(a["name"]).replace("'", "\\'") + "'"
+        res = c.http(ctx, "GET", DRIVE, headers=H(),
+                     params={"q": q, "pageSize": 20, "orderBy": "modifiedTime desc",
+                             "fields": "files(id,name,mimeType,modifiedTime,webViewLink)"})
+        out = [{"id": f.get("id"), "name": f.get("name"), "url": f.get("webViewLink"), "modified": f.get("modifiedTime")}
+               for f in res.get("files", [])]
+        return out or f"No Google {kind}s found."
+
+    def doc_create(ctx, a):
+        d = c.http(ctx, "POST", DOCS, headers=H(), json_body={"title": a["title"]})
+        did = d["documentId"]
+        if a.get("body"):
+            c.http(ctx, "POST", f"{DOCS}/{did}:batchUpdate", headers=H(),
+                   json_body={"requests": [{"insertText": {"endOfSegmentLocation": {"segmentId": ""}, "text": str(a["body"])}}]})
+        return {"documentId": did, "title": a["title"], "url": f"https://docs.google.com/document/d/{did}/edit"}
+
+    def doc_read(ctx, a):
+        d = c.http(ctx, "GET", f"{DOCS}/{a['document_id']}", headers=H())
+        chunks = []
+        for el in d.get("body", {}).get("content", []):
+            for pe in el.get("paragraph", {}).get("paragraphElements", []):
+                tr = pe.get("textRun") or {}
+                if tr.get("content"):
+                    chunks.append(tr["content"])
+        return {"title": d.get("title"), "text": "".join(chunks)[:20000] or "(empty document)"}
+
+    def doc_append(ctx, a):
+        text = str(a.get("text") or "")
+        c.http(ctx, "POST", f"{DOCS}/{a['document_id']}:batchUpdate", headers=H(),
+               json_body={"requests": [{"insertText": {"endOfSegmentLocation": {"segmentId": ""}, "text": text}}]})
+        return f"Appended {len(text)} characters to the document."
+
+    def sheet_read(ctx, a):
+        rng = a.get("range") or "A1:Z100"
+        r = c.http(ctx, "GET", f"{SHEETS}/{a['spreadsheet_id']}/values/{quote(rng)}", headers=H(),
+                   params={"majorDimension": "ROWS", "valueRenderOption": "FORMATTED_VALUE"})
+        vals = r.get("values") or []
+        lines = [" | ".join(str(cell) for cell in row) for row in vals]
+        return {"range": r.get("range"), "rows": len(vals), "text": "\n".join(lines)[:12000] or "Empty range."}
+
+    def sheet_create(ctx, a):
+        sh = c.http(ctx, "POST", SHEETS, headers=H(), json_body={"properties": {"title": a["title"]}})
+        sid = sh["spreadsheetId"]
+        rows = a.get("rows") or []
+        if rows:
+            c.http(ctx, "PUT", f"{SHEETS}/{sid}/values/Sheet1!A1", headers=H(),
+                   params={"valueInputOption": "RAW"},
+                   json_body={"range": "Sheet1!A1", "majorDimension": "ROWS", "values": rows})
+        return {"spreadsheetId": sid, "title": a["title"], "url": f"https://docs.google.com/spreadsheets/d/{sid}/edit"}
+
+    def sheet_append(ctx, a):
+        cells = [str(x) for x in (a.get("cells") or [])]
+        rng = a.get("range") or "Sheet1!A:Z"
+        c.http(ctx, "POST", f"{SHEETS}/{a['spreadsheet_id']}/values/{quote(rng)}:append", headers=H(),
+               params={"valueInputOption": "RAW", "insertDataOption": "INSERT_ROWS"},
+               json_body={"range": rng, "majorDimension": "ROWS", "values": [cells]})
+        return f"Appended a row with {len(cells)} cells."
+
+    def slide_create(ctx, a):
+        p = c.http(ctx, "POST", SLIDES, headers=H(), json_body={"title": a["title"]})
+        pid = p["presentationId"]
+        reqs: list[dict] = []
+        for n, sl in enumerate(a.get("slides") or [], start=1):
+            sid = f"gb_s{n}_{pysecrets.token_hex(3)}"
+            tb = f"gb_t{n}_{pysecrets.token_hex(3)}"
+            reqs.append({"createSlide": {"objectId": sid, "insertionIndex": n,
+                                         "slideLayoutReference": {"predefinedLayout": "BLANK"}}})
+            reqs.append({"createShape": {"objectId": tb, "shapeType": "TEXT_BOX",
+                                         "elementProperties": {
+                                             "size": {"width": {"magnitude": 11277600, "unit": "EMU"},
+                                                      "height": {"magnitude": 6400800, "unit": "EMU"}},
+                                             "transform": {"scaleX": 1, "scaleY": 1, "translateX": 457200,
+                                                           "translateY": 457200, "unit": "EMU"}}}})
+            lines = ([str(sl["title"])] if sl.get("title") else []) + [f"• {b}" for b in (sl.get("bullets") or [])]
+            if lines:
+                reqs.append({"insertText": {"objectId": tb, "text": "\n".join(lines), "insertionIndex": 0}})
+        if reqs:
+            c.http(ctx, "POST", f"{SLIDES}/{pid}:batchUpdate", headers=H(), json_body={"requests": reqs})
+        return {"presentationId": pid, "url": f"https://docs.google.com/presentation/d/{pid}/edit",
+                "slides_added": len(a.get("slides") or [])}
+
+    write_risk = lambda cat, what: R(cat, what, lambda a: str(a.get("title") or a.get("document_id") or a.get("spreadsheet_id") or "*"))  # noqa: E731
+    return [
+        T("gdocs_search", "Find Google Docs/Sheets/Slides in My Drive (files made with this app).",
+          {"kind": s("doc | sheet | slide"), "name": s("Only files whose name contains this")}, [], search, read=True,
+          label=lambda a: f"Find Google {a.get('kind') or 'doc'}s: {a.get('name') or 'all'}"),
+        T("gdocs_create", "Create a Google Doc, optionally with body text.", {"title": s("Document title"), "body": s("Initial text")},
+          ["title"], doc_create, risk=write_risk("write", lambda a: f"Create Google Doc '{a.get('title')}'"),
+          label=lambda a: f"Create Google Doc {a.get('title')}"),
+        T("gdocs_read", "Read a Google Doc as plain text.", {"document_id": s("Document id")}, ["document_id"], doc_read, read=True,
+          label=lambda a: "Read a Google Doc"),
+        T("gdocs_append", "Append text to the end of a Google Doc.",
+          {"document_id": s("Document id"), "text": s("Text to append")}, ["document_id", "text"], doc_append,
+          risk=write_risk("write", lambda a: f"Append text to Google Doc {a.get('document_id')}"),
+          label=lambda a: "Append to a Google Doc"),
+        T("gsheets_read", "Read cells from a Google Sheet as text.", {"spreadsheet_id": s("Spreadsheet id"),
+          "range": s("Range like A1:Z100 or Sheet1!A:D (default A1:Z100)")}, ["spreadsheet_id"], sheet_read, read=True,
+          label=lambda a: "Read a Google Sheet"),
+        T("gsheets_create", "Create a Google Sheet, optionally with its first rows.",
+          {"title": s("Spreadsheet title"), "rows": {"type": "array", "items": {"type": "array", "items": {"type": "string"}},
+                                                     "description": "First rows of cells"}},
+          ["title"], sheet_create, risk=write_risk("write", lambda a: f"Create Google Sheet '{a.get('title')}'"),
+          label=lambda a: f"Create Google Sheet {a.get('title')}"),
+        T("gsheets_append", "Append one row of cells to a Google Sheet.",
+          {"spreadsheet_id": s("Spreadsheet id"), "cells": {"type": "array", "items": {"type": "string"}},
+           "range": s("Range, default Sheet1!A:Z")}, ["spreadsheet_id", "cells"], sheet_append,
+          risk=write_risk("write", lambda a: f"Append a row to Google Sheet {a.get('spreadsheet_id')}"),
+          label=lambda a: "Append a row to a Google Sheet"),
+        T("gslides_create", "Create a Google Slides deck. Each slide is a title plus bullet lines (text-only).",
+          {"title": s("Deck title"),
+           "slides": {"type": "array", "items": {"type": "object", "properties": {
+               "title": {"type": "string"}, "bullets": {"type": "array", "items": {"type": "string"}}}},
+               "description": "Slides to add after the cover"}},
+          ["title"], slide_create, risk=write_risk("write", lambda a: f"Create Google Slides deck '{a.get('title')}'"),
+          label=lambda a: f"Create Google Slides {a.get('title')}"),
     ]
 
 
@@ -655,6 +847,14 @@ def builtin_defs() -> list[PluginDef]:
                   oauth={"provider": "google", "scopes": ["https://www.googleapis.com/auth/calendar"]}, build=build_calendar,
                   check=_google_check("https://www.googleapis.com/calendar/v3/users/me/calendarList?maxResults=1"),
                   help="Uses the same Google OAuth client as Gmail if you leave the fields blank. Enable the Calendar API."),
+        PluginDef("gdocs", "Google Docs, Sheets & Slides", "Create, read and update Docs, Sheets and Slides; files you create can be attached to email.",
+                  fields=GOOGLE_FIELDS,
+                  oauth={"provider": "google", "scopes": ["https://www.googleapis.com/auth/documents",
+                                                           "https://www.googleapis.com/auth/spreadsheets",
+                                                           "https://www.googleapis.com/auth/presentations",
+                                                           "https://www.googleapis.com/auth/drive.file"]},
+                  build=build_gdocs, check=_google_check("https://www.googleapis.com/drive/v3/files?pageSize=1&fields=files(id)"),
+                  help="Uses the same Google OAuth client as Gmail if you leave the fields blank. Enable the Google Docs, Sheets, Slides and Drive APIs."),
         PluginDef("slack", "Slack", "Read channels and post messages (with approval).",
                   fields=[{"key": "bot_token", "label": "Bot token (xoxb-...)", "secret": True, "required": True},
                           {"key": "user_token", "label": "User token (xoxp-..., optional, for search)", "secret": True, "required": False}],

@@ -1,12 +1,13 @@
 """Reusable building blocks: labels, buttons, cards, page headers, side tabs, toasts, approval cards, thumbnails."""
 from __future__ import annotations
 
+import json
 import time
 from typing import Callable
 
 from PySide6.QtCore import QObject, QSize, Qt, QTimer, Signal
 from PySide6.QtGui import QPixmap
-from PySide6.QtWidgets import (QDialog, QFrame, QHBoxLayout, QLabel, QLineEdit, QListWidget, QListWidgetItem, QPushButton, QSizePolicy, QStackedWidget,
+from PySide6.QtWidgets import (QCheckBox, QDialog, QFormLayout, QFrame, QHBoxLayout, QLabel, QLineEdit, QListWidget, QListWidgetItem, QPushButton, QSizePolicy, QStackedWidget,
                                QVBoxLayout, QWidget)
 
 from . import icons, theme
@@ -397,7 +398,7 @@ class ApprovalCard(QFrame):
             box.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
             box.setStyleSheet(f"background: {p['code']}; border-radius: 8px; padding: 10px 12px; color: {p['muted']};")
             lay.addWidget(box)
-        meta = [f"{k}: {d[k]}" for k in ("to", "cc", "subject", "channel", "target", "path", "form_action", "page", "cron", "resource") if d.get(k)]
+        meta = [f"{k}: {d[k]}" for k in ("to", "cc", "subject", "channel", "target", "path", "form_action", "page", "domain", "cron", "resource") if d.get(k)]
         if meta:
             lay.addWidget(label("   ·   ".join(str(m)[:90] for m in meta), faint=True))
         if d.get("auto_review"):
@@ -417,6 +418,31 @@ class ApprovalCard(QFrame):
             r2.addWidget(self.answer, 1)
             r2.addWidget(button("Send", primary=True, on=self._send_answer))
             lay.addLayout(r2)
+        elif cat == "login" and d.get("fields"):
+            lay.addWidget(label(f"Paste from any password manager if you like. The password goes only into the Windows Credential Manager "
+                                "and straight into the page — it is never stored in chat history or files.", muted=True))
+            form = QFormLayout()
+            form.setContentsMargins(0, 4, 0, 0)
+            self.cred_user = QLineEdit(str(d.get("username_hint") or ""))
+            self.cred_user.setPlaceholderText("Username or email")
+            self.cred_pass = QLineEdit()
+            self.cred_pass.setPlaceholderText("Password")
+            self.cred_pass.setEchoMode(QLineEdit.EchoMode.Password)
+            self.cred_pass.returnPressed.connect(self._send_credentials)
+            form.addRow("Username", self.cred_user)
+            form.addRow("Password", self.cred_pass)
+            lay.addLayout(form)
+            self.remember = QCheckBox("Remember on this PC (Windows Credential Manager)")
+            self.remember.setChecked(True)
+            lay.addWidget(self.remember)
+            row2 = QHBoxLayout()
+            row2.setSpacing(8)
+            row2.setContentsMargins(0, 4, 0, 0)
+            row2.addWidget(button("Fill and approve", primary=True, on=self._send_credentials))
+            row2.addWidget(button("Open browser", icon="pointer", on=lambda: self.openBrowser.emit(a["bot_id"])))
+            row2.addWidget(button("Cancel", flat=True, on=lambda: self.decided.emit(a["id"], {"approve": False})))
+            row2.addStretch(1)
+            lay.addLayout(row2)
         elif cat in ("takeover", "login"):
             row.addWidget(button("Open browser", primary=True, icon="pointer", on=lambda: self.openBrowser.emit(a["bot_id"])))
             row.addWidget(button("I'm done, hand back", on=lambda: self.decided.emit(a["id"], {"approve": True})))
@@ -445,3 +471,14 @@ class ApprovalCard(QFrame):
         t = self.answer.text().strip()
         if t:
             self.decided.emit(self.a["id"], {"approve": True, "answer": t})
+
+    def _send_credentials(self) -> None:
+        pw = self.cred_pass.text()
+        if not pw:
+            self.cred_pass.setPlaceholderText("Password required")
+            self.cred_pass.setFocus()
+            return
+        answer = json.dumps({"username": self.cred_user.text().strip(), "password": pw,
+                             "remember": self.remember.isChecked()})
+        self.cred_pass.clear()
+        self.decided.emit(self.a["id"], {"approve": True, "answer": answer})

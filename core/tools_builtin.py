@@ -11,6 +11,7 @@ from .browser import BrowserError, Screen
 from .computer import ComputerError
 from .netpolicy import host_of
 from .search import SearchError, search_web
+from . import secrets
 from .tooling import Risk, ToolContext, ToolResult, ToolSpec, b, i, obj, s, short
 
 if TYPE_CHECKING:  # pragma: no cover
@@ -104,6 +105,77 @@ def builtin_tools(eng: "Engine") -> list[ToolSpec]:
         "Never try to work around these. This pauses until the user finishes and hands the browser back.",
         {"reason": s("What the user needs to do, e.g. 'Log in to Xero and complete 2FA'"), "url": s("Optional page to open first")}, ["reason"], request_takeover,
         label=lambda a: f"Needs you: {short(a.get('reason', ''), 60)}")
+
+    def login_fill(ctx: ToolContext, a: dict) -> ToolResult:
+        try:
+            url = br.call(comp._current_url, ctx.bot["id"], timeout=20)
+        except Exception:
+            url = ""
+        domain = (a.get("domain") or host_of(url) or "").strip().lower()
+        if not domain:
+            return ToolResult("No page to log in to. Navigate with browser_goto first.", is_error=True)
+        purpose = short(a.get("purpose") or "", 160)
+        u_sel, p_sel = a.get("username_selector") or "", a.get("password_selector") or ""
+        src = "the saved credential store"
+        creds: dict = {}
+        raw = secrets.get_secret(f"login:{domain}")
+        if raw:
+            try:
+                creds = json.loads(raw)
+            except Exception:
+                creds = {}
+        if not creds.get("password"):
+            src = "the approval card"
+            details = {"domain": domain, "page": purpose or url, "username_hint": a.get("username_hint") or "",
+                       "fields": [{"key": "username", "label": "Username or email"},
+                                  {"key": "password", "label": "Password", "secret": True}],
+                       "pattern": domain}
+            d = eng.approvals._ask_user(ctx, "login", "login_fill",
+                                        f"Log in to {domain}" + (f" — {purpose}" if purpose else ""),
+                                        details, {})
+            if not d.approved:
+                return ToolResult("The user declined to enter credentials for this site. Do not retry; "
+                                  "use request_takeover if they want to do it themselves, or continue with anything else you can.",
+                                  is_error=True)
+            try:
+                ans = json.loads(d.answer or "{}")
+            except Exception:
+                ans = {}
+            if not str(ans.get("password") or ""):
+                return ToolResult("No password was provided in the approval card. Ask once more with a clear purpose.", is_error=True)
+            creds = {"username": str(ans.get("username") or ""), "password": str(ans["password"])}
+            if ans.get("remember"):
+                try:
+                    secrets.set_secret(f"login:{domain}", json.dumps(creds))
+                except Exception:
+                    pass
+        scr = br.screen(ctx.bot["id"])
+        try:
+            res = br.call(scr.fill_credentials, str(creds.get("username") or ""), str(creds["password"]),
+                          u_sel or None, p_sel or None, timeout=45)
+        except Exception as e:
+            return ToolResult(f"The form could not be filled ({short(str(e), 120)}). Take a fresh browser_snapshot; "
+                              "if the form is in an iframe or popup, fall back to request_takeover.", is_error=True)
+        try:
+            comp.remember_login(domain)
+        except Exception:
+            pass
+        if not (res or {}).get("filled"):
+            return ToolResult(f"Could not find the password field on the page for {domain}. Take a fresh browser_snapshot "
+                              "and check the form; fall back to request_takeover if it stays stubborn.", is_error=True)
+        return ToolResult(f"Filled the login form for {domain} ({src}). Username: {creds.get('username') or '(empty)'} — "
+                          "the password went straight from the user's card/credential store into the page and is not shown to you. "
+                          "Take a browser_snapshot and click the sign-in button; submitting may need approval.")
+
+    add("login_fill", "Fill a login form on the current page with the user's credentials. The user types their username and password into an approval card "
+        "in chat (paste from any password manager), or previously saved credentials from the Windows Credential Manager are used automatically. You never "
+        "see the password. Prefer this over request_takeover for plain username/password forms; keep request_takeover for 2FA codes, CAPTCHAs and passkeys.",
+        {"domain": s("Site domain, e.g. example.com (defaults to the current page)"),
+         "purpose": s("What you are logging in for"),
+         "username_selector": s("Optional CSS selector of the username field from your snapshot"),
+         "password_selector": s("Optional CSS selector of the password field from your snapshot"),
+         "username_hint": s("Username/email you saw, if any")},
+        [], login_fill, screen=True, label=lambda a: f"Fill login: {short(a.get('domain') or a.get('purpose') or '', 50)}")
 
     def request_access(ctx: ToolContext, a: dict) -> ToolResult:
         res = a["resource"].strip()
@@ -529,7 +601,7 @@ def builtin_tools(eng: "Engine") -> list[ToolSpec]:
             return Risk("submit", f"Type into a field and press Enter to submit a form on {host}", {"page": info.get("pageUrl"), "pattern": f"{host}|enter"})
         return None
 
-    add("browser_type", "Type text into an element (by number) or the focused field. Never for passwords or payment details: use request_takeover for those.",
+    add("browser_type", "Type text into an element (by number) or the focused field. Never for passwords or payment details: use login_fill for logins and request_takeover for 2FA/CAPTCHA/payment.",
         {"text": s("Text"), "element": i("Element number"), "clear": b("Clear the field first (default true)"), "submit": b("Press Enter afterwards")}, ["text"], b_type,
         risk=r_type, screen=True, label=lambda a: f"Type \"{short(a.get('text', ''), 40)}\"")
 

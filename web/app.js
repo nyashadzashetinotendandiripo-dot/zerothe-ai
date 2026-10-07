@@ -130,6 +130,15 @@
       return `<div class="card approval q" data-id="${a.id}"><h4>${esc(botName(a.bot_id))} asks</h4><div>${esc(a.summary)}</div><div class="row">${opts}</div>` +
         `<div class="row"><input placeholder="Type an answer" class="ans"><button class="primary send-ans">Send</button></div></div>`;
     }
+    if (a.category === 'login' && Array.isArray(d.fields) && d.fields.length) {
+      return `<div class="card approval" data-id="${a.id}"><h4>${esc(botName(a.bot_id))} needs the login for ${esc(d.domain || 'this site')}</h4><div>${esc(a.summary)}</div>` +
+        `<p class="muted">Paste from any password manager — it goes into the Windows Credential Manager and straight into the page, never into chat history.</p>` +
+        `<div class="row"><input class="cu" placeholder="Username or email" value="${esc(d.username_hint || '')}">` +
+        `<input class="cp" type="password" placeholder="Password"></div>` +
+        `<div class="row"><label><input type="checkbox" class="cr" checked> Remember on this PC</label></div>` +
+        `<div class="row"><button class="primary send-creds">Fill and approve</button>` +
+        `<button class="open-screen" data-bot="${a.bot_id}">Open browser</button><button class="deny">Cancel</button></div></div>`;
+    }
     if (a.category === 'takeover' || a.category === 'login') {
       return `<div class="card approval" data-id="${a.id}"><h4>${esc(botName(a.bot_id))} needs you at the browser</h4><div>${esc(a.summary)}</div>` +
         `<div class="row"><button class="primary open-screen" data-bot="${a.bot_id}">Open browser</button><button class="approve">I'm done</button><button class="deny">Can't do it</button></div></div>`;
@@ -152,6 +161,12 @@
       if (q('.deny')) q('.deny').onclick = () => decide({ approve: false });
       card.querySelectorAll('[data-ans]').forEach((b) => b.onclick = () => decide({ approve: true, answer: b.dataset.ans }));
       if (q('.send-ans')) q('.send-ans').onclick = () => { const v = q('.ans').value.trim(); if (v) decide({ approve: true, answer: v }); };
+      if (q('.send-creds')) q('.send-creds').onclick = () => {
+        const pw = q('.cp').value;
+        if (!pw) { q('.cp').placeholder = 'Password required'; return; }
+        q('.cp').value = '';
+        decide({ approve: true, answer: JSON.stringify({ username: (q('.cu').value || '').trim(), password: pw, remember: q('.cr').checked }) });
+      };
       if (q('.open-screen')) q('.open-screen').onclick = () => openScreen(q('.open-screen').dataset.bot);
     });
   }
