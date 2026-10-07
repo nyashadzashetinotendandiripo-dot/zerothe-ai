@@ -45,7 +45,7 @@ class ServerTests(unittest.TestCase):
     def test_pwa_served_and_token_link(self):
         r = self.c.get("/", follow_redirects=False)
         self.assertEqual(r.status_code, 200)
-        self.assertIn("OpenGrokBot", r.text)
+        self.assertIn("ZerotheBot", r.text)
         r = self.c.get(f"/?token={TOKEN}", follow_redirects=False)
         self.assertEqual(r.status_code, 303)
         self.assertIn("gb_token", r.headers.get("set-cookie", ""))

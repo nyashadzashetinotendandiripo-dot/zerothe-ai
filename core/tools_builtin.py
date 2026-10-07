@@ -10,6 +10,7 @@ from urllib.parse import urlparse
 from .browser import BrowserError, Screen
 from .computer import ComputerError
 from .netpolicy import host_of
+from .search import SearchError, search_web
 from .tooling import Risk, ToolContext, ToolResult, ToolSpec, b, i, obj, s, short
 
 if TYPE_CHECKING:  # pragma: no cover
@@ -210,19 +211,42 @@ def builtin_tools(eng: "Engine") -> list[ToolSpec]:
         ["name", "description", "body"], skill_save, label=lambda a: f"Draft skill {a.get('name')}")
 
     def routine_create(ctx: ToolContext, a: dict) -> ToolResult:
-        r = eng.routines.create(ctx.bot["id"], a["name"], a["cron"], skill=a.get("skill", ""), prompt=a.get("prompt", ""), enabled=True, catch_up=False)
-        return ToolResult(f"Routine '{r['name']}' scheduled ({r['cron']}).")
+        r = eng.routines.create(ctx.bot["id"], a["name"], a["cron"], skill=a.get("skill", ""), prompt=a.get("prompt", ""),
+                                enabled=True, catch_up=False,
+                                ceiling_items=int(a.get("ceiling_items") or 0), anomaly_pct=int(a.get("anomaly_pct") or 0),
+                                kill_condition=str(a.get("kill_condition") or ""))
+        note = ""
+        if r.get("ceiling_items") or r.get("anomaly_pct") or r.get("kill_condition"):
+            note = " Limits set: ceiling/tripwire/kill condition will be injected into every run."
+        return ToolResult(f"Routine '{r['name']}' scheduled ({r['cron']}).{note}")
 
-    add("routine_create", "Schedule a recurring unattended job for yourself (cron, 5 fields, local time). Requires approval.",
-        {"name": s("Routine name"), "cron": s("5-field cron, e.g. '0 8 * * 1-5'"), "prompt": s("What to do each run"), "skill": s("Optional active skill to follow")},
+    add("routine_create", "Schedule a recurring unattended job for yourself (cron, 5 fields, local time). Requires approval. "
+                          "Always set a ceiling (max items) and a kill condition for unattended work.",
+        {"name": s("Routine name"), "cron": s("5-field cron, e.g. '0 8 * * 1-5'"), "prompt": s("What to do each run"),
+         "skill": s("Optional active skill to follow"),
+         "ceiling_items": s("Max items per run, 0 = none (e.g. 50)"),
+         "anomaly_pct": s("Stop the run if more than this % of items look unusual, 0 = off"),
+         "kill_condition": s("Condition that should pause this routine and notify the user")},
         ["name", "cron"], routine_create,
         risk=lambda ctx, a: Risk("schedule", f"Schedule routine '{a.get('name')}' with cron '{a.get('cron')}' for {ctx.bot['name']}",
-                                 {"cron": a.get("cron"), "prompt": a.get("prompt"), "skill": a.get("skill"), "pattern": "*"}),
+                                 {"cron": a.get("cron"), "prompt": a.get("prompt"), "skill": a.get("skill"),
+                                  "ceiling_items": a.get("ceiling_items"), "anomaly_pct": a.get("anomaly_pct"),
+                                  "kill_condition": a.get("kill_condition"), "pattern": "*"}),
         label=lambda a: f"Schedule routine {a.get('name')}")
 
     def routine_list(ctx: ToolContext, a: dict) -> ToolResult:
         rows = eng.routines.list(ctx.bot["id"])
-        return ToolResult("\n".join(f"- {r['name']} [{r['cron']}] {'on' if r['enabled'] else 'off'} last: {r['last_status'] or 'never'}" for r in rows) or "No routines.")
+        def _lim(r: dict) -> str:
+            bits = []
+            if r.get("ceiling_items"):
+                bits.append(f"max {r['ceiling_items']}")
+            if r.get("anomaly_pct"):
+                bits.append(f"tripwire {r['anomaly_pct']}%")
+            if r.get("kill_condition"):
+                bits.append("kill condition set")
+            return (" · " + ", ".join(bits)) if bits else ""
+        return ToolResult("\n".join(f"- {r['name']} [{r['cron']}] {'on' if r['enabled'] else 'off'} "
+                                    f"last: {r['last_status'] or 'never'}{_lim(r)}" for r in rows) or "No routines.")
 
     add("routine_list", "List your routines.", {}, [], routine_list, read_only=True, label=lambda a: "List routines")
 
@@ -390,6 +414,21 @@ def builtin_tools(eng: "Engine") -> list[ToolSpec]:
 
     add("web_fetch", "Fetch a URL over HTTP and return its text (fast, no JavaScript). Use the browser tools for interactive or JS-heavy pages.", {"url": s("URL")}, ["url"],
         web_fetch, read_only=True, label=lambda a: f"Fetch {short(a.get('url', ''), 60)}")
+
+    def web_search(ctx: ToolContext, a: dict) -> ToolResult:
+        try:
+            results = search_web(a["query"], int(a.get("max_results") or 8))
+        except SearchError as e:
+            return ToolResult(str(e), is_error=True, untrusted="search results")
+        if not results:
+            return ToolResult("No results. Try different wording, or fetch a specific site with web_fetch.", untrusted="search results")
+        body = "\n\n".join(f"{n}. {r['title']}\n   {r['url']}\n   {r['snippet']}" for n, r in enumerate(results, 1))
+        return ToolResult(f"{len(results)} results for \"{short(a['query'], 80)}\"", data=body, untrusted="search results")
+
+    add("web_search", "Search the live web (DuckDuckGo) for current events, news, docs or anything you do not already know, and answer citing the results as markdown links [title](url). "
+        "Use site: to target one site, e.g. site:x.com Grok for X/Twitter posts. If search fails, fall back to web_fetch or the browser.",
+        {"query": s("Search query"), "max_results": i("How many results, default 8, max 10")}, ["query"],
+        web_search, read_only=True, label=lambda a: f"Search: {short(a.get('query', ''), 60)}")
 
     # ------------------------------------------------------------------ browser (the Bot's own screen)
     def scr_of(ctx: ToolContext) -> Screen:

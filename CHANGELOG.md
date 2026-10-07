@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.6.0
+
+- **Web search.** Bots can now search the live web (`web_search` tool, DuckDuckGo — free, no API key) and answer with cited markdown links: current events, news, docs, anything after the model's training cut-off. Supports `site:` operators (e.g. `site:x.com` for X/Twitter posts). Read-only, so no approval prompt.
+- **xAI (Grok) provider.** Settings > Providers now includes an xAI preset (`https://api.x.ai/v1`, default model `grok-4.7`); add a key from console.x.ai to run Grok models.
+- **Approval escalations.** Unanswered approvals no longer die silently: you get an urgent nudge at 75% of the approval timeout and again if something sits unanswered for three days (each escalation fires once).
+- **Routine safety limits.** Every routine can set a ceiling (max items per run), a tripwire (stop if more than X% of items look unusual) and a kill condition (an event that pauses the routine and notifies you). The limits are injected into every unattended run and shown in the routine list.
+- **Marketplace.** New Marketplace page with categorized Bot templates (category, creator, blurb on every template) plus four new templates: Social Media, Design Reviewer, Life Admin and Product Scout.
+
 ## 1.5.0
 
 Five big features and five small ones. (There is no 1.4.)

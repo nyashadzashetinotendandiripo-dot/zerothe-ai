@@ -18,6 +18,8 @@ PROVIDER_PRESETS: dict[str, dict] = {
                    "model": "anthropic/claude-sonnet-4.5", "vision": True, "needs_key": True},
     "groq": {"label": "Groq", "kind": "openai", "base_url": "https://api.groq.com/openai/v1",
              "model": "llama-3.3-70b-versatile", "vision": False, "needs_key": True},
+    "xai": {"label": "xAI (Grok)", "kind": "openai", "base_url": "https://api.x.ai/v1",
+            "model": "grok-4.7", "vision": True, "needs_key": True},
     "ollama": {"label": "Ollama (local)", "kind": "openai", "base_url": "http://localhost:11434/v1",
                "model": "llama3.1", "vision": False, "needs_key": False},
     "lmstudio": {"label": "LM Studio (local)", "kind": "openai", "base_url": "http://localhost:1234/v1",

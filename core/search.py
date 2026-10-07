@@ -1,8 +1,9 @@
-"""Search across everything the user can see: every conversation (Bots and groups) and every Bot's memory."""
+"""Search: web search (DuckDuckGo by default, free, no API key) + local search across conversations and Bot memory."""
 from __future__ import annotations
 
 import re
-from typing import Callable
+from typing import Any, Callable
+from urllib.parse import urlparse
 
 from .db import Database, jload
 from .threads import blocks_text
@@ -10,6 +11,57 @@ from .threads import blocks_text
 MAX_TERMS = 5
 
 
+# ---------------------------------------------------------------- live web search
+class SearchError(Exception):
+    """Raised when a search could not be completed."""
+
+
+def _pick(d: dict, *keys: str, default: str = "") -> str:
+    for k in keys:
+        v = d.get(k)
+        if v:
+            return str(v)
+    return default
+
+
+def _raw(query: str, max_results: int) -> list[dict[str, Any]]:
+    from ddgs import DDGS
+
+    with DDGS() as ddgs:
+        return list(ddgs.text(query, max_results=max_results))
+
+
+def search_web(query: str, max_results: int = 8) -> list[dict[str, str]]:
+    """Return [{"title", "url", "snippet"}] for *query*. Raises SearchError on failure."""
+    query = (query or "").strip()
+    if not query:
+        raise SearchError("Empty search query.")
+    limit = max(1, min(int(max_results or 8), 10))
+    try:
+        raw = _raw(query, limit)
+    except SearchError:
+        raise
+    except Exception as e:  # noqa: BLE001 - the search library raises many types (network, rate limit, captchas)
+        raise SearchError(f"Search is unavailable right now ({type(e).__name__}). Try again shortly, "
+                          "or fall back to web_fetch / the browser.") from e
+    out: list[dict[str, str]] = []
+    for r in raw or []:
+        if not isinstance(r, dict):
+            continue
+        url = _pick(r, "url", "href", "link")
+        if not url or urlparse(url).scheme not in ("http", "https"):
+            continue
+        out.append({
+            "title": _pick(r, "title", default=url),
+            "url": url,
+            "snippet": _pick(r, "body", "description", "snippet", "content"),
+        })
+        if len(out) >= limit:
+            break
+    return out
+
+
+# ------------------------------------------------- local search (conversations + memory)
 def _like(term: str) -> str:
     return "%" + term.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%"
 
@@ -24,6 +76,8 @@ def snippet(text: str, terms: list[str], width: int = 70) -> str:
 
 
 class Search:
+    """Search across everything the user can see: every conversation (Bots and groups) and every Bot's memory."""
+
     def __init__(self, db: Database, names: Callable[[], dict[str, dict]]):
         self.db, self._names = db, names
 
