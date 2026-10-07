@@ -91,6 +91,7 @@ class Engine:
         s.add_job(self.messaging.run_due_followups, "interval", minutes=1, id="_followups", replace_existing=True)
         s.add_job(self.messaging.nudge_stalled, "interval", minutes=15, id="_nudge", replace_existing=True)
         s.add_job(self.messaging.proactive_tick, "interval", minutes=10, id="_proactive", replace_existing=True)
+        s.add_job(self.approvals.check_escalations, "interval", minutes=30, id="_appr_escalate", replace_existing=True)
         s.add_job(self._digest_tick, "interval", minutes=1, id="_digest", replace_existing=True)
         self.log.info("Engine started (v%s). Data dir: %s", VERSION, paths.data_dir())
 

@@ -617,7 +617,11 @@ def create_app(engine: Engine, token: str) -> FastAPI:
     @app.post("/api/routines", dependencies=[api])
     def routines_create(body: dict = Body(...)) -> dict:
         return eng.routines.create(body["bot_id"], body.get("name", "Routine"), body["cron"], body.get("skill", ""), body.get("prompt", ""),
-                                   bool(body.get("enabled", True)), bool(body.get("dry_run", False)), body.get("notify", "always"), bool(body.get("catch_up", False)))
+                                   bool(body.get("enabled", True)), bool(body.get("dry_run", False)), body.get("notify", "always"),
+                                   bool(body.get("catch_up", False)),
+                                   ceiling_items=int(body.get("ceiling_items") or 0),
+                                   anomaly_pct=int(body.get("anomaly_pct") or 0),
+                                   kill_condition=str(body.get("kill_condition") or ""))
 
     @app.put("/api/routines/{rid}", dependencies=[api])
     def routines_update(rid: str, body: dict = Body(...)) -> dict:

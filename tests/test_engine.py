@@ -110,7 +110,7 @@ class EngineTests(unittest.TestCase):
             LLMResult(text="Understood, leaving it."),
         ])
         self.eng.send_user_message(th["id"], "overwrite keep.txt")
-        self.assertTrue(wait_for(lambda: self.eng.approvals.pending_count() > 0))
+        self.assertTrue(wait_for(lambda: self.eng.approvals.list("pending", bot["id"])))
         appr = self.eng.approvals.list("pending", bot["id"])[0]
         self.assertEqual(appr["category"], "overwrite")
         self.eng.approvals.decide(appr["id"], False, note="no")
@@ -123,7 +123,7 @@ class EngineTests(unittest.TestCase):
         (self.eng.computer.workspace / "r.txt").write_text("v1")
         self.use([LLMResult(tool_calls=[ToolCall("t1", "fs_write", {"path": "r.txt", "content": "v2"})]), LLMResult(text="ok")])
         self.eng.send_user_message(th["id"], "go")
-        self.assertTrue(wait_for(lambda: self.eng.approvals.pending_count() > 0))
+        self.assertTrue(wait_for(lambda: self.eng.approvals.list("pending", bot["id"])))
         a = self.eng.approvals.list("pending", bot["id"])[0]
         self.eng.approvals.decide(a["id"], True, remember=True)
         self.assertTrue(wait_for(lambda: not self.eng.turns.is_busy(bot["id"])))
@@ -141,7 +141,7 @@ class EngineTests(unittest.TestCase):
             LLMResult(text="I will not."),
         ])
         self.eng.send_user_message(th["id"], "summarise evil.txt")
-        self.assertTrue(wait_for(lambda: self.eng.approvals.pending_count() > 0))
+        self.assertTrue(wait_for(lambda: self.eng.approvals.list("pending", bot["id"])))
         a = self.eng.approvals.list("pending", bot["id"])[0]
         self.assertEqual(a["category"], "delete")
         self.assertTrue(a["tainted"])
@@ -171,6 +171,9 @@ class EngineTests(unittest.TestCase):
         h = self.eng.messaging.list_handoffs(chief["id"])[0]
         self.assertEqual(h["to_name"], "Helper")
         self.assertEqual(h["status"] in ("open", "accepted", "done"), True)
+        self.assertTrue(wait_for(lambda: not self.eng.turns.is_busy(chief["id"])
+                                 and not self.eng.turns.is_busy(helper["id"])),
+                        "group turns should finish before the test returns")
 
     def test_export_import_roundtrip_has_no_secrets(self):
         from core import packages

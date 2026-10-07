@@ -38,6 +38,23 @@ def validate_cron(expr: str) -> CronTrigger:
         raise RoutineError(f"Invalid cron expression '{expr}': {e}. Use 5 fields, e.g. '0 8 * * 1-5'.") from e
 
 
+def limits_block(r: dict) -> str:
+    """The ceiling, tripwire and kill condition injected into every unattended run."""
+    parts = []
+    if r.get("ceiling_items"):
+        parts.append(f"CEILING: never process more than {int(r['ceiling_items'])} items in this run. "
+                     "If you reach the limit, stop and report what you handled so far.")
+    if r.get("anomaly_pct"):
+        parts.append(f"TRIPWIRE: if more than {int(r['anomaly_pct'])}% of the items look unusual "
+                     "(a format you have not seen, a new sender, a value that seems off), stop the run and ask the user.")
+    if r.get("kill_condition"):
+        parts.append(f"KILL CONDITION: if this happens - {r['kill_condition']} - stop immediately, "
+                     "notify the user, and say this routine should be disabled.")
+    parts.append("Finish with a short receipt every run (what you did, counts, anything parked for the user), "
+                 "even when nothing matched.")
+    return "\n".join(f"- {p}" for p in parts)
+
+
 class Routines:
     def __init__(self, engine: "Engine"):
         self.engine = engine
@@ -98,7 +115,8 @@ class Routines:
         return self._out(r) if r else None
 
     def create(self, bot_id: str, name: str, cron: str, skill: str = "", prompt: str = "", enabled: bool = True,
-               dry_run: bool = False, notify: str = "always", catch_up: bool = False) -> dict:
+               dry_run: bool = False, notify: str = "always", catch_up: bool = False,
+               ceiling_items: int = 0, anomaly_pct: int = 0, kill_condition: str = "") -> dict:
         validate_cron(cron)
         if not self.engine.bots.get(bot_id):
             raise RoutineError("No such Bot.")
@@ -110,7 +128,11 @@ class Routines:
         self.db.insert("routines", {"id": rid, "bot_id": bot_id, "name": name.strip() or "Routine", "skill": skill, "prompt": prompt,
                                     "cron": cron.strip(), "enabled": int(enabled), "dry_run": int(dry_run),
                                     "notify": notify if notify in ("always", "failures", "never") else "always",
-                                    "catch_up": int(catch_up), "created_at": now()})
+                                    "catch_up": int(catch_up),
+                                    "ceiling_items": max(0, int(ceiling_items or 0)),
+                                    "anomaly_pct": max(0, min(100, int(anomaly_pct or 0))),
+                                    "kill_condition": str(kill_condition or "").strip()[:500],
+                                    "created_at": now()})
         if enabled:
             self._schedule(self.db.one("SELECT * FROM routines WHERE id=?", (rid,)))  # type: ignore
         self.engine.events.publish("routines", change="created", routine_id=rid)
@@ -121,9 +143,14 @@ class Routines:
         if not cur:
             raise RoutineError("No such routine.")
         patch = {}
-        for k in ("name", "skill", "prompt", "cron", "enabled", "dry_run", "notify", "catch_up", "bot_id"):
+        for k in ("name", "skill", "prompt", "cron", "enabled", "dry_run", "notify", "catch_up", "bot_id",
+                  "ceiling_items", "anomaly_pct", "kill_condition"):
             if k in f and f[k] is not None:
-                patch[k] = int(f[k]) if k in ("enabled", "dry_run", "catch_up") else f[k]
+                patch[k] = int(f[k]) if k in ("enabled", "dry_run", "catch_up", "ceiling_items", "anomaly_pct") else f[k]
+        if "kill_condition" in patch:
+            patch["kill_condition"] = str(patch["kill_condition"]).strip()[:500]
+        if "anomaly_pct" in patch:
+            patch["anomaly_pct"] = max(0, min(100, int(patch["anomaly_pct"])))
         if "cron" in patch:
             validate_cron(patch["cron"])
         if patch:
@@ -191,7 +218,7 @@ class Routines:
                         skill_text = f"Follow this skill:\n\n{sk['body']}\n\n"
                 task = (f"[Routine: {r['name']}] This is a scheduled run. Nobody is watching right now, so work end to end "
                         f"and keep the final report short and concrete (what you did, results, anything needing the user).\n\n"
-                        f"{skill_text}{r['prompt']}").strip()
+                        f"{skill_text}{r['prompt']}\n\nLimits:\n{limits_block(r)}").strip()
                 res = self.engine.turns.run_sync(bot["id"], thread_id, task, trigger="routine", dry_run=bool(r["dry_run"]))
                 turn_id, result = res.turn_id, res.final_text
                 status = {"done": "ok", "stopped": "stopped"}.get(res.status, "error")

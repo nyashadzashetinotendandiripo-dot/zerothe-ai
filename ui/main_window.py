@@ -21,6 +21,7 @@ from .pages_computer import ComputerPage
 from .pages_files import FilesPage
 from .pages_home import DigestDialog, HomePage
 from .pages_inbox import InboxPage
+from .pages_marketplace import MarketplacePage
 from .pages_plugins import PluginsPage
 from .pages_routines import RoutinesPage
 from .pages_settings import SettingsPage
@@ -31,7 +32,7 @@ from .store import Store
 from .takeover import TakeoverView
 from .widgets import Avatar, ImageCache, Toasts, button, card, chip, icon_button, label, repolish
 
-NAV = [("home", "Home", "home"), ("inbox", "Inbox", "inbox"), ("computer", "Computer", "computer"), ("files", "Files", "folder"), ("skills", "Skills", "skills"), ("routines", "Routines", "routines"),
+NAV = [("home", "Home", "home"), ("marketplace", "Marketplace", "sparkle"), ("inbox", "Inbox", "inbox"), ("computer", "Computer", "computer"), ("files", "Files", "folder"), ("skills", "Skills", "skills"), ("routines", "Routines", "routines"),
        ("plugins", "Plugins", "plugins"), ("usage", "Usage", "usage"), ("log", "Action log", "log")]
 
 
@@ -489,7 +490,7 @@ class MainWindow(QMainWindow):
         self.welcome.openSettings.connect(lambda: self.select("page:settings"))
         self.chat = ChatPage(api, store, self.images)
         self.pages: dict[str, QWidget] = {
-            "home": HomePage(api, store), "inbox": InboxPage(api, store), "computer": ComputerPage(api, store), "files": FilesPage(api, store), "skills": SkillsPage(api, store), "routines": RoutinesPage(api, store),
+            "home": HomePage(api, store), "marketplace": MarketplacePage(api, store), "inbox": InboxPage(api, store), "computer": ComputerPage(api, store), "files": FilesPage(api, store), "skills": SkillsPage(api, store), "routines": RoutinesPage(api, store),
             "plugins": PluginsPage(api, store), "usage": UsagePage(api, store), "log": LogPage(api, store), "settings": SettingsPage(api, store),
         }
         for w in (self.welcome, self.chat, *self.pages.values()):
@@ -508,6 +509,7 @@ class MainWindow(QMainWindow):
         home.openThread.connect(self.open_thread)
         home.openPage.connect(self.show_page)
         home.newBot.connect(self.new_bot)
+        self.pages["marketplace"].openBot.connect(self.show_bot)  # type: ignore[attr-defined]
         self.pages["inbox"].openBrowser.connect(self.open_takeover)  # type: ignore[attr-defined]
         self.pages["inbox"].openThread.connect(self.open_thread)  # type: ignore[attr-defined]
         self.pages["computer"].takeOver.connect(lambda bid, follow: self.open_takeover(bid, follow))  # type: ignore[attr-defined]

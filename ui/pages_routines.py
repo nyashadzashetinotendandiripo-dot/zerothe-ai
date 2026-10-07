@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from PySide6.QtCore import Qt, Signal
-from PySide6.QtWidgets import (QCheckBox, QComboBox, QDialog, QDialogButtonBox, QFormLayout, QHBoxLayout, QLineEdit, QMessageBox, QPlainTextEdit, QSplitter,
+from PySide6.QtWidgets import (QCheckBox, QComboBox, QDialog, QDialogButtonBox, QFormLayout, QHBoxLayout, QLineEdit, QMessageBox, QPlainTextEdit, QSpinBox, QSplitter,
                                QTableWidget, QTextBrowser, QVBoxLayout, QWidget)
 
 from .api import Api
@@ -60,12 +60,26 @@ class RoutineDialog(QDialog):
         self.dry.setChecked(bool(routine and routine["dry_run"]))
         self.catch = QCheckBox("If the PC/service was off at the scheduled time, run once when it is back")
         self.catch.setChecked(bool(routine and routine["catch_up"]))
+        self.ceiling = QSpinBox()
+        self.ceiling.setRange(0, 100000)
+        self.ceiling.setSpecialValueText("No ceiling")
+        self.ceiling.setValue(int((routine or {}).get("ceiling_items") or 0))
+        self.anom = QSpinBox()
+        self.anom.setRange(0, 100)
+        self.anom.setSuffix(" %")
+        self.anom.setSpecialValueText("Off")
+        self.anom.setValue(int((routine or {}).get("anomaly_pct") or 0))
+        self.kill = QLineEdit((routine or {}).get("kill_condition") or "")
+        self.kill.setPlaceholderText("e.g. more than 3 outputs I disagree with in one week - pause and notify me")
         f.addRow("Name", self.name)
         f.addRow("Bot", self.bot)
         f.addRow("Skill", self.skill)
         f.addRow("Prompt", self.prompt)
         f.addRow("Schedule", self.sched)
         f.addRow("Cron", self.cron)
+        f.addRow("Ceiling per run", self.ceiling)
+        f.addRow("Tripwire: stop if unusual", self.anom)
+        f.addRow("Kill condition", self.kill)
         f.addRow("", self.notify)
         f.addRow("", self.dry)
         f.addRow("", self.catch)
@@ -87,7 +101,8 @@ class RoutineDialog(QDialog):
 
     def save(self) -> None:
         body = {"bot_id": self.bot.currentData(), "name": self.name.text().strip() or "Routine", "cron": self.cron.text().strip(), "skill": self.skill.currentData() or "",
-                "prompt": self.prompt.toPlainText().strip(), "dry_run": self.dry.isChecked(), "notify": self.notify.currentData(), "catch_up": self.catch.isChecked()}
+                "prompt": self.prompt.toPlainText().strip(), "dry_run": self.dry.isChecked(), "notify": self.notify.currentData(), "catch_up": self.catch.isChecked(),
+                "ceiling_items": self.ceiling.value(), "anomaly_pct": self.anom.value(), "kill_condition": self.kill.text().strip()}
         fail = lambda e: self.err.setText(e)
         if self.routine:
             self.api.put(f"/api/routines/{self.routine['id']}", body, lambda _: self.accept(), fail)

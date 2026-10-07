@@ -72,6 +72,39 @@ class ApprovalManager:
     def expire_all_pending(self, reason: str = "Service restarted") -> None:
         self.db.execute("UPDATE approvals SET status='expired', reason=?, decided_at=? WHERE status='pending'", (reason, now()))
 
+    def check_escalations(self) -> int:
+        """Loud nudge for approvals nobody answered, instead of letting them die silently.
+
+        Fires at approval.escalate_after_hours (default 72h = the three-day rule) and, earlier,
+        at 75% of the approval timeout so a routine/user approval always gets one urgent bell
+        before it expires. Each approval escalates once (approvals.escalated=1).
+        """
+        if not self.engine:
+            return 0
+        esc_after = float(self.settings.get("approval.escalate_after_hours", 72)) * 3600.0
+        timeout_min = float(self.settings.get("approval.timeout_min", 1440)) * 60.0
+        last_chance = timeout_min * 0.75
+        n = 0
+        for r in self.db.query("SELECT * FROM approvals WHERE status='pending' AND escalated=0"):
+            age = now() - (r.get("created_at") or now())
+            reason = ""
+            if age >= esc_after:
+                reason = f"unanswered for {int(age // 3600)} hours"
+            elif age >= last_chance:
+                reason = f"expires in {max(1, int((timeout_min - age) // 60))} minutes"
+            if not reason:
+                continue
+            self.db.update("approvals", r["id"], {"escalated": 1})
+            bot = self.engine.bots.get(r["bot_id"])
+            if bot:
+                kind = "question" if r.get("category") == "question" else "approval"
+                self.engine.notify(kind, bot, r.get("thread_id"),
+                                   f"{bot['name']}: unanswered {r.get('summary', '')[:80]}",
+                                   f"{reason}. Decide it in the Inbox (approve, deny, or note).", urgent=True)
+            self.events.publish("approval", change="escalated", approval=self.get(r["id"]))
+            n += 1
+        return n
+
     # -- rules -----------------------------------------------------------------
     def _rule_match(self, bot_id: str, category: str, pattern: str) -> bool:
         rows = self.db.query("SELECT pattern FROM approval_rules WHERE bot_id=? AND category=?", (bot_id, category))

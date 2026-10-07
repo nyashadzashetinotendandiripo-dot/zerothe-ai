@@ -70,6 +70,7 @@ CREATE INDEX IF NOT EXISTS idx_actions_bot ON actions(bot_id, id);
 CREATE TABLE IF NOT EXISTS routines(
   id TEXT PRIMARY KEY, bot_id TEXT, name TEXT, skill TEXT DEFAULT '', prompt TEXT DEFAULT '', cron TEXT,
   enabled INTEGER DEFAULT 1, dry_run INTEGER DEFAULT 0, notify TEXT DEFAULT 'always', catch_up INTEGER DEFAULT 0,
+  ceiling_items INTEGER DEFAULT 0, anomaly_pct INTEGER DEFAULT 0, kill_condition TEXT DEFAULT '',
   created_at REAL, last_run_at REAL DEFAULT 0
 );
 CREATE TABLE IF NOT EXISTS routine_runs(
@@ -102,7 +103,11 @@ CREATE TABLE IF NOT EXISTS known_logins(domain TEXT PRIMARY KEY, added_at REAL);
 
 
 # columns added after the first release: applied to existing databases when they are opened
-MIGRATIONS = [("bots", "daily_token_limit", "INTEGER DEFAULT 0")]
+MIGRATIONS = [("bots", "daily_token_limit", "INTEGER DEFAULT 0"),
+              ("routines", "ceiling_items", "INTEGER DEFAULT 0"),
+              ("routines", "anomaly_pct", "INTEGER DEFAULT 0"),
+              ("routines", "kill_condition", "TEXT DEFAULT ''"),
+              ("approvals", "escalated", "INTEGER DEFAULT 0")]
 
 
 def new_id(n: int = 12) -> str:
