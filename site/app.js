@@ -31,7 +31,7 @@ function setVersion(v, sizeMB, sha, url, name) {
   $$("[data-ver]").forEach((e) => (e.textContent = "v" + v));
   $$("[data-ver-plain]").forEach((e) => (e.textContent = v));
   $$("[data-size]").forEach((e) => (e.textContent = "about " + Math.round(sizeMB) + " MB"));
-  const file = name || "OpenGrokBot-Setup-" + v + ".exe";
+  const file = name || "ZerotheBot-Setup-" + v + ".exe";
   $("#dlname").textContent = file;
   if (sha) $("#sha").textContent = sha;
   $("#verify").textContent = "Get-FileHash .\\" + file + " -Algorithm SHA256";
