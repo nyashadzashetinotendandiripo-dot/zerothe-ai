@@ -4,11 +4,12 @@
 // Set REPO to "<github-user>/<repo>" once the project is on GitHub. The page then reads the latest release
 // from the GitHub API and points the download buttons at the installer attached to it.
 const CONFIG = {
-  REPO: "Crepald-01/OpenGrokBot",
+  REPO: "nyashadzashetinotendandiripo-dot/zerothe-ai",
   // Fallbacks shown until (or if) the release lookup works. Update these when you publish a new build.
   version: "1.5.0",
   sizeMB: 83,
   sha256: "22ed406a9556016efa4d92e4abe3484e4dbb3525624d7e03a91243146c500fc3",
+  assetUrl: "https://github.com/Crepald-01/OpenGrokBot/releases/download/v1.5.0/OpenGrokBot-Setup-1.5.0.exe",
 };
 // ----------------------------------------------------------------------------------------------------------
 
@@ -40,7 +41,7 @@ function setVersion(v, sizeMB, sha, url, name) {
     if (url) a.setAttribute("download", "");
   });
 }
-setVersion(CONFIG.version, CONFIG.sizeMB, CONFIG.sha256, null, null);
+setVersion(CONFIG.version, CONFIG.sizeMB, CONFIG.sha256, CONFIG.assetUrl, null);
 
 if (!placeholder) {
   fetch("https://api.github.com/repos/" + CONFIG.REPO + "/releases/latest", { headers: { Accept: "application/vnd.github+json" } })
