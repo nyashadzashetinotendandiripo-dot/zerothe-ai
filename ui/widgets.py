@@ -5,10 +5,10 @@ import json
 import time
 from typing import Callable
 
-from PySide6.QtCore import QObject, QSize, Qt, QTimer, Signal
+from PySide6.QtCore import QEasingCurve, QObject, QPropertyAnimation, QSize, Qt, QTimer, Signal
 from PySide6.QtGui import QPixmap
-from PySide6.QtWidgets import (QCheckBox, QDialog, QFormLayout, QFrame, QHBoxLayout, QLabel, QLineEdit, QListWidget, QListWidgetItem, QPushButton, QSizePolicy, QStackedWidget,
-                               QVBoxLayout, QWidget)
+from PySide6.QtWidgets import (QCheckBox, QDialog, QFormLayout, QFrame, QGraphicsOpacityEffect, QHBoxLayout, QLabel, QLineEdit, QListWidget, QListWidgetItem, QPushButton, QSizePolicy, QStackedWidget,
+                               QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget)
 
 from . import icons, theme
 
@@ -146,7 +146,7 @@ class PageHeader(QWidget):
 
 def page_layout(w: QWidget, header: PageHeader | None = None) -> QVBoxLayout:
     v = QVBoxLayout(w)
-    v.setContentsMargins(*PAGE_MARGINS)
+    v.setContentsMargins(*(theme.dp(m) for m in PAGE_MARGINS))
     v.setSpacing(16)
     if header:
         v.addWidget(header)
@@ -223,6 +223,64 @@ class SideTabs(QWidget):
         self.nav.item(i).setText(text)
 
 
+def fade_in(w: QWidget, ms: int = 120) -> None:
+    """Fade a widget in, then detach the effect so it keeps painting fast."""
+    for a in w.findChildren(QPropertyAnimation):
+        a.stop()
+        a.deleteLater()
+    eff = QGraphicsOpacityEffect(w)
+    eff.setOpacity(0.0)
+    w.setGraphicsEffect(eff)
+    anim = QPropertyAnimation(eff, b"opacity", w)
+    anim.setDuration(ms)
+    anim.setStartValue(0.0)
+    anim.setEndValue(1.0)
+    anim.setEasingCurve(QEasingCurve(QEasingCurve.Type.OutCubic))
+
+    def done() -> None:
+        anim.stop()
+        anim.deleteLater()
+        try:
+            w.setGraphicsEffect(None)
+        except RuntimeError:
+            pass
+
+    anim.finished.connect(done)
+    anim.start()
+
+
+def fade_out(w: QWidget, ms: int = 150, then: Callable[[], None] | None = None) -> None:
+    """Fade a widget out, then run `then` (which usually deletes it)."""
+    eff = QGraphicsOpacityEffect(w)
+    w.setGraphicsEffect(eff)
+    anim = QPropertyAnimation(eff, b"opacity", w)
+    anim.setDuration(ms)
+    anim.setStartValue(1.0)
+    anim.setEndValue(0.0)
+    anim.setEasingCurve(QEasingCurve(QEasingCurve.Type.InCubic))
+
+    def done() -> None:
+        anim.stop()
+        anim.deleteLater()
+        if then is not None:
+            then()
+
+    anim.finished.connect(done)
+    anim.start()
+
+
+def table_empty(table: QTableWidget, text: str) -> None:
+    """Show a single muted spanning row when a table has no data rows (no-op otherwise)."""
+    if table.rowCount():
+        return
+    table.setRowCount(1)
+    table.setSpan(0, 0, 1, table.columnCount())
+    it = QTableWidgetItem(text)
+    it.setFlags(Qt.ItemFlag.ItemIsEnabled)
+    it.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+    table.setItem(0, 0, it)
+
+
 class Toasts(QObject):
     """Small non-blocking messages at the bottom of the window (replaces status bar text and most message boxes)."""
 
@@ -239,6 +297,7 @@ class Toasts(QObject):
         lb.setMaximumWidth(460)
         lb.setStyleSheet(f"background: {p['raised']}; color: {p['text']}; border: 1px solid {p['line2']}; border-left: 3px solid {col}; border-radius: 10px; padding: 10px 16px;")
         lb.adjustSize()
+        fade_in(lb)
         lb.show()
         lb.raise_()
         self.items.append(lb)
@@ -246,10 +305,16 @@ class Toasts(QObject):
         QTimer.singleShot(ms, lambda: self._drop(lb))
 
     def _drop(self, lb: QLabel) -> None:
-        if lb in self.items:
-            self.items.remove(lb)
-        lb.deleteLater()
-        self.layout()
+        if lb not in self.items:
+            return
+
+        def gone() -> None:
+            if lb in self.items:
+                self.items.remove(lb)
+            lb.deleteLater()
+            self.layout()
+
+        fade_out(lb, 150, gone)
 
     def layout(self) -> None:
         y = self.host.height() - 24

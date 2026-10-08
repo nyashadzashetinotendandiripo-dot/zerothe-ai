@@ -30,7 +30,7 @@ from .pages_usage_log import LogPage, UsagePage
 from .quick_ask import QuickAsk
 from .store import Store
 from .takeover import TakeoverView
-from .widgets import Avatar, ImageCache, Toasts, button, card, chip, icon_button, label, repolish
+from .widgets import Avatar, ImageCache, Toasts, button, card, chip, fade_in, icon_button, label, repolish
 
 NAV = [("home", "Home", "home"), ("marketplace", "Marketplace", "sparkle"), ("inbox", "Inbox", "inbox"), ("computer", "Computer", "computer"), ("files", "Files", "folder"), ("skills", "Skills", "skills"), ("routines", "Routines", "routines"),
        ("plugins", "Plugins", "plugins"), ("usage", "Usage", "usage"), ("log", "Action log", "log")]
@@ -645,6 +645,7 @@ class MainWindow(QMainWindow):
         self.lists.addStretch(1)
         sc.setWidget(inner)
         v.addWidget(sc, 1)
+        self.side_sc = sc
 
         sep = QFrame()
         sep.setProperty("sep", True)
@@ -696,9 +697,12 @@ class MainWindow(QMainWindow):
                       {"idle": None, "work": p["accent"], "wait": p["warn"], "takeover": p["warn"]}[kind])
             r.set_badge(len(self.store.pending_for_bot(b["id"])))
             r.setToolTip(b.get("job", ""))
-        # keep bot rows in store order
-        for i, b in enumerate(self.ordered_bots()):
-            self.bots_box.insertWidget(i, self.rows[f"bot:{b['id']}"])
+        # keep bot rows in store order, without churning the layout when it already matches
+        want = [self.rows[f"bot:{b['id']}"] for b in self.ordered_bots()]
+        have = [self.bots_box.itemAt(i).widget() for i in range(self.bots_box.count())]
+        if have != want:
+            for i, w in enumerate(want):
+                self.bots_box.insertWidget(i, w)
         gwant = {f"group:{g['id']}": g for g in self.store.groups}
         for key in [k for k in self.rows if k.startswith("group:") and k not in gwant]:
             self.rows.pop(key).deleteLater()
@@ -733,6 +737,7 @@ class MainWindow(QMainWindow):
     def select(self, key: str) -> None:
         kind, _, ident = key.partition(":")
         self.current_key = key
+        prev = self.stack.currentWidget()
         if kind == "bot":
             self.stack.setCurrentWidget(self.chat)
             self.chat.show_bot(ident)
@@ -741,6 +746,8 @@ class MainWindow(QMainWindow):
             self.chat.show_group(ident)
         else:
             self.stack.setCurrentWidget(self.pages[ident])
+        if self.stack.currentWidget() is not prev:
+            fade_in(self.stack.currentWidget())
         for k, r in self.rows.items():
             r.set_checked(k == key)
         if self.stack.currentWidget() is not self.welcome:
@@ -748,7 +755,10 @@ class MainWindow(QMainWindow):
 
     def show_welcome(self) -> None:
         self.current_key = ""
+        prev = self.stack.currentWidget()
         self.stack.setCurrentWidget(self.welcome)
+        if self.stack.currentWidget() is not prev:
+            fade_in(self.stack.currentWidget())
         for r in self.rows.values():
             r.set_checked(False)
 
@@ -757,10 +767,48 @@ class MainWindow(QMainWindow):
 
     def show_bot(self, bot_id: str, thread_id: str | None = None, draft: str | None = None) -> None:
         self.current_key = f"bot:{bot_id}"
+        prev = self.stack.currentWidget()
         self.stack.setCurrentWidget(self.chat)
         self.chat.show_bot(bot_id, thread_id, draft)
+        if self.stack.currentWidget() is not prev:
+            fade_in(self.stack.currentWidget())
         for k, r in self.rows.items():
             r.set_checked(k == self.current_key)
+
+    def snapshot(self) -> dict:
+        """Capture the visible chat state so a window rebuild (theme switch) can restore it exactly."""
+        ch = self.chat
+        return {"key": self.current_key, "thread": ch.thread_id, "draft": ch.input.toPlainText(),
+                "panel": ch.panel_pinned or ch.activity.isVisible(),
+                "list_scroll": ch.list.verticalScrollBar().value(),
+                "side_scroll": self.side_sc.verticalScrollBar().value()}
+
+    def restore(self, snap: dict) -> None:
+        """Restore a snapshot() after a rebuild: same page, thread, draft, panel and scroll."""
+        key = snap.get("key") or ""
+        if key.startswith("bot:"):
+            bid = key.split(":", 1)[1]
+            self.chat._pending_scroll = snap.get("list_scroll")
+            self.show_bot(bid, snap.get("thread") or None)
+            if snap.get("draft"):
+                self.chat.input.setPlainText(snap["draft"])
+                cur = self.chat.input.textCursor()
+                cur.movePosition(cur.MoveOperation.End)
+                self.chat.input.setTextCursor(cur)
+            if snap.get("panel"):
+                self.chat.panel_pinned = True
+                self.chat.show_panel()
+        elif key.startswith("group:"):
+            self.select(key)
+            if snap.get("draft"):
+                self.chat.input.setPlainText(snap["draft"])
+        elif key:
+            self.select(key)
+        else:
+            self.start_page()
+        side = snap.get("side_scroll") or 0
+        if side:
+            QTimer.singleShot(0, lambda: self.side_sc.verticalScrollBar().setValue(side))
 
     def show_group(self, gid: str) -> None:
         self.select(f"group:{gid}")

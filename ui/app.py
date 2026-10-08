@@ -157,20 +157,21 @@ class Controller(QObject):
             self.on_theme("auto")
 
     def on_theme(self, name: str) -> None:
-        """Switch theme live by rebuilding the window (every widget picks up the new palette)."""
+        """Switch theme live by rebuilding the window (every widget picks up the new palette),
+        restoring the previous page, thread, draft, panel and scroll so nothing is lost."""
         cfg = load_ui_config()
         theme.configure(cfg.get("accent"), cfg.get("density"), cfg.get("text"))
         theme.set_theme(name)
         self.app.setStyleSheet(theme.qss())
         save_ui_config({**cfg, "theme": name})
         old = self.window
+        snap = old.snapshot() if old else {}
         geo = old.geometry() if old else None
         self.window = self._make_window()
         if geo:
             self.window.setGeometry(geo)
-        self.window.start_page()
         self.window.show_window()
-        self.window.select(old.current_key if old and old.current_key else "page:settings")
+        self.window.restore(snap)
         if old:
             old.really_quit = True
             old.hide()

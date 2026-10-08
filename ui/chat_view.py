@@ -199,7 +199,7 @@ class ToolLine(QWidget):
         if status in ("denied", "blocked"):
             extra = "  (not performed)"
         self.text.setText(lab + extra + dur)
-        self.text.setStyleSheet(f"color: {p['bad'] if status in ('error', 'denied', 'blocked') else p['muted']}; font-size: 12px;")
+        self.text.setStyleSheet(f"color: {p['bad'] if status in ('error', 'denied', 'blocked') else p['muted']}; font-size: {theme.base_size() - 1}px;")
         self.setToolTip((it.get("summary") or "")[:600])
 
 
@@ -301,7 +301,7 @@ class ToolGroup(QFrame):
             text = self.labels.get(cid, "") if n == 1 else f"{n} actions" + (f", last: {self.labels.get(cid, '')}" if cid else "")
         self.dot.setPixmap(icons.pixmap("play" if st == "running" else ("x" if st == "error" else "check"), p["accent"] if st == "running" else (p["bad"] if st == "error" else p["ok"]), 12, 2.2))
         self.summary.setText(text)
-        self.summary.setStyleSheet(f"color: {color if running or st == 'error' else p['muted']}; font-size: 12px;")
+        self.summary.setStyleSheet(f"color: {color if running or st == 'error' else p['muted']}; font-size: {theme.base_size() - 1}px;")
         self.count.setText(f"{n}" if n > 1 else "")
         self.chev.setPixmap(icons.pixmap("chevron-down" if self.expanded else "chevron-right", p["faint"], 14))
 
@@ -493,7 +493,7 @@ class ActivityPanel(QFrame):
         self.api = api
         self.setFixedWidth(320)
         v = QVBoxLayout(self)
-        v.setContentsMargins(16, 14, 16, 16)
+        v.setContentsMargins(theme.dp(16), theme.dp(14), theme.dp(16), theme.dp(16))
         v.setSpacing(10)
         top = QHBoxLayout()
         top.addWidget(label("Live view", h2=True))
@@ -513,7 +513,7 @@ class ActivityPanel(QFrame):
         self.feed = QListWidget()
         self.feed.setWordWrap(True)
         self.feed.setSelectionMode(QListWidget.SelectionMode.NoSelection)
-        self.feed.setStyleSheet("QListWidget { border: none; background: transparent; } QListWidget::item { padding: 5px 2px; margin: 0; color: " + theme.palette()["muted"] + "; font-size: 12px; }")
+        self.feed.setStyleSheet(f"QListWidget {{ border: none; background: transparent; }} QListWidget::item {{ padding: 5px 2px; margin: 0; color: {theme.palette()['muted']}; font-size: {theme.base_size() - 1}px; }}")
         v.addWidget(self.feed, 1)
         self.bot_id = ""
         self._busy = False
@@ -625,6 +625,7 @@ class ChatPage(QWidget):
         self.item_count = 0
         self.panel_pinned = False
         self.last_user_text = ""
+        self._pending_scroll: int | None = None
 
         outer = QHBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
@@ -636,14 +637,14 @@ class ChatPage(QWidget):
         # header
         head = QFrame()
         hl = QHBoxLayout(head)
-        hl.setContentsMargins(24, 14, 16, 14)
+        hl.setContentsMargins(theme.dp(24), theme.dp(14), theme.dp(16), theme.dp(14))
         hl.setSpacing(12)
         self.avatar = Avatar("🤖", 38)
         hl.addWidget(self.avatar)
         col = QVBoxLayout()
         col.setSpacing(0)
         self.title = label("", h2=True, wrap=False)
-        self.title.setStyleSheet("font-size: 15px; font-weight: 600;")
+        self.title.setStyleSheet(f"font-size: {theme.base_size() + 2}px; font-weight: 600;")
         self.subtitle = label("", faint=True, wrap=False)
         self.subtitle.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
         col.addWidget(self.title)
@@ -688,7 +689,7 @@ class ChatPage(QWidget):
         # composer
         comp_wrap = QWidget()
         cw = QHBoxLayout(comp_wrap)
-        cw.setContentsMargins(24, 4, 24, 18)
+        cw.setContentsMargins(theme.dp(24), 4, theme.dp(24), theme.dp(18))
         cw.addStretch(1)
         inner = QWidget()
         inner.setMaximumWidth(COLUMN)
@@ -841,6 +842,9 @@ class ChatPage(QWidget):
             for it in d["items"]:
                 self.apply_item(it, initial=True)
             self.list.to_bottom()
+            if self._pending_scroll is not None:
+                self.list.verticalScrollBar().setValue(self._pending_scroll)
+                self._pending_scroll = None
             self.store.approvals = [a for a in self.store.approvals if a["thread_id"] != self.thread_id] + d["approvals"]
             self.render_approvals()
             self.update_status()
@@ -974,12 +978,12 @@ class ChatPage(QWidget):
             lb.setWordWrap(True)
             lb.setAlignment(Qt.AlignmentFlag.AlignCenter)
             col, bg = {"error": (p["bad"], p["bad_bg"]), "warn": (p["warn"], p["warn_bg"])}.get(it.get("level"), (p["muted"], p["panel2"]))
-            lb.setStyleSheet(f"color: {col}; background: {bg}; border-radius: 10px; padding: 8px 14px; font-size: 12px;")
+            lb.setStyleSheet(f"color: {col}; background: {bg}; border-radius: 10px; padding: 8px 14px; font-size: {theme.base_size() - 1}px;")
             self._plain(lb)
         elif t == "system_note":
             lb = QLabel("↻  " + it["text"][:240])
             lb.setWordWrap(True)
-            lb.setStyleSheet(f"color: {p['faint']}; font-size: 11px; padding-left: 4px;")
+            lb.setStyleSheet(f"color: {p['faint']}; font-size: {theme.base_size() - 2}px; padding-left: 4px;")
             self._plain(lb)
 
     def _assistant_ids(self) -> set[int]:
@@ -1158,7 +1162,7 @@ class ChatPage(QWidget):
         cl.setContentsMargins(14, 8, 14, 8)
         cl.setSpacing(10)
         msg = label(f"Couldn’t send: {err}", wrap=True)
-        msg.setStyleSheet(f"color: {p['bad']}; font-size: 12px;")
+        msg.setStyleSheet(f"color: {p['bad']}; font-size: {theme.base_size() - 1}px;")
         cl.addWidget(msg, 1)
         def drop() -> None:
             card.hide()

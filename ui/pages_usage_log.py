@@ -6,7 +6,7 @@ import time
 
 from PySide6.QtCore import QRectF, Qt, QTimer
 from PySide6.QtGui import QColor, QPainter
-from PySide6.QtWidgets import (QComboBox, QFileDialog, QFormLayout, QFrame, QGridLayout, QHBoxLayout, QLineEdit, QMessageBox, QProgressBar, QPushButton,
+from PySide6.QtWidgets import (QComboBox, QFileDialog, QFormLayout, QFrame, QGridLayout, QHBoxLayout, QLineEdit, QMessageBox, QProgressBar, QPushButton, QScrollArea,
                                QSpinBox, QSplitter, QTableWidgetItem, QTextBrowser, QVBoxLayout, QWidget)
 
 from . import theme
@@ -14,7 +14,7 @@ from .api import Api
 from .pages_inbox import fill_row, fmt_time, make_table
 from core.pricing import fmt_money
 from .store import Store
-from .widgets import button, card, label, PageHeader, page_layout
+from .widgets import button, card, label, PageHeader, page_layout, table_empty
 
 
 def fmt_tokens(n: int) -> str:
@@ -52,7 +52,15 @@ class UsagePage(QWidget):
     def __init__(self, api: Api, store: Store):
         super().__init__()
         self.api, self.store = api, store
-        v = page_layout(self, PageHeader("Usage", "Tracked locally from the token counts your providers report. It resets weekly."))
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        sc = QScrollArea()
+        sc.setWidgetResizable(True)
+        sc.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        outer.addWidget(sc)
+        body = QWidget()
+        sc.setWidget(body)
+        v = page_layout(body, PageHeader("Usage", "Tracked locally from the token counts your providers report. It resets weekly."))
         top = QHBoxLayout()
         self.c_total = self._stat("This week", "0")
         self.c_in = self._stat("Input tokens", "0")
@@ -150,6 +158,7 @@ class UsagePage(QWidget):
                 bc = cost.get("per_bot", {}).get(r["bot_id"])
                 fill_row(self.table, [f"{r['emoji']} {r['name']}", r["turns"], fmt_tokens(r["input_tokens"] or 0), fmt_tokens(r["output_tokens"] or 0), fmt_tokens((r["input_tokens"] or 0) + (r["output_tokens"] or 0)),
                                       fmt_money(bc, cur) if bc is not None else "—"])
+            table_empty(self.table, "No usage recorded yet this week.")
             if not self._price_dirty:
                 self._fill_prices(cost)
             if not self.limit.hasFocus():
@@ -176,6 +185,7 @@ class UsagePage(QWidget):
             for c in (0, 1, 2, 5):
                 it = self.prices.item(r, c)
                 it.setFlags(it.flags() & ~Qt.ItemFlag.ItemIsEditable)
+        table_empty(self.prices, "No token usage recorded yet.")
         self.currency.blockSignals(True)
         self.currency.setText(cur)
         self.currency.blockSignals(False)
@@ -185,6 +195,8 @@ class UsagePage(QWidget):
         models = {}
         for r in range(self.prices.rowCount()):
             key = self.prices.item(r, 0).data(Qt.ItemDataRole.UserRole)
+            if key is None:   # the "no usage yet" placeholder row
+                continue
             a, b = self.prices.item(r, 3).text().strip(), self.prices.item(r, 4).text().strip()
             if a.lower() == "free" and b.lower() == "free" or (not a and not b):
                 continue
@@ -268,6 +280,7 @@ class LogPage(QWidget):
             self.table.setRowCount(0)
             for a in rows:
                 fill_row(self.table, [fmt_time(a["ts"]), self.store.bot_name(a["bot_id"]), a["tool"], a["status"], a["url"] or a["path"] or "", a["duration_ms"]], a)
+            table_empty(self.table, "No actions logged yet.")
             self.table.resizeColumnsToContents()
             self.table.horizontalHeader().setStretchLastSection(False)
         self.api.get("/api/actions", ok, params=params)
@@ -277,6 +290,8 @@ class LogPage(QWidget):
         if r < 0:
             return
         a = self.table.item(r, 0).data(Qt.ItemDataRole.UserRole)
+        if not a:   # the "nothing logged" placeholder row
+            return
         self.detail_view.setPlainText(f"{a['tool']}  [{a['status']}]  {a['category'] or ''}\n\nARGS\n{a['args']}\n\nRESULT\n{a['result']}")
 
     def export(self, fmt: str) -> None:
