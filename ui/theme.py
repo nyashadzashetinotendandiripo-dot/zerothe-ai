@@ -221,6 +221,8 @@ QLabel[chip="ok"] {{ background: {c['ok_bg']}; color: {c['ok']}; border-radius: 
 QLabel[chip="warn"] {{ background: {c['warn_bg']}; color: {c['warn']}; border-radius: {r['lg']}px; padding: 2px 10px; font-size: {tiny}px; }}
 QLabel[chip="bad"] {{ background: {c['bad_bg']}; color: {c['bad']}; border-radius: {r['lg']}px; padding: 2px 10px; font-size: {tiny}px; }}
 QLabel[chip="work"] {{ background: {c['accent_dim']}; color: {work_fg}; border-radius: {r['lg']}px; padding: 2px 10px; font-size: {tiny}px; font-weight: 600; }}
+QLabel[cite="true"] {{ background: {c['panel2']}; border: 1px solid {c['line2']}; border-radius: {r['pill']}px; padding: 3px 10px; font-size: {tiny}px; }}
+QLabel[cite="true"]:hover {{ border-color: {c['accent']}; }}
 QLabel[badge="true"] {{ background: {c['accent']}; color: {c['accent_text']}; border-radius: {r['lg']}px; padding: 0px 6px; font-size: {tiny}px; font-weight: 600; }}
 
 QFrame[card="true"] {{ background: {c['panel']}; border: 1px solid {c['line']}; border-radius: {r['card']}px; }}
@@ -273,6 +275,7 @@ QPushButton[iconbtn="accent"]:hover {{ background: {c['accent_hi']}; }}
 QPushButton[iconbtn="accent"]:pressed {{ background: {acc_press}; }}
 QPushButton[iconbtn="accent"]:focus {{ border-color: {c['text']}; }}
 QPushButton[iconbtn="accent"]:disabled {{ background: {c['accent_dim']}; }}
+QPushButton[iconbtn="true"][small="true"] {{ min-width: 20px; max-width: 20px; min-height: 20px; max-height: 20px; border-radius: 6px; }}
 QPushButton[iconbtn="danger"] {{ background: {c['bad_bg']}; border: 1px solid {c['bad']}; border-radius: 16px; padding: 0px; min-width: 30px; max-width: 30px; min-height: 30px; max-height: 30px; }}
 QPushButton[iconbtn="danger"]:pressed {{ background: {c['bad']}; }}
 QPushButton[iconbtn="danger"]:focus {{ border-color: {c['text']}; }}

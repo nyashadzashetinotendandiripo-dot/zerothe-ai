@@ -5,9 +5,11 @@ import base64
 import html
 import os
 import re
+from datetime import datetime
+from typing import Callable
 
 from PySide6.QtCore import QEvent, QSize, Qt, QTimer, Signal
-from PySide6.QtGui import QKeyEvent, QPixmap
+from PySide6.QtGui import QGuiApplication, QIcon, QKeyEvent, QPixmap
 from PySide6.QtWidgets import (QFileDialog, QFrame, QHBoxLayout, QInputDialog, QLabel, QListWidget, QListWidgetItem, QMenu, QMessageBox, QPlainTextEdit,
                                QPushButton, QScrollArea, QSizePolicy, QStackedLayout, QVBoxLayout, QWidget)
 
@@ -22,6 +24,151 @@ COLUMN = 800
 def status_color(status: str) -> str:
     p = theme.palette()
     return {"running": p["accent"], "ok": p["ok"], "error": p["bad"], "denied": p["bad"], "blocked": p["bad"]}.get(status, p["muted"])
+
+
+def _fmt_ts(ts) -> str:
+    """epoch seconds (or ms) -> HH:MM; empty string when missing or unreadable."""
+    if not ts:
+        return ""
+    try:
+        t = float(ts)
+    except (TypeError, ValueError):
+        return ""
+    if t > 1e12:      # milliseconds
+        t /= 1000.0
+    try:
+        return datetime.fromtimestamp(t).strftime("%H:%M")
+    except (OverflowError, OSError, ValueError):
+        return ""
+
+
+_LINK_RE = re.compile(r"\[([^\]\n]{1,140})\]\((https?://[^)\s]+)\)")
+
+
+def _extract_citations(text: str, limit: int = 6) -> list[tuple[str, str]]:
+    """(title, url) pairs for markdown links — the source chips under a reply."""
+    out: list[tuple[str, str]] = []
+    seen: set[str] = set()
+    for title, url in _LINK_RE.findall(text or ""):
+        u = url.strip()
+        if u in seen:
+            continue
+        seen.add(u)
+        out.append((" ".join(title.split()), u))
+        if len(out) >= limit:
+            break
+    return out
+
+
+class MessageRow(QFrame):
+    """One chat message: content, timestamp and hover/focus-revealed copy / edit / retry actions.
+
+    The action buttons always occupy space (so nothing jumps) but only show their icon while the
+    row is hovered or a button has keyboard focus."""
+
+    def __init__(self, content: QWidget, kind: str, get_text: Callable[[], str], ts=0,
+                 on_edit: Callable[[], None] | None = None, on_retry: Callable[[], None] | None = None):
+        super().__init__()
+        self.setProperty("msgrow", True)
+        self.kind = kind
+        self.get_text = get_text
+        self._hovered = False
+        self._cite_row: QWidget | None = None
+        self._cite_stretch = False
+        v = QVBoxLayout(self)
+        v.setContentsMargins(6, 4, 6, 4)
+        v.setSpacing(4)
+        self.content = content
+        v.addWidget(content)
+        meta = QWidget()
+        mh = QHBoxLayout(meta)
+        mh.setContentsMargins(2, 0, 2, 0)
+        mh.setSpacing(2)
+        right = kind == "user"
+        if right:
+            mh.addStretch(1)
+        self.time = QLabel(_fmt_ts(ts))
+        self.time.setProperty("faint", True)
+        mh.addWidget(self.time, 0, Qt.AlignmentFlag.AlignBottom)
+        self.btns: list[tuple[QPushButton, QIcon]] = []
+
+        def action(name: str, tip: str, fn: Callable[[], None]) -> None:
+            b = QPushButton()
+            b.setProperty("iconbtn", "true")
+            b.setProperty("small", True)
+            b.setToolTip(tip)
+            b.setAccessibleName(tip)
+            b.setIconSize(QSize(14, 14))
+            b.setCursor(Qt.CursorShape.PointingHandCursor)
+            b.clicked.connect(fn)
+            b.installEventFilter(self)
+            mh.addWidget(b, 0, Qt.AlignmentFlag.AlignBottom)
+            self.btns.append((b, icons.icon(name, theme.palette()["muted"], 14)))
+
+        action("copy", "Copy message", self._copy)
+        if kind == "user" and on_edit:
+            action("edit", "Edit and resend", on_edit)
+        elif kind == "assistant" and on_retry:
+            action("refresh", "Send that again", on_retry)
+        if not right:
+            mh.addStretch(1)
+        v.addWidget(meta)
+        self._sync_icons()
+
+    def _copy(self) -> None:
+        QGuiApplication.clipboard().setText(self.get_text() or "")
+
+    def _sync_icons(self) -> None:
+        on = self._hovered or any(b.hasFocus() for b, _ in self.btns)
+        for b, ic in self.btns:
+            b.setIcon(ic if on else QIcon())
+
+    def eventFilter(self, obj, e) -> bool:  # noqa: N802
+        if any(obj is b for b, _ in self.btns) and e.type() in (QEvent.Type.FocusIn, QEvent.Type.FocusOut):
+            QTimer.singleShot(0, self._sync_icons)
+        return super().eventFilter(obj, e)
+
+    def enterEvent(self, e) -> None:  # noqa: N802
+        self._hovered = True
+        self._sync_icons()
+        super().enterEvent(e)
+
+    def leaveEvent(self, e) -> None:  # noqa: N802
+        self._hovered = False
+        self._sync_icons()
+        super().leaveEvent(e)
+
+    def set_ts(self, ts) -> None:
+        self.time.setText(_fmt_ts(ts))
+
+    def set_citations(self, pairs: list[tuple[str, str]]) -> None:
+        if not pairs:
+            return
+        if self._cite_row is None:
+            self._cite_row = QWidget()
+            cl = QHBoxLayout(self._cite_row)
+            cl.setContentsMargins(2, 0, 2, 0)
+            cl.setSpacing(6)
+            if self.kind == "user":
+                cl.addStretch(1)      # user chips hug the right edge with the bubble
+            self.layout().insertWidget(1, self._cite_row)   # between content and the meta row
+        acc = theme.palette()["accent"]
+        lay = self._cite_row.layout()
+        for title, url in pairs:
+            lb = QLabel()
+            lb.setProperty("cite", True)
+            lb.setTextFormat(Qt.TextFormat.RichText)
+            lb.setOpenExternalLinks(True)
+            lb.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse | Qt.TextInteractionFlag.LinksAccessibleByMouse)
+            lb.setText(f'<a href="{html.escape(url, quote=True)}" style="color:{acc}; text-decoration:none;">\U0001f517 {html.escape(title)[:70]}</a>')
+            lb.setToolTip(url)
+            if self.kind != "user" and self._cite_stretch:
+                lay.insertWidget(lay.count() - 1, lb)   # keep the trailing stretch last
+            else:
+                lay.addWidget(lb)
+        if self.kind != "user" and not self._cite_stretch:
+            lay.addStretch(1)         # assistant chips hug the left edge
+            self._cite_stretch = True
 
 
 class ToolLine(QWidget):
@@ -471,11 +618,13 @@ class ChatPage(QWidget):
         self.tools: dict[str, ToolGroup] = {}
         self.cur_group: ToolGroup | None = None
         self.streams: dict[str, AutoMarkdown] = {}
+        self.stream_rows: dict[str, MessageRow] = {}
         self.seen_ids: set[int] = set()
         self.cards: dict[str, ApprovalCard] = {}
         self.thread_list: list[dict] = []
         self.item_count = 0
         self.panel_pinned = False
+        self.last_user_text = ""
 
         outer = QHBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
@@ -589,6 +738,7 @@ class ChatPage(QWidget):
 
         store.event.connect(self.on_event)
         store.busyChanged.connect(self.update_status)
+        store.connectionChanged.connect(lambda _ok: self.update_status())
         store.approvalsChanged.connect(self.render_approvals)
         store.botsChanged.connect(self._refresh_header)
         self._focus_ring(False)
@@ -675,9 +825,11 @@ class ChatPage(QWidget):
         self.tools.clear()
         self.cur_group = None
         self.streams.clear()
+        self.stream_rows.clear()
         self.seen_ids.clear()
         self.cards.clear()
         self.item_count = 0
+        self.last_user_text = ""
         self.activity.feed.clear()
         t = next((t for t in self.thread_list if t["id"] == thread_id), None)
         if t:
@@ -769,33 +921,45 @@ class ChatPage(QWidget):
             self.seen_ids.add(it["id"])
         p = theme.palette()
         if t == "user":
+            text = it.get("text") or ""
             f = QFrame()
             f.setStyleSheet(f"background: {p['user']}; border-radius: 16px;")
             f.setMaximumWidth(620)
-            f.setMinimumWidth(max(110, min(620, 44 + len(it["text"] or "") * 7)))
+            f.setMinimumWidth(max(110, min(620, 44 + len(text) * 7)))
             l = QVBoxLayout(f)
             l.setContentsMargins(16, 11, 16, 11)
             l.setSpacing(6)
-            l.addWidget(AutoMarkdown(it["text"] or ""))
+            l.addWidget(AutoMarkdown(text))
             for name in it.get("images", []) or []:
                 self.images.get(name, lambda pm, l=l: l.addWidget(Thumb(pm, 260)))
-            row = QWidget()
-            rl = QHBoxLayout(row)
+            wrap = QWidget()
+            rl = QHBoxLayout(wrap)
             rl.setContentsMargins(0, 0, 0, 0)
             rl.addStretch(1)
             rl.addWidget(f)
+            self.last_user_text = text
+            row = MessageRow(wrap, "user", lambda: text, ts=it.get("ts"),
+                             on_edit=lambda text=text: self._edit_message(text))
             self._plain(row)
             self.list.to_bottom()
         elif t == "assistant":
+            text = it.get("text") or ""
             sid = it.get("stream_id", "")
             w = self.streams.pop(sid, None) if sid else None
             if w is not None:
-                w.set_text(it["text"], immediate=True)
+                w.set_text(text, immediate=True)
                 w.setProperty("msg_id", it["id"])
+                row = self.stream_rows.pop(sid, None)
+                if row is not None:
+                    row.set_ts(it.get("ts"))
+                    row.set_citations(_extract_citations(text))
                 return
             if it["id"] in self._assistant_ids():
                 return
-            self._plain(self._assistant_bubble(it["text"], it.get("name", ""), it.get("emoji", ""), it["id"]))
+            row = MessageRow(self._assistant_bubble(text, it.get("name", ""), it.get("emoji", ""), it["id"]),
+                             "assistant", lambda: text, ts=it.get("ts"), on_retry=self._retry_last)
+            row.set_citations(_extract_citations(text))
+            self._plain(row)
         elif t == "notice" and it.get("level") == "cmd":
             card = QFrame()
             card.setStyleSheet(f"QFrame {{ background: {p['panel']}; border: 1px solid {p['line2']}; border-left: 3px solid {p['accent']}; border-radius: 10px; }}")
@@ -854,8 +1018,10 @@ class ChatPage(QWidget):
             if w is None:
                 w = AutoMarkdown("")
                 self.streams[sid] = w
+                row = MessageRow(w, "assistant", lambda: w.text(), on_retry=self._retry_last)
+                self.stream_rows[sid] = row
                 self.cur_group = None
-                self.list.add(w)
+                self.list.add(row)
                 self.item_count += 1
                 self.stackl.setCurrentWidget(self.list)
             w.append_text(ev["text"])
@@ -864,6 +1030,11 @@ class ChatPage(QWidget):
             if w:
                 w.setParent(None)
                 w.deleteLater()
+            row = self.stream_rows.pop(ev["stream_id"], None)
+            if row:
+                row.hide()
+                row.setParent(None)
+                row.deleteLater()
         elif t == "activity":
             self.activity.log(ev["text"], "running")
         elif t == "takeover":
@@ -896,7 +1067,10 @@ class ChatPage(QWidget):
         if self.group_id:
             running = [r for r in self.store.busy.values() if r.get("thread_id") == self.thread_id]
             self._set_running(bool(running))
-            set_chip(self.status, f"{len(running)} working" if running else "Idle", "work" if running else "true")
+            if not self.store.connected:
+                set_chip(self.status, "Reconnecting…", "warn")
+            else:
+                set_chip(self.status, f"{len(running)} working" if running else "Idle", "work" if running else "true")
             return
         if not self.bot_id:
             return
@@ -906,8 +1080,12 @@ class ChatPage(QWidget):
         self._set_running(here)
         self.activity.set_busy(here)
         label_ = (text or "idle").capitalize()
+        if kind == "work" and (text or "") == "working" and not (run or {}).get("steps"):
+            label_ = "Thinking…"        # the turn started but no step has run yet
         if run and not here:
             label_ += " elsewhere"
+        if not self.store.connected:
+            label_, kind = "Reconnecting…", "wait"   # don't claim work we can't see
         set_chip(self.status, label_, {"work": "work", "wait": "warn", "takeover": "warn"}.get(kind, "true"))
         if self.bot_id in self.store.takeovers:
             self.banner.setText("You are driving this Bot's browser. It is paused until you hand it back.")
@@ -941,15 +1119,56 @@ class ChatPage(QWidget):
         text = self.input.toPlainText().strip()
         if (not text and not self.attachments) or not self.thread_id:
             return
-        body = {"text": text, "images": self.attachments}
+        images = self.attachments
         self.input.clear()
         self.attachments = []
         clear_layout(self.attach_row)
         self.list.to_bottom()
+        self.last_user_text = text
+        self._post_message(text, images)
+
+    def _post_message(self, text: str, images: list) -> None:
+        body = {"text": text, "images": images}
         def sent(d: dict) -> None:
             if isinstance(d, dict) and d.get("switch_thread") and self.bot_id:
                 self._load_threads(d["switch_thread"])
-        self.api.post(f"/api/threads/{self.thread_id}/messages", body, sent, lambda e: self.toast.emit(e, "error"))
+        def failed(e: str) -> None:
+            self.toast.emit(e, "error")
+            self._show_send_failed(text, images, e)
+        self.api.post(f"/api/threads/{self.thread_id}/messages", body, sent, failed)
+
+    def _retry_last(self) -> None:
+        if not self.last_user_text or not self.thread_id:
+            return
+        self._post_message(self.last_user_text, [])
+
+    def _edit_message(self, text: str) -> None:
+        self.input.setPlainText(text)
+        self.input.setFocus()
+        cur = self.input.textCursor()
+        cur.movePosition(cur.MoveOperation.End)
+        self.input.setTextCursor(cur)
+
+    def _show_send_failed(self, text: str, images: list, err: str) -> None:
+        """Inline, honest failure notice with a Retry — a toast alone hides what went wrong."""
+        p = theme.palette()
+        card = QFrame()
+        card.setStyleSheet(f"QFrame {{ background: {p['bad_bg']}; border: 1px solid {p['bad']}; border-left: 3px solid {p['bad']}; border-radius: 10px; }}")
+        cl = QHBoxLayout(card)
+        cl.setContentsMargins(14, 8, 14, 8)
+        cl.setSpacing(10)
+        msg = label(f"Couldn’t send: {err}", wrap=True)
+        msg.setStyleSheet(f"color: {p['bad']}; font-size: 12px;")
+        cl.addWidget(msg, 1)
+        def drop() -> None:
+            card.hide()
+            card.setParent(None)
+            card.deleteLater()
+        retry = button("Retry", primary=True, on=lambda: (drop(), self._post_message(text, images)))
+        cl.addWidget(retry, 0, Qt.AlignmentFlag.AlignVCenter)
+        cl.addWidget(button("Dismiss", flat=True, on=drop), 0, Qt.AlignmentFlag.AlignVCenter)
+        self._plain(card)
+        self.list.to_bottom()
 
     def attach(self) -> None:
         path, _ = QFileDialog.getOpenFileName(self, "Attach an image", "", "Images (*.png *.jpg *.jpeg)")
