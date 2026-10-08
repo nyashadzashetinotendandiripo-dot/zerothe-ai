@@ -113,7 +113,6 @@ class MarketplacePage(QWidget):
             foot.addWidget(chip(f"Installed ×{n}"))
         foot.addStretch(1)
         add = button("Add", primary=True, on=lambda _=False, t=t: self.add(t))
-        add.setEnabled(True)
         foot.addWidget(add)
         v.addLayout(foot)
         return c

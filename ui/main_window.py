@@ -50,6 +50,9 @@ class SideRow(QFrame):
         super().__init__()
         self.setProperty("siderow", True)
         self.setProperty("checked", False)
+        self.setProperty("focused", False)
+        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+        self.setAccessibleName(title)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         h = QHBoxLayout(self)
         h.setContentsMargins(8, theme.dp(6 if tall else 5), 10, theme.dp(6 if tall else 5))
@@ -90,6 +93,23 @@ class SideRow(QFrame):
     def mouseReleaseEvent(self, e) -> None:
         if e.button() == Qt.MouseButton.LeftButton and self.rect().contains(e.position().toPoint()):
             self.clicked.emit()
+
+    def keyPressEvent(self, e) -> None:
+        if e.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter, Qt.Key.Key_Space):
+            self.clicked.emit()
+            e.accept()
+            return
+        super().keyPressEvent(e)
+
+    def focusInEvent(self, e) -> None:
+        super().focusInEvent(e)
+        self.setProperty("focused", True)
+        repolish(self)
+
+    def focusOutEvent(self, e) -> None:
+        super().focusOutEvent(e)
+        self.setProperty("focused", False)
+        repolish(self)
 
 
 class NavRow(SideRow):
@@ -434,7 +454,7 @@ class ShortcutsDialog(QDialog):
         v.addWidget(label("Keyboard shortcuts", h1=True))
         for title, rows in SHORTCUTS:
             head = label(title.upper(), eyebrow=True)
-            head.setContentsMargins(0, 10, 0, 0)
+            head.setStyleSheet("padding-top: 10px;")
             v.addWidget(head)
             for keys, what in rows:
                 r = QHBoxLayout()
@@ -605,14 +625,14 @@ class MainWindow(QMainWindow):
         self.lists.setContentsMargins(0, 4, 0, 4)
         self.lists.setSpacing(2)
         self.bots_head = label("BOTS", eyebrow=True)
-        self.bots_head.setContentsMargins(8, 4, 0, 2)
+        self.bots_head.setStyleSheet("padding: 4px 0 2px 8px;")
         self.lists.addWidget(self.bots_head)
         self.bots_box = QVBoxLayout()
         self.bots_box.setSpacing(2)
         self.lists.addLayout(self.bots_box)
         gh = QHBoxLayout()
         self.groups_head = label("GROUPS", eyebrow=True)
-        self.groups_head.setContentsMargins(8, 12, 0, 2)
+        self.groups_head.setStyleSheet("padding: 12px 0 2px 8px;")
         gh.addWidget(self.groups_head)
         gh.addStretch(1)
         self.group_add = icon_button("plus", "New group chat", self.new_group, size=14)
@@ -639,7 +659,7 @@ class MainWindow(QMainWindow):
         self.rows["page:settings"] = r
         v.addWidget(r)
         self.foot = label("", faint=True, wrap=False)
-        self.foot.setContentsMargins(8, 2, 0, 0)
+        self.foot.setStyleSheet("padding: 2px 0 0 8px;")
         v.addWidget(self.foot)
         return side
 

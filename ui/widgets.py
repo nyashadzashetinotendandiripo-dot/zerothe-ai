@@ -80,6 +80,7 @@ def icon_button(name: str, tip: str = "", on: Callable | None = None, kind: str 
     b.setIcon(icons.icon(name, col, size))
     b.setIconSize(QSize(size, size))
     b.setToolTip(tip)
+    b.setAccessibleName(tip or name)
     b.setCursor(Qt.CursorShape.PointingHandCursor)
     b.setFixedSize(32, 32)
     if on:
@@ -186,8 +187,11 @@ class SideTabs(QWidget):
         self.nav.setObjectName("sidetabs")
         self.nav.setFixedWidth(nav_width)
         self.nav.setIconSize(QSize(16, 16))
-        self.nav.setFocusPolicy(Qt.FocusPolicy.NoFocus)
-        self.nav.setStyleSheet("QListWidget#sidetabs { background: transparent; border: none; } "
+        self.nav.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+        self.nav.setAccessibleName("Section navigation")
+        acc = theme.palette()["accent"]
+        self.nav.setStyleSheet(f"QListWidget#sidetabs {{ background: transparent; border: none; }} "
+                               f"QListWidget#sidetabs:focus {{ border: 1px solid {acc}; border-radius: 12px; }} "
                                "QListWidget#sidetabs::item { padding: 9px 12px; margin: 1px 0; }")
         self.stack = QStackedWidget()
         h.addWidget(self.nav)
