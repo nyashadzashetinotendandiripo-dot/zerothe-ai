@@ -11,7 +11,7 @@ Full documentation. Back to the [project README](../README.md).
 Requirements: Windows 10/11, Python 3.11 or newer. (The headless service also runs on Linux/macOS/Docker; the desktop UI is built and tested for Windows.)
 
 ```powershell
-cd opengrokbot
+cd zerothe-ai
 python -m venv .venv
 .venv\Scripts\activate
 pip install -r requirements.txt

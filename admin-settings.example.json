@@ -1,5 +1,5 @@
 {
-  "_comment": "Copy to %PROGRAMDATA%\\OpenGrokBot\\admin.json (or set OPENGROKBOT_ADMIN to its path) to preset policy for everyone using this PC. Remove this key if you like; unknown keys are ignored.",
+  "_comment": "Copy to %PROGRAMDATA%\\ZerotheBot\\admin.json (or set ZEROTHEBOT_ADMIN to its path) to preset policy for everyone using this PC. Remove this key if you like; unknown keys are ignored. (Pre-rename %PROGRAMDATA%\\OpenGrokBot\\admin.json and OPENGROKBOT_ADMIN are still read as a fallback.)",
 
   "network_policy": {
     "mode": "allowlist",
