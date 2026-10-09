@@ -70,8 +70,8 @@ All your Bots share **one persistent computer**: a Chromium profile with your lo
 Requirements: Windows 10/11 and Python 3.11 or newer.
 
 ```powershell
-git clone https://github.com/Crepald-01/OpenGrokBot.git
-cd OpenGrokBot
+git clone https://github.com/nyashadzashetinotendandiripo-dot/zerothe-ai.git
+cd zerothe-ai
 python -m venv .venv
 .venv\Scripts\activate
 pip install -r requirements.txt

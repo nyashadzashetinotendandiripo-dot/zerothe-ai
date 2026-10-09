@@ -14,7 +14,7 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
-REPO = "Crepald-01/OpenGrokBot"
+REPO = "nyashadzashetinotendandiripo-dot/zerothe-ai"
 exe = Path(sys.argv[1])
 tag = sys.argv[2]
 
