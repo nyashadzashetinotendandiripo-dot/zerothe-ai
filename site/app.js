@@ -6,10 +6,10 @@
 const CONFIG = {
   REPO: "nyashadzashetinotendandiripo-dot/zerothe-ai",
   // Fallbacks shown until (or if) the release lookup works. Update these when you publish a new build.
-  version: "1.5.0",
-  sizeMB: 83,
-  sha256: "22ed406a9556016efa4d92e4abe3484e4dbb3525624d7e03a91243146c500fc3",
-  assetUrl: "https://github.com/nyashadzashetinotendandiripo-dot/zerothe-ai/releases/download/v1.5.0/OpenGrokBot-Setup-1.5.0.exe",
+  version: "1.6.0",
+  sizeMB: 82,
+  sha256: "5085524eb0cab231a45fa4da5fec54185592a7fd6de8d0ebd1c5c8b295748103",
+  assetUrl: "https://github.com/nyashadzashetinotendandiripo-dot/zerothe-ai/releases/download/v1.6.0/ZerotheBot-Setup-1.6.0.exe",
 };
 // ----------------------------------------------------------------------------------------------------------
 
