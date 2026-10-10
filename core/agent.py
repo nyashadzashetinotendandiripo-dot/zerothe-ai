@@ -21,6 +21,7 @@ from .plugins import ConnectorError
 from .providers import (ProviderError, StopRequested, estimate_tokens, extract_json, friendly_error, make_provider)
 from .threads import blocks_text
 from .tooling import Risk, ToolContext, ToolResult, ToolSpec, short
+from .uiblocks import UI_PROMPT
 
 if TYPE_CHECKING:  # pragma: no cover
     from .engine import Engine
@@ -437,6 +438,7 @@ class AgentRun:
         summ = th.get("summary")
         if summ:
             parts.append(f"# Summary of this thread's earlier conversation\n{summ}")
+        parts.append(UI_PROMPT)
         return "\n\n".join(parts)
 
 

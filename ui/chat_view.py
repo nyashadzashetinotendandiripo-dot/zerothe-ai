@@ -8,13 +8,15 @@ import re
 from datetime import datetime
 from typing import Callable
 
-from PySide6.QtCore import QEvent, QSize, Qt, QTimer, Signal
-from PySide6.QtGui import QGuiApplication, QIcon, QKeyEvent, QPixmap
+from PySide6.QtCore import QEvent, QSize, Qt, QTimer, Signal, QUrl
+from PySide6.QtGui import QDesktopServices, QGuiApplication, QIcon, QKeyEvent, QPixmap
 from PySide6.QtWidgets import (QFileDialog, QFrame, QHBoxLayout, QInputDialog, QLabel, QListWidget, QListWidgetItem, QMenu, QMessageBox, QPlainTextEdit,
                                QPushButton, QScrollArea, QSizePolicy, QStackedLayout, QVBoxLayout, QWidget)
 
+from core.uiblocks import plain_text, split_message
 from . import icons, theme
 from .api import Api
+from .blocks import BlockCtx, render_block
 from .store import Store
 from .widgets import (ApprovalCard, AutoMarkdown, Avatar, ImageCache, Thumb, button, chip, clear_layout, icon_button, label, repolish, set_chip)
 
@@ -169,6 +171,15 @@ class MessageRow(QFrame):
         if self.kind != "user" and not self._cite_stretch:
             lay.addStretch(1)         # assistant chips hug the left edge
             self._cite_stretch = True
+
+    def replace_content(self, w: QWidget) -> None:
+        """Swap the message body (used when a streamed reply finalises into interactive blocks)."""
+        old = self.content
+        self.layout().replaceWidget(old, w)
+        old.hide()
+        old.setParent(None)
+        old.deleteLater()
+        self.content = w
 
 
 class ToolLine(QWidget):
@@ -957,11 +968,18 @@ class ChatPage(QWidget):
                 if row is not None:
                     row.set_ts(it.get("ts"))
                     row.set_citations(_extract_citations(text))
+                    if any(k == "ui" for k, _ in split_message(text)):
+                        content, plain = self._rich_text(text, it.get("id"))
+                        row.replace_content(content)
+                        row.get_text = lambda p=plain: p
+                    else:
+                        row.get_text = lambda: text
                 return
             if it["id"] in self._assistant_ids():
                 return
-            row = MessageRow(self._assistant_bubble(text, it.get("name", ""), it.get("emoji", ""), it["id"]),
-                             "assistant", lambda: text, ts=it.get("ts"), on_retry=self._retry_last)
+            bubble = self._assistant_bubble(text, it.get("name", ""), it.get("emoji", ""), it["id"])
+            plain = self._bubble_plain
+            row = MessageRow(bubble, "assistant", lambda p=plain: p, ts=it.get("ts"), on_retry=self._retry_last)
             row.set_citations(_extract_citations(text))
             self._plain(row)
         elif t == "notice" and it.get("level") == "cmd":
@@ -989,10 +1007,47 @@ class ChatPage(QWidget):
     def _assistant_ids(self) -> set[int]:
         return {w.property("msg_id") for w in self.list.box.findChildren(AutoMarkdown) if w.property("msg_id")}
 
+    def _block_ctx(self) -> BlockCtx:
+        return BlockCtx(reply=lambda t: self._post_message(t, []), open_url=self._open_block_url)
+
+    @staticmethod
+    def _open_block_url(url: str) -> None:
+        if QUrl(url).scheme().lower() in ("http", "https"):
+            QDesktopServices.openUrl(QUrl(url))
+
+    def _rich_text(self, text: str, mid: int | None = None) -> tuple[QWidget, str]:
+        """Assistant body: markdown text with ```ui blocks rendered as widgets.
+
+        Returns (content widget, plain copy text). Plain replies keep the exact
+        previous structure (a bare AutoMarkdown) so streaming and styling are untouched.
+        """
+        segs = split_message(text)
+        if not any(k == "ui" for k, _ in segs):
+            w = AutoMarkdown(text)
+            if mid:
+                w.setProperty("msg_id", mid)
+            return w, text
+        ctx = self._block_ctx()
+        box = QWidget()
+        v = QVBoxLayout(box)
+        v.setContentsMargins(0, 0, 0, 0)
+        v.setSpacing(8)
+        for kind, payload in segs:
+            if kind == "text":
+                t = AutoMarkdown(payload)  # type: ignore[arg-type]
+                if mid:
+                    t.setProperty("msg_id", mid)
+                v.addWidget(t)
+            else:
+                if payload is None:
+                    v.addWidget(label("That interactive block didn't parse — ask the Bot to try again.", faint=True))
+                else:
+                    v.addWidget(render_block(payload, ctx))  # type: ignore[arg-type]
+        return box, plain_text(text)
+
     def _assistant_bubble(self, text: str, name: str, emoji: str, mid: int | None) -> QWidget:
-        w = AutoMarkdown(text)
-        if mid:
-            w.setProperty("msg_id", mid)
+        w, _plain = self._rich_text(text, mid)
+        self._bubble_plain = _plain
         if not self.group_id or not name:
             return w
         box = QWidget()
