@@ -177,7 +177,7 @@ class TakeoverView(QDialog):
         self.api.post(f"/api/bots/{self.bot_id}/takeover", {"action": "start"}, lambda _: None, lambda e: QMessageBox.warning(self, "Browser", e))
         self.refresh()
         self.refresh_url()
-        self.timer.start(450)
+        self.timer.start(300)
         self.url_timer.start(2000)
         self.show()
         self.raise_()
@@ -197,7 +197,7 @@ class TakeoverView(QDialog):
             self.fetching = False
             self.info.setText(e)
 
-        self.api.request("GET", f"/api/bots/{self.bot_id}/screen.jpg", ok, err, params={"q": 62}, raw=True, timeout=30)
+        self.api.request("GET", f"/api/bots/{self.bot_id}/screen.jpg", ok, err, params={"q": 80}, raw=True, timeout=30)
 
     def refresh_url(self) -> None:
         def ok(d: dict) -> None:

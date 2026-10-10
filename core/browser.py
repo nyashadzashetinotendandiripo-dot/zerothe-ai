@@ -554,6 +554,7 @@ class BrowserHost:
                 self._ctx = await self._pw.chromium.launch_persistent_context(
                     str(paths.browser_profile_dir()), headless=bool(comp.get("headless", True)),
                     viewport={"width": int(comp.get("viewport_w", 1280)), "height": int(comp.get("viewport_h", 800))},
+                    user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/153.0.0.0 Safari/537.36",
                     accept_downloads=True, locale="en-US")
             except Exception as e:  # noqa: BLE001
                 msg = str(e)
