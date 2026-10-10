@@ -7,8 +7,8 @@ const CONFIG = {
   REPO: "nyashadzashetinotendandiripo-dot/zerothe-ai",
   // Fallbacks shown until (or if) the release lookup works. Update these when you publish a new build.
   version: "1.6.0",
-  sizeMB: 82,
-  sha256: "34f23c0ed7a5e1e7904a452813d49ac9b1f4a376ff568d7f885afbac60728f93",
+  sizeMB: 90,
+  sha256: "f80b5c3211ad3acab262fc751ac0c8a66f3fa93eeb768decdcf76dbb5491426a",
   assetUrl: "https://github.com/nyashadzashetinotendandiripo-dot/zerothe-ai/releases/download/v1.6.0/ZerotheBot-Setup-1.6.0.exe",
 };
 // ----------------------------------------------------------------------------------------------------------
