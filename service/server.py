@@ -758,11 +758,53 @@ def create_app(engine: Engine, token: str) -> FastAPI:
         return {"ok": True}
 
     @app.post("/api/providers/{pid}/test", dependencies=[api])
-    def providers_test(pid: str) -> dict:
-        prov = make_provider(eng.settings, pid, eng.settings.profile(pid).get("model") or "test")
+    def providers_test(pid: str, body: dict = Body(default={})) -> dict:
+        """Detect the model list; with full=True also validate the chosen model and run a real chat call."""
+        prof = eng.settings.profile(pid)
+        mdl = prof.get("model") or ""
+        prov = make_provider(eng.settings, pid, mdl or "test")
         if prov.profile.get("needs_key", True) and not prov.api_key:
             raise ValueError("No API key saved for this provider yet.")
-        return {"models": prov.list_models()}
+        out: dict = {"models": [], "warnings": [], "chat": None}
+        try:
+            out["models"] = prov.list_models()
+        except ProviderError as e:
+            if not body.get("full"):
+                raise
+            out["warnings"].append(f"Could not list models: {friendly_error(e)}")
+        out["warnings"] += model_warnings(mdl, out["models"])
+        if body.get("full"):
+            if not mdl:
+                out["warnings"].append("No default model chosen yet — pick one in the Default model box.")
+            else:
+                try:
+                    r = prov.stream("Reply with the single word OK.", [{"role": "user", "content": [{"type": "text", "text": "ping"}]}],
+                                    [], lambda _t: None, lambda: False, max_tokens=20)
+                    out["chat"] = {"ok": True, "reply": (r.text or "").strip()[:120]}
+                except ProviderError as e:
+                    out["chat"] = {"ok": False, "kind": e.kind, "error": friendly_error(e)}
+        return out
+
+    @app.post("/api/voice/transcribe", dependencies=[api])
+    async def voice_transcribe(request: Request, bot_id: str = "") -> dict:
+        """Speech to text through the Bot's own provider (keys never leave the service)."""
+        from core import voice as voice_core
+
+        form = await request.form()
+        up = form.get("file")
+        data = await up.read() if up is not None else b""
+        if not data:
+            raise ValueError("No audio received.")
+        bot = eng.bots.get(bot_id) if bot_id else None
+        pid = (bot or {}).get("profile", "")
+        if not pid:
+            raise ValueError("That Bot has no provider set.")
+        prov = make_provider(eng.settings, pid, (bot or {}).get("model") or "voice")
+        base = prov.profile.get("base_url") or "https://api.openai.com/v1"
+        model = (bot or {}).get("model") or ""
+        kind = pid if pid in ("openai", "groq") else (getattr(prov, "kind", "") or "")
+        stt = voice_core.pick_stt_model(kind, model if "whisper" in model.lower() else "")
+        return {"text": voice_core.transcribe(base, prov.api_key, data, stt)}
 
     @app.put("/api/secrets/{name}", dependencies=[api])
     def secret_put(name: str, body: dict = Body(...)) -> dict:

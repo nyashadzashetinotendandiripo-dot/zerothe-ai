@@ -31,6 +31,7 @@ from .quick_ask import QuickAsk
 from .store import Store
 from .takeover import TakeoverView
 from .widgets import Avatar, ImageCache, Toasts, button, card, chip, fade_in, icon_button, label, repolish
+from .screen_share import capture_window, pixmap_to_png_bytes
 
 NAV = [("home", "Home", "home"), ("marketplace", "Marketplace", "sparkle"), ("inbox", "Inbox", "inbox"), ("computer", "Computer", "computer"), ("files", "Files", "folder"), ("skills", "Skills", "skills"), ("routines", "Routines", "routines"),
        ("plugins", "Plugins", "plugins"), ("usage", "Usage", "usage"), ("log", "Action log", "log")]
@@ -971,6 +972,24 @@ class MainWindow(QMainWindow):
     # ------------------------------------------------------------------- actions
     def toast(self, text: str, kind: str = "info") -> None:
         self.toasts.show(text, kind)
+
+    def capture_screen(self) -> None:
+        """Ctrl+Alt+A anywhere: grab the frontmost window into the open chat as context."""
+        if not self.current_key.startswith(("bot:", "group:")):
+            self.toast("Open a Bot or group chat first, then press Ctrl+Alt+A over any window.", "warn")
+            return
+        pm = capture_window()
+        if pm is None or pm.isNull():
+            self.toast("Nothing to share: no window found.", "warn")
+            return
+        data = pixmap_to_png_bytes(pm)
+        if not data:
+            self.toast("Screen capture failed.", "error")
+            return
+        self.show_window()
+        self.chat.attach_image(f"screen-{time.strftime('%H%M%S')}.png", data)
+        self.chat.input.setFocus()
+        self.toast("Screen shared into the chat.", "ok")
 
     def new_bot(self) -> None:
         d = NewBotDialog(self.api, self.store, self)

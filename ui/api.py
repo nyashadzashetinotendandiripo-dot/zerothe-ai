@@ -87,10 +87,10 @@ class Api(QObject):
         self.conn = conn
 
     def _do(self, method: str, path: str, json_body: Any = None, params: dict | None = None, content: bytes | None = None,
-            raw: bool = False, timeout: float | None = None) -> Any:
+            files: Any = None, raw: bool = False, timeout: float | None = None) -> Any:
         try:
-            r = self._client.request(method, self.conn.base + path, headers=self.headers, json=json_body if content is None else None,
-                                     params=params, content=content, timeout=timeout or 120.0)
+            r = self._client.request(method, self.conn.base + path, headers=self.headers, json=json_body if content is None and files is None else None,
+                                     params=params, content=content, files=files, timeout=timeout or 120.0)
         except httpx.ConnectError as e:
             raise ApiError("Cannot reach the Bot service. Is it running?") from e
         except httpx.HTTPError as e:

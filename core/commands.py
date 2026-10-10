@@ -492,3 +492,46 @@ def run(eng: "Engine", thread_id: str, text: str) -> dict | None:
     if d.get("switch_thread"):
         out["switch_thread"] = d["switch_thread"]
     return out
+
+
+@command("swarm", "Fan one task out to several Bots in parallel", "/swarm Bot1, Bot2: task text", group="Chat")
+def _swarm(c: Ctx):
+    """Swarm mode: every named Bot works the task in its own thread; one summary lands here."""
+    from .swarm import run_swarm
+
+    if ":" not in c.args:
+        return ("Usage: /swarm Bot1, Bot2: what to do\n"
+                "Example: /swarm Inbox, Researcher: triage this week's mail and report back")
+    names, _, task = c.args.partition(":")
+    task = task.strip()
+    if not task:
+        return "Give the swarm something to do after the colon."
+    ids, unknown = [], []
+    for raw in names.split(","):
+        want = raw.strip()
+        if not want:
+            continue
+        b = c.eng.bots.get(want) or c.eng.bots.get_by_name(want)
+        if b and not b.get("archived"):
+            if b["id"] not in ids:
+                ids.append(b["id"])
+        else:
+            unknown.append(want)
+    if unknown:
+        return f"Swarm has no Bot named: {', '.join(unknown)}. Check the spelling and try again."
+    if not ids:
+        return "Name at least one Bot: /swarm Bot1, Bot2: task text"
+    if len(ids) == 1:
+        return {"send": f"{task}"}
+    import threading
+
+    eng, tids, here = c.eng, list(ids), c.thread["id"]
+
+    def go() -> None:
+        try:
+            run_swarm(eng, tids, task, reply_thread_id=here)
+        except Exception as e:  # noqa: BLE001 (the swarm reports per-Bot; this is last-resort)
+            eng.threads.notice(here, f"Swarm failed: {e}", "error")
+
+    threading.Thread(target=go, daemon=True).start()
+    return f"Swarm launched: {task[:80]}\nWorking now: {', '.join(c.eng.bots.get(i)['name'] for i in tids)}. Each Bot works in its own thread; the combined summary lands here when they finish."

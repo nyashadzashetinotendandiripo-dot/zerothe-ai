@@ -68,6 +68,7 @@ class Controller(QObject):
         self.starter: ServiceStarter | None = None
         self.hotkey = GlobalHotkey()
         self.hotkey.triggered.connect(lambda: self.window and self.window.quick_ask(True))
+        self.hotkey.screenPressed.connect(lambda: self.window and self.window.capture_screen())
         self._theme_timer = QTimer(self)
         self._theme_timer.timeout.connect(self._follow_system_theme)
         self._theme_timer.start(30_000)

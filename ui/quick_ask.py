@@ -15,12 +15,16 @@ from .widgets import button, label
 WM_HOTKEY = 0x0312
 MOD_ALT, MOD_CONTROL, MOD_NOREPEAT = 0x0001, 0x0002, 0x4000
 VK_SPACE = 0x20
+VK_A = 0x41
 HOTKEY_ID = 0x4F47   # "OG"
+HOTKEY_ID_SCREEN = 0x5343   # "SC": share the frontmost window into the open chat
 
 
 class GlobalHotkey(QObject, QAbstractNativeEventFilter):
-    """Ctrl+Alt+Space for the whole desktop (Windows). register() returns False when another app already owns the keys."""
+    """Ctrl+Alt+Space (quick ask) and Ctrl+Alt+A (screen context) for the whole desktop (Windows).
+    register() returns False when another app already owns the keys."""
     triggered = Signal()
+    screenPressed = Signal()
 
     def __init__(self) -> None:
         QObject.__init__(self)
@@ -34,6 +38,7 @@ class GlobalHotkey(QObject, QAbstractNativeEventFilter):
             return True
         import ctypes
         ok = bool(ctypes.windll.user32.RegisterHotKey(None, HOTKEY_ID, MOD_CONTROL | MOD_ALT | MOD_NOREPEAT, VK_SPACE))
+        ctypes.windll.user32.RegisterHotKey(None, HOTKEY_ID_SCREEN, MOD_CONTROL | MOD_ALT | MOD_NOREPEAT, VK_A)
         if ok:
             QApplication.instance().installNativeEventFilter(self)
             self.active = True
@@ -44,6 +49,7 @@ class GlobalHotkey(QObject, QAbstractNativeEventFilter):
             return
         import ctypes
         ctypes.windll.user32.UnregisterHotKey(None, HOTKEY_ID)
+        ctypes.windll.user32.UnregisterHotKey(None, HOTKEY_ID_SCREEN)
         QApplication.instance().removeNativeEventFilter(self)
         self.active = False
 
@@ -54,6 +60,9 @@ class GlobalHotkey(QObject, QAbstractNativeEventFilter):
             msg = wintypes.MSG.from_address(int(message))
             if msg.message == WM_HOTKEY and msg.wParam == HOTKEY_ID:
                 self.triggered.emit()
+                return True, 0
+            if msg.message == WM_HOTKEY and msg.wParam == HOTKEY_ID_SCREEN:
+                self.screenPressed.emit()
                 return True, 0
         return False, 0
 

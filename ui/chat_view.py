@@ -5,6 +5,7 @@ import base64
 import html
 import os
 import re
+import threading
 from datetime import datetime
 from typing import Callable
 
@@ -14,10 +15,12 @@ from PySide6.QtWidgets import (QFileDialog, QFrame, QHBoxLayout, QInputDialog, Q
                                QPushButton, QScrollArea, QSizePolicy, QStackedLayout, QVBoxLayout, QWidget)
 
 from core.uiblocks import plain_text, split_message
+from core.voice import speak as _speak_text
 from . import icons, theme
 from .api import Api
 from .blocks import BlockCtx, render_block
 from .store import Store
+from .voice_bar import VoiceBar
 from .widgets import (ApprovalCard, AutoMarkdown, Avatar, ImageCache, Thumb, button, chip, clear_layout, icon_button, label, repolish, set_chip)
 
 COLUMN = 800
@@ -636,6 +639,7 @@ class ChatPage(QWidget):
         self.item_count = 0
         self.panel_pinned = False
         self.last_user_text = ""
+        self.speak_replies = False
         self._pending_scroll: int | None = None
 
         outer = QHBoxLayout(self)
@@ -729,12 +733,20 @@ class ChatPage(QWidget):
         self.commands: list[dict] = []
         self.api.get("/api/commands", self._set_commands)
         row.addWidget(self.input, 1)
+        self.btn_voice = icon_button("mic", "Dictate with your voice", self.toggle_voice)
         self.btn_send = icon_button("send", "Send (Enter)", self.send, kind="accent")
         self.btn_stop = icon_button("stop", "Stop this Bot", self.stop, kind="danger")
         self.btn_stop.hide()
+        row.addWidget(self.btn_voice, 0, Qt.AlignmentFlag.AlignBottom)
         row.addWidget(self.btn_send, 0, Qt.AlignmentFlag.AlignBottom)
         row.addWidget(self.btn_stop, 0, Qt.AlignmentFlag.AlignBottom)
         iv.addWidget(self.comp_frame)
+        self.voice_panel = VoiceBar()
+        self.voice_panel.dictated.connect(self._dictated)
+        self.voice_panel.failed.connect(lambda e: self.toast.emit(e, "warn"))
+        self.voice_panel.speak_toggled.connect(self._set_speak_replies)
+        self.voice_panel.hide()
+        iv.addWidget(self.voice_panel)
         hint = label("Enter to send  ·  Shift+Enter for a new line  ·  / for commands  ·  Bots ask before anything consequential", faint=True, wrap=False)
         hint.setAlignment(Qt.AlignmentFlag.AlignHCenter)
         iv.addWidget(hint)
@@ -974,6 +986,7 @@ class ChatPage(QWidget):
                         row.get_text = lambda p=plain: p
                     else:
                         row.get_text = lambda: text
+                    self._maybe_speak(text)
                 return
             if it["id"] in self._assistant_ids():
                 return
@@ -982,6 +995,8 @@ class ChatPage(QWidget):
             row = MessageRow(bubble, "assistant", lambda p=plain: p, ts=it.get("ts"), on_retry=self._retry_last)
             row.set_citations(_extract_citations(text))
             self._plain(row)
+            if not initial:
+                self._maybe_speak(text)
         elif t == "notice" and it.get("level") == "cmd":
             card = QFrame()
             card.setStyleSheet(f"QFrame {{ background: {p['panel']}; border: 1px solid {p['line2']}; border-left: 3px solid {p['accent']}; border-radius: 10px; }}")
@@ -1159,6 +1174,52 @@ class ChatPage(QWidget):
         self.running = running
         self._sync_buttons()
 
+    # ------------------------------------------------------------------ voice
+    def toggle_voice(self) -> None:
+        show = not self.voice_panel.isVisible()
+        if show:
+            if not self.bot_id:
+                self.toast.emit("Open a Bot chat first, then dictate.", "warn")
+                return
+            self.voice_panel.set_transcriber(self._transcribe_voice)
+        self.voice_panel.setVisible(show)
+
+    def _transcribe_voice(self, wav: bytes) -> str:
+        if not self.bot_id:
+            raise ValueError("Open a Bot chat first.")
+        d = self.api.call("POST", "/api/voice/transcribe", params={"bot_id": self.bot_id},
+                          files={"file": ("audio.wav", wav, "audio/wav")}, timeout=120.0)
+        text = (d.get("text") or "").strip() if isinstance(d, dict) else ""
+        if not text:
+            raise ValueError("Empty transcript — try again a little closer to the mic.")
+        return text
+
+    def _dictated(self, text: str) -> None:
+        cur = self.input.toPlainText().strip()
+        self.input.setPlainText(((cur + " " + text).strip()))
+        self.input.setFocus()
+        cur2 = self.input.textCursor()
+        cur2.movePosition(cur2.MoveOperation.End)
+        self.input.setTextCursor(cur2)
+
+    def _set_speak_replies(self, on: bool) -> None:
+        self.speak_replies = on
+
+    def _maybe_speak(self, text: str) -> None:
+        if not getattr(self, "speak_replies", False):
+            return
+        say = plain_text(text)[:600].strip()
+        if not say:
+            return
+
+        def talk() -> None:
+            try:
+                _speak_text(say)
+            except Exception:
+                pass
+
+        threading.Thread(target=talk, daemon=True).start()
+
     def _sync_buttons(self) -> None:
         typing = bool(self.input.toPlainText().strip()) or bool(self.attachments)
         show_stop = getattr(self, "running", False) and not typing
@@ -1235,12 +1296,16 @@ class ChatPage(QWidget):
             return
         with open(path, "rb") as f:
             data = f.read()
+        self.attach_image(os.path.basename(path), data)
+
+    def attach_image(self, name: str, data: bytes) -> None:
+        """Attach in-memory image bytes (screen shares, pastes) the same way as files."""
         if len(data) > 8 * 1024 * 1024:
             self.toast.emit("Images must be under 8 MB.", "warn")
             return
-        att = {"name": os.path.basename(path), "data": base64.b64encode(data).decode()}
+        att = {"name": name, "data": base64.b64encode(data).decode()}
         self.attachments.append(att)
-        b = button(f"{os.path.basename(path)}   ✕", flat=True)
+        b = button(f"{name}   ✕", flat=True)
         b.setStyleSheet(f"background: {theme.palette()['panel2']}; border-radius: 12px; padding: 3px 10px;")
 
         def drop(att=att, b=b) -> None:
