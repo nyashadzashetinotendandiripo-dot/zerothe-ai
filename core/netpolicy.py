@@ -85,3 +85,7 @@ class NetworkPolicy:
 
     def describe(self, bot_id: str | None) -> list[dict]:
         return [{"name": l["name"], "mode": l["mode"], "allow": l["allow"], "deny": l["deny"]} for l in self._layers(bot_id)]
+
+    def export(self, bot_id: str | None) -> list[dict]:
+        """Serialisable policy layers (including the private-address flag) for out-of-process checks."""
+        return [dict(l) for l in self._layers(bot_id)]

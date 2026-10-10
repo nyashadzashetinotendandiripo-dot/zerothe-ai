@@ -28,7 +28,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable
 from urllib.parse import quote, urlencode
 
-from . import paths, secrets
+from . import paths, sandbox, secrets
 from .settings import plugin_allowed
 from .tooling import Risk, ToolContext, ToolResult, ToolSpec, b, i, obj, s, safe_name, short
 
@@ -964,6 +964,19 @@ def build_python(path: Path, manifest: dict) -> Callable[[Conn], list[ToolSpec]]
                          lambda a, _n=t["name"]: f"{manifest['name']}: {_n} {short(json.dumps(a, default=str), 200)}", lambda a, _n=t["name"]: _n)
 
             def handler(ctx: ToolContext, args: dict, _fn=fn) -> ToolResult:
+                if sandbox.should_isolate(manifest):
+                    fields = manifest.get("fields") or []
+                    config = {f["key"]: c.cfg(f["key"], f.get("default", "")) for f in fields
+                              if isinstance(f, dict) and f.get("key")}
+                    layers = c.mgr.engine.net.export(ctx.bot["id"] if ctx and ctx.bot else None)
+                    d = sandbox.run_tool(plugin_dir=str(path), tool=t["name"], args=args,
+                                         bot=(ctx.bot if ctx else {}), thread_id=ctx.thread_id if ctx else "",
+                                         turn_id=ctx.turn_id if ctx else "", config=config, net_layers=layers,
+                                         workspace=str(c.mgr.engine.computer.workspace),
+                                         timeout=int(manifest.get("timeout", 180) or 180))
+                    return ToolResult(text=d.get("text", ""), data=d.get("data", ""), images=d.get("images") or [],
+                                      is_error=d.get("is_error", False), url=d.get("url", ""),
+                                      path=d.get("path", ""), untrusted=d.get("untrusted", ""))
                 out_ = _fn(ctx, args) if len(inspect.signature(_fn).parameters) >= 2 else _fn(args)
                 return out_ if isinstance(out_, ToolResult) else _res(out_, manifest["name"])
             out.append(ToolSpec(safe_name(f"{manifest['id']}_{t['name']}"), t.get("description", t["name"]), t.get("input_schema") or obj(), handler, risk=risk,
