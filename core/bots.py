@@ -10,7 +10,7 @@ from .settings import Admin, Settings
 JSON_FIELDS = {"net_allow": [], "net_deny": [], "grants": []}
 EDITABLE = {"name", "emoji", "job", "instructions", "profile", "model", "approval_mode", "step_limit", "net_mode",
             "net_allow", "net_deny", "grants", "proactive", "paused", "archived", "template", "daily_token_limit"}
-APPROVAL_MODES = ("ask", "auto_review")
+APPROVAL_MODES = ("ask", "auto_review", "full_access")
 PROACTIVE_LEVELS = ("off", "suggest", "act")
 
 
@@ -96,7 +96,7 @@ class Bots:
             if k in JSON_FIELDS:
                 v = jdump(list(v))
             if k == "approval_mode" and v not in APPROVAL_MODES:
-                raise BotError("approval_mode must be 'ask' or 'auto_review'.")
+                raise BotError("approval_mode must be 'ask', 'auto_review' or 'full_access'.")
             if k == "proactive" and v not in PROACTIVE_LEVELS:
                 raise BotError("proactive must be off, suggest or act.")
             if k in ("paused", "archived"):

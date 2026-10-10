@@ -163,16 +163,22 @@ def _model(c: Ctx):
     return f"{c.bot['name']} will use `{a}` from its next message."
 
 
-@command("mode", "Choose how this Bot asks for approval", "/mode ask | auto", bot_only=True, group="Bot")
+@command("mode", "Choose how this Bot asks for approval", "/mode ask | auto | full", bot_only=True, group="Bot")
 def _mode(c: Ctx):
     a = c.args.strip().lower()
     if c.eng.admin.approval().get("locked"):
         return {"level": "warn", "text": "The approval mode is managed by your organization and cannot be changed here."}
-    if a not in ("ask", "auto", "auto_review", "auto-review"):
-        cur = "Auto Review" if c.bot["effective_approval_mode"] == "auto_review" else "Ask me"
-        return f"Current mode: **{cur}**.\n\n`/mode ask` asks you for every consequential action. `/mode auto` lets a reviewer model approve clearly low-risk ones; purchases, logins and new connectors always ask."
-    c.eng.bots.update(c.bot["id"], approval_mode="ask" if a == "ask" else "auto_review")
-    return "Now asking for every consequential action." if a == "ask" else "Auto Review is on for this Bot."
+    if a not in ("ask", "auto", "auto_review", "auto-review", "full", "full_access", "full-access"):
+        cur = {"auto_review": "Auto Review", "full_access": "Full access"}.get(c.bot["effective_approval_mode"], "Ask me")
+        return (f"Current mode: **{cur}**.\n\n`/mode ask` asks you for every consequential action. `/mode auto` lets a reviewer "
+                "model approve clearly low-risk ones; purchases, logins and new connectors always ask. `/mode full` gives "
+                "this Bot full access: it acts without asking (money, logins and anything suspicious still ask).")
+    mode = {"ask": "ask", "auto": "auto_review", "auto_review": "auto_review", "auto-review": "auto_review",
+            "full": "full_access", "full_access": "full_access", "full-access": "full_access"}[a]
+    c.eng.bots.update(c.bot["id"], approval_mode=mode)
+    return {"ask": "Now asking for every consequential action.",
+            "auto_review": "Auto Review is on for this Bot.",
+            "full_access": "Full access is on: this Bot acts without asking (money, logins and anything suspicious still ask)."}[mode]
 
 
 @command("pause", "Pause this Bot (it stops picking up work)", "/pause", bot_only=True, group="Bot")

@@ -389,7 +389,8 @@ def create_app(engine: Engine, token: str) -> FastAPI:
 
     @app.post("/api/approvals/{aid}/decide", dependencies=[api])
     def approvals_decide(aid: str, body: dict = Body(...)) -> dict:
-        r = eng.approvals.decide(aid, bool(body.get("approve")), bool(body.get("remember")), body.get("note", ""), body.get("answer", ""))
+        r = eng.approvals.decide(aid, bool(body.get("approve")), bool(body.get("remember")), body.get("note", ""), body.get("answer", ""),
+                                 full_access=bool(body.get("full_access")))
         if not r:
             raise HTTPException(404, "No such approval.")
         return r

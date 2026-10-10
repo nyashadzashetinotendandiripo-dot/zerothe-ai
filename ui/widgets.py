@@ -7,7 +7,7 @@ from typing import Callable
 
 from PySide6.QtCore import QEasingCurve, QObject, QPropertyAnimation, QSize, Qt, QTimer, Signal
 from PySide6.QtGui import QPixmap
-from PySide6.QtWidgets import (QCheckBox, QDialog, QFormLayout, QFrame, QGraphicsOpacityEffect, QHBoxLayout, QLabel, QLineEdit, QListWidget, QListWidgetItem, QPushButton, QSizePolicy, QStackedWidget,
+from PySide6.QtWidgets import (QCheckBox, QDialog, QFormLayout, QFrame, QGraphicsOpacityEffect, QHBoxLayout, QLabel, QLineEdit, QListWidget, QListWidgetItem, QMessageBox, QPushButton, QSizePolicy, QStackedWidget,
                                QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget)
 
 from . import icons, theme
@@ -433,6 +433,7 @@ class ApprovalCard(QFrame):
     def __init__(self, a: dict, bot_name: str, parent=None):
         super().__init__(parent)
         self.a = a
+        self.bot_name = bot_name
         cat = a["category"]
         p = theme.palette()
         self.setProperty("card", "question" if cat == "question" else "approval")
@@ -526,7 +527,21 @@ class ApprovalCard(QFrame):
                 b2 = button("Always allow this", flat=True, on=lambda: self.decided.emit(a["id"], {"approve": True, "remember": True}))
                 b2.setToolTip("Approve now and create a standing rule for this Bot, this kind of action and this target. Remove it any time in the Bot's settings.")
                 row.addWidget(b2)
+            b3 = button("Full access", flat=True, on=self._confirm_full_access)
+            b3.setToolTip("Stop asking this Bot: it acts on its own from now on. Money, logins and anything tainted still ask. Change back any time in the Bot's settings.")
+            row.addWidget(b3)
             lay.addLayout(row)
+
+    def _confirm_full_access(self) -> None:
+        a = self.a
+        r = QMessageBox.question(self, "Give full access?",
+                                 f"{self.bot_name or 'This Bot'} will stop asking before acting.\n\n"
+                                 "Money, logins and anything suspicious still ask, and every action is logged. "
+                                 "You can switch it back to asking any time in the Bot's settings.",
+                                 QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                                 QMessageBox.StandardButton.No)
+        if r == QMessageBox.StandardButton.Yes:
+            self.decided.emit(a["id"], {"approve": True, "full_access": True})
 
     @staticmethod
     def _chipbtn(text: str, on: Callable) -> QPushButton:

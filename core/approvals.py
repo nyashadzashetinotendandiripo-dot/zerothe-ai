@@ -1,8 +1,10 @@
-"""Approvals: consequential actions are gated; Auto Review can clear low-risk ones.
+"""Approvals: consequential actions are gated; Auto Review and Full Access can clear them.
 
 Flow for a consequential action:
-  admin 'always ask' list -> remembered allow-rule -> Auto Review (if enabled for the Bot) -> ask the user.
-Turns that have seen instruction-like content ("tainted") never use rules or Auto Review.
+  admin 'always ask' list -> remembered allow-rule -> Full Access (if enabled for the Bot) -> Auto Review (if enabled for the Bot) -> ask the user.
+Turns that have seen instruction-like content ("tainted") never use rules, Full Access or Auto Review.
+Full Access auto-approves everything except purchases and logins (money and credentials always ask),
+and never_auto categories still ask.
 """
 from __future__ import annotations
 
@@ -27,6 +29,9 @@ CATEGORY_TITLES = {
     "write": "Change data in an app", "download": "Download a file", "question": "Question",
     "takeover": "Needs you", "install": "Install software",
 }
+
+# Categories Full Access never covers: money and credentials always ask a human.
+ALWAYS_ASK_EVEN_FULL = ("purchase", "login")
 
 
 @dataclass
@@ -131,6 +136,10 @@ class ApprovalManager:
             return Decision(True, "Allowed by a standing rule you created.", decided_by="rule")
         mode = self.engine.bots.effective_approval_mode(bot) if self.engine else "ask"
         review_note = ""
+        if mode == "full_access" and not forced and not run.tainted and not risk.never_auto \
+                and risk.category not in ALWAYS_ASK_EVEN_FULL:
+            self._record_auto(ctx, risk, tool, args, "full_access", "Full access is on for this Bot")
+            return Decision(True, "Approved: full access is on for this Bot.", decided_by="full_access")
         if mode == "auto_review" and not forced and not run.tainted and not risk.never_auto:
             ok, why = self._review(ctx, risk, tool, args)
             if ok:
@@ -193,12 +202,18 @@ class ApprovalManager:
         self.db.update("approvals", aid, {"status": status, "decided_by": by, "reason": reason, "decided_at": now()})
         self.events.publish("approval", change=status, approval=self.get(aid))
 
-    def decide(self, aid: str, approve: bool, remember: bool = False, note: str = "", answer: str = "", by: str = "user") -> dict | None:
+    def decide(self, aid: str, approve: bool, remember: bool = False, note: str = "", answer: str = "", by: str = "user",
+               full_access: bool = False) -> dict | None:
         row = self.get(aid)
         if not row or row["status"] != "pending":
             return row
         self.db.update("approvals", aid, {"status": "approved" if approve else "denied", "decided_by": by, "reason": note[:500],
                                           "answer": answer[:4000], "decided_at": now()})
+        if approve and full_access and self.engine:
+            try:
+                self.engine.bots.update(row["bot_id"], approval_mode="full_access")
+            except Exception:
+                pass
         if approve and remember and row["category"] not in ("question", "access") \
                 and row["category"] not in self.admin.always_ask() and not row.get("tainted"):
             pattern = str(row["details"].get("pattern", "*"))

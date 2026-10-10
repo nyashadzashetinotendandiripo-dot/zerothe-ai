@@ -248,6 +248,7 @@ class BotEditor(QDialog):
         self.approval = QComboBox()
         self.approval.addItem("Ask me for consequential actions", "ask")
         self.approval.addItem("Auto Review: a reviewer model approves low-risk actions", "auto_review")
+        self.approval.addItem("Full access: act without asking (money, logins and tainted tasks still ask)", "full_access")
         self.approval.setCurrentIndex(max(0, self.approval.findData(self.bot.get("approval_mode", "ask"))))
         af.addRow("Approvals", self.approval)
         adm = (store.status.get("admin") or {}).get("policy", {}).get("approval_defaults", {})

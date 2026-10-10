@@ -1135,7 +1135,8 @@ class ChatPage(QWidget):
             self.list.to_bottom()
 
     def _decide(self, aid: str, body: dict) -> None:
-        self.api.post(f"/api/approvals/{aid}/decide", body, lambda _: self.store.refresh_approvals())
+        self.api.post(f"/api/approvals/{aid}/decide", body,
+                      lambda _: (self.store.refresh_approvals(), self.store.refresh_bots()))
 
     def update_status(self) -> None:
         if self.group_id:
@@ -1166,6 +1167,9 @@ class ChatPage(QWidget):
             self.banner.show()
         elif self.store.bot(self.bot_id) and self.store.bot(self.bot_id).get("paused"):
             self.banner.setText("This Bot is paused: no routines, follow-ups or background work. It still answers your messages.")
+            self.banner.show()
+        elif self.store.bot(self.bot_id) and self.store.bot(self.bot_id).get("approval_mode") == "full_access":
+            self.banner.setText("Full access is on: this Bot acts without asking (money, logins and anything suspicious still ask). Change it any time in the Bot's settings.")
             self.banner.show()
         else:
             self.banner.hide()
