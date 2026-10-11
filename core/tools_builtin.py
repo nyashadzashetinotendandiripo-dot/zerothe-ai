@@ -480,6 +480,23 @@ def builtin_tools(eng: "Engine") -> list[ToolSpec]:
         {"command": s("Command line"), "cwd": s("Working folder inside the workspace"), "timeout": i("Seconds, default 60, max 900"), "shell": s("default | powershell")},
         ["command"], run_command, risk=lambda ctx, a: comp.command_risk(a["command"], a.get("cwd")), label=lambda a: f"Run: {short(a.get('command', ''), 70)}")
 
+    def run_linux(ctx: ToolContext, a: dict) -> ToolResult:
+        from .sandbox_linux import available, run
+        ok, why = available()
+        if not ok:
+            return ToolResult(f"Linux sandbox unavailable: {why}", is_error=True)
+        res = run(a["command"], workspace=comp.workspace, timeout=int(a.get("timeout", 120)))
+        head = f"exit code {res['exit']} after {res.get('seconds', '?')}s (Ubuntu sandbox)"
+        if res["timed_out"]:
+            head += " (TIMED OUT and was killed)"
+        return ToolResult(head, data=res["output"] or "(no output)", untrusted="command output",
+                          is_error=res["exit"] not in (0,) and not res["timed_out"])
+
+    add("run_linux", "Run a Bash command in a disposable Ubuntu sandbox (no Windows access: no registry, no Startup folder, no credentials, nothing persists except workspace files). "
+        "Prefer this over run_command for scripts, data crunching, builds and anything untrusted or non-Windows. Same approval rules as run_command. Output is truncated.",
+        {"command": s("Bash command line"), "timeout": i("Seconds, default 120, max 900")},
+        ["command"], run_linux, risk=lambda ctx, a: comp.command_risk(a["command"], None), label=lambda a: f"Linux: {short(a.get('command', ''), 70)}")
+
     def web_fetch(ctx: ToolContext, a: dict) -> ToolResult:
         r = comp.web_fetch(ctx.bot["id"], a["url"])
         return ToolResult(f"HTTP {r['status']} {r['url']}" + (f" | {r['title']}" if r["title"] else ""), data=r["text"], untrusted=f"web page {host_of(r['url'])}", url=r["url"])
