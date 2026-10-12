@@ -64,7 +64,7 @@ class WorkerProtocol(unittest.TestCase):
         p = pops[0]
         argv = p.args[0]
         self.assertTrue(str(argv[0]).lower().endswith("wsl.exe"))
-        self.assertEqual(list(argv[1:4]), ["-d", "Ubuntu", "--"])
+        self.assertEqual(list(argv[1:6]), ["-d", "Ubuntu", "-u", "root", "--"])
         inner = p.args[0][-1]
         self.assertIn("HOME=/tmp/sb-", inner)
         self.assertIn("/mnt/c/w/space here", inner)

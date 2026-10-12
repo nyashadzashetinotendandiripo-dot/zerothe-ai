@@ -82,7 +82,10 @@ def run(cmd: str, *, workspace: str | os.PathLike, timeout: int = 120, memory_mb
         f"mkdir -p {home} && export HOME={home} && cd {quoted(ws)} && "
         f"ulimit -v {int(memory_mb) * 1024} 2>/dev/null; {cmd}"
     )
-    argv = [exe, "-d", "Ubuntu", "--", "bash", "-c", inner]
+    argv = [exe, "-d", "Ubuntu", "-u", "root", "--", "bash", "-c", inner]
+    # NOTE: always root: needs no first-run user setup, and files created under
+    # /mnt/c still land owned by the Windows user that launched wsl.exe. Root is
+    # also what a future --network=none mode (unshare -n) will require.
     t0 = time.time()
     try:
         proc = subprocess.Popen(argv, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
