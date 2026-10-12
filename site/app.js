@@ -8,7 +8,7 @@ const CONFIG = {
   // Fallbacks shown until (or if) the release lookup works. Update these when you publish a new build.
   version: "1.6.0",
   sizeMB: 90,
-  sha256: "2c75512397e8fef5f8c64fac42d680cfb9890c9bac39cc416907174ee12b63ea",
+  sha256: "8b2c7ab2ba36857f0719d67d883d9cec0939a6b639dfcb2395a0ad5d0fa4c659",
   assetUrl: "https://github.com/nyashadzashetinotendandiripo-dot/zerothe-ai/releases/download/v1.6.0/ZerotheBot-Setup-1.6.0.exe",
 };
 // ----------------------------------------------------------------------------------------------------------
