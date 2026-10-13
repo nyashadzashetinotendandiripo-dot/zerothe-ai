@@ -59,10 +59,26 @@ def win_to_wsl(path: str | os.PathLike) -> str:
     return s
 
 
-def _scrub_env() -> dict[str, str]:
-    keep = {"PATH", "LANG", "LC_ALL", "HOME", "TERM", "PYTHONUTF8", "PYTHONIOENCODING"}
+def scrub_env(extra: dict | None = None) -> dict[str, str]:
+    """Minimal environment for a worker: essentials kept, secrets dropped.
+
+    Critical Windows keys are backfilled through os.environ.get as well, so a
+    key the iteration misses (restricted launchers, odd shells) still survives
+    when it really exists.
+    """
+    keep = {"PATH", "LANG", "LC_ALL", "HOME", "TERM", "PYTHONUTF8", "PYTHONIOENCODING",
+            "SystemRoot", "windir", "COMSPEC", "PATHEXT", "TMP", "TEMP", "USERPROFILE",
+            "HOMEDRIVE", "HOMEPATH", "NUMBER_OF_PROCESSORS", "OS", "COMPUTERNAME",
+            "APPDATA", "LOCALAPPDATA"}
     pat = re.compile(r"(KEY|TOKEN|SECRET|PASSWORD|CREDENTIAL)", re.I)
-    return {k: v for k, v in os.environ.items() if (k in keep or k.startswith("WSL")) and not pat.search(k)}
+    env = {k: v for k, v in os.environ.items() if k in keep and not pat.search(k)}
+    for k in ("SystemRoot", "windir", "COMSPEC"):
+        v = os.environ.get(k)
+        if v and k not in env and not pat.search(k):
+            env[k] = v
+    if extra:
+        env.update(extra)
+    return env
 
 
 def run(cmd: str, *, workspace: str | os.PathLike, timeout: int = 120, memory_mb: int = 2048) -> dict:
@@ -87,23 +103,39 @@ def run(cmd: str, *, workspace: str | os.PathLike, timeout: int = 120, memory_mb
     # /mnt/c still land owned by the Windows user that launched wsl.exe. Root is
     # also what a future --network=none mode (unshare -n) will require.
     t0 = time.time()
-    try:
-        proc = subprocess.Popen(argv, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                                stdin=subprocess.DEVNULL, env=_scrub_env(), text=True,
-                                encoding="utf-8", errors="replace",
-                                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
-    except OSError as e:
-        return {"exit": -1, "output": f"Could not start the Linux sandbox: {e}", "timed_out": False}
-    try:
-        out, _ = proc.communicate(timeout=timeout)
-    except subprocess.TimeoutExpired:
-        _kill(proc)
-        return {"exit": -1, "output": f"(TIMED OUT after {timeout}s and was killed)", "timed_out": True}
-    out = out or ""
-    if len(out) > 20000:
-        out = out[:10000] + f"\n[... {len(out) - 20000} chars omitted ...]\n" + out[-10000:]
-    return {"exit": proc.returncode if proc.returncode is not None else -1, "output": out,
-            "seconds": round(time.time() - t0, 1), "timed_out": False}
+    last: dict = {"exit": -1, "output": "", "timed_out": False}
+    for attempt in range(2):
+        try:
+            proc = subprocess.Popen(argv, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                                    stdin=subprocess.DEVNULL, env=scrub_env(), text=True,
+                                    encoding="utf-8", errors="replace",
+                                    creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+        except OSError as e:
+            return {"exit": -1, "output": f"Could not start the Linux sandbox: {e}", "timed_out": False}
+        try:
+            out, _ = proc.communicate(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            _kill(proc)
+            # A cold VM can swallow the whole window starting up; one retry once it is warm.
+            if attempt == 0:
+                time.sleep(15)
+                continue
+            return {"exit": -1, "output": f"(TIMED OUT after {timeout}s and was killed)", "timed_out": True}
+        out = out or ""
+        if _transient_wsl_error(out) and attempt == 0:
+            time.sleep(15)
+            continue
+        if len(out) > 20000:
+            out = out[:10000] + f"\n[... {len(out) - 20000} chars omitted ...]\n" + out[-10000:]
+        last = {"exit": proc.returncode if proc.returncode is not None else -1, "output": out,
+                "seconds": round(time.time() - t0, 1), "timed_out": False}
+        break
+    return last
+
+
+def _transient_wsl_error(out: str) -> bool:
+    """Cold-boot/init races of the WSL VM worth exactly one retry (it is warm by then)."""
+    return "Wsl/Service/" in out or "Failed to start the systemd user session" in out
 
 
 def quoted(s: str) -> str:

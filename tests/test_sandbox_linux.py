@@ -4,6 +4,7 @@ from __future__ import annotations
 import os
 import subprocess
 import sys
+import time
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -73,6 +74,8 @@ class WorkerProtocol(unittest.TestCase):
         self.assertIn("PATH", p.kwargs["env"])
 
     def test_timeout_kills(self):
+        t0 = time.time()
+
         class SlowProc:
             def __init__(self, *a, **k):
                 self.pid, self.returncode = 4343, None
@@ -95,6 +98,7 @@ class WorkerProtocol(unittest.TestCase):
                 d = linux.run("sleep 30", workspace=r"C:\w", timeout=3)
         self.assertTrue(d["timed_out"])
         self.assertTrue(killed)
+        self.assertLess(time.time() - t0, 45)   # one cold-VM retry (15s) is allowed before giving up
 
     def test_truncation(self):
         class LoudProc:
@@ -131,10 +135,13 @@ class Live(unittest.TestCase):
         import tempfile
 
         ws = tempfile.mkdtemp(prefix="zb-lin-")
-        d = linux.run("echo HOME=$HOME && touch ~/marker && ls ~ && printenv | grep -ci 'secret\\|token\\|password'; echo ---; bash --version | head -1",
-                      workspace=ws, timeout=90)
+        # NOTE: assert on printenv/set output, never on `$VAR` echo: some
+        # output layers mangle dollar sequences, printenv output is literal.
+        d = linux.run("printenv HOME && touch ~/marker && ls ~ && printenv | grep -ci 'secret\\|token\\|password'; echo ---; bash --version | head -1",
+                      workspace=ws, timeout=120)
         self.assertEqual(d["exit"], 0, d["output"])
-        self.assertIn("HOME=/tmp/sb-", d["output"])
+        lines = d["output"].splitlines()
+        self.assertTrue(lines[0].startswith("/tmp/sb-"), lines[:3])
         self.assertIn("marker", d["output"])
         self.assertRegex(d["output"], r"\n0\n")
 
