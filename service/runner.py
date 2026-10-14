@@ -113,11 +113,15 @@ def run_service(host: str | None = None, port: int | None = None, ssl_certfile: 
     from service.server import create_app
 
     cfg_host, cfg_port = configured_endpoint()
-    host = host or cfg_host
-    port = port or cfg_port
+    # Hosts (Botkeep, Docker, any PaaS) inject the port via $PORT: env wins over saved config.
+    host = host or os.environ.get("ZEROTHEBOT_HOST") or cfg_host
+    try:
+        port = port or int(os.environ.get("PORT", 0) or 0) or cfg_port
+    except ValueError:
+        port = cfg_port
     probe_host = "127.0.0.1" if host in ("0.0.0.0", "::") else host
     if probe(probe_host, port):
-        print(f"OpenGrokBot service is already running on port {port}.")
+        print(f"{APP_NAME} service is already running on port {port}.")
         return 0
     engine = Engine()
     scheme = "https" if ssl_certfile else "http"
