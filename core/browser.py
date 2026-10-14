@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import concurrent.futures
+import os
 import re
 import threading
 import time
@@ -563,6 +564,28 @@ class BrowserHost:
                 elif "ProcessSingleton" in msg or "user data directory is already in use" in msg:
                     self.last_error = "The shared browser profile is locked by another process. Close other OpenGrokBot services."
                 else:
+                    if ("shared librar" in msg or ".so" in msg) and "playwright install" not in msg:
+                        # Rootless Linux host (Docker, hosted runners): fetch the missing
+                        # system libraries into our data folder and try once more.
+                        from . import browser_deps
+
+                        libdir = browser_deps.ensure_for_launch(msg, paths.data_dir() / "browser-libs")
+                        if libdir:
+                            os.environ["LD_LIBRARY_PATH"] = libdir + (":" + os.environ["LD_LIBRARY_PATH"] if os.environ.get("LD_LIBRARY_PATH") else "")
+                            try:
+                                self._ctx = await self._pw.chromium.launch_persistent_context(
+                                    str(paths.browser_profile_dir()), headless=bool(comp.get("headless", True)),
+                                    viewport={"width": int(comp.get("viewport_w", 1280)), "height": int(comp.get("viewport_h", 800))},
+                                    user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/153.0.0.0 Safari/537.36",
+                                    accept_downloads=True, locale="en-US")
+                            except Exception as e2:  # noqa: BLE001
+                                msg = str(e2)
+                            else:
+                                self.last_error = ""
+                                self._ctx.on("close", lambda *_: setattr(self._ctx, "_gb_dead", True) if self._ctx else None)
+                                await self._ctx.expose_binding("__gbRecord", self._on_record)
+                                await self._ctx.add_init_script(RECORDER_JS)
+                                return self._ctx
                     self.last_error = "Could not start the browser: " + msg.splitlines()[0]
                 raise BrowserError(self.last_error) from e
             self.last_error = ""
