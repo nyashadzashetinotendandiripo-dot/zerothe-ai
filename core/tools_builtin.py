@@ -482,11 +482,18 @@ def builtin_tools(eng: "Engine") -> list[ToolSpec]:
 
     def run_linux(ctx: ToolContext, a: dict) -> ToolResult:
         from .sandbox_linux import available, run
-        ok, why = available()
-        if not ok:
-            return ToolResult(f"Linux sandbox unavailable: {why}", is_error=True)
-        res = run(a["command"], workspace=comp.workspace, timeout=int(a.get("timeout", 120)))
-        head = f"exit code {res['exit']} after {res.get('seconds', '?')}s (Ubuntu sandbox)"
+        backend = str(a.get("backend") or "local").strip().lower()
+        if backend == "cloud":
+            from . import sandbox_cloud
+
+            res = sandbox_cloud.run(a["command"], timeout=int(a.get("timeout", 120)))
+            head = f"exit code {res['exit']} after ?s (InstaBox cloud sandbox)"
+        else:
+            ok, why = available()
+            if not ok:
+                return ToolResult(f"Linux sandbox unavailable: {why}", is_error=True)
+            res = run(a["command"], workspace=comp.workspace, timeout=int(a.get("timeout", 120)))
+            head = f"exit code {res['exit']} after {res.get('seconds', '?')}s (Ubuntu sandbox)"
         if res["timed_out"]:
             head += " (TIMED OUT and was killed)"
         return ToolResult(head, data=res["output"] or "(no output)", untrusted="command output",
@@ -494,7 +501,8 @@ def builtin_tools(eng: "Engine") -> list[ToolSpec]:
 
     add("run_linux", "Run a Bash command in a disposable Ubuntu sandbox (no Windows access: no registry, no Startup folder, no credentials, nothing persists except workspace files). "
         "Prefer this over run_command for scripts, data crunching, builds and anything untrusted or non-Windows. Same approval rules as run_command. Output is truncated.",
-        {"command": s("Bash command line"), "timeout": i("Seconds, default 120, max 900")},
+        {"command": s("Bash command line"), "timeout": i("Seconds, default 120, max 900"),
+         "backend": s("local: this PC's Ubuntu (private, free) | cloud: InstaBox VM (PC can be off, uses your quota)")},
         ["command"], run_linux, risk=lambda ctx, a: comp.command_risk(a["command"], None), label=lambda a: f"Linux: {short(a.get('command', ''), 70)}")
 
     def web_fetch(ctx: ToolContext, a: dict) -> ToolResult:
