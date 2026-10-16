@@ -68,7 +68,7 @@
     const rows = S.bots.map((b) => {
       const [cls, label] = stateOf(b.id);
       return `<div class="card bot-row" data-bot="${b.id}"><div class="emoji">${esc(b.emoji || '🤖')}</div><div class="meta"><div class="name">${esc(b.name)}</div>` +
-        `<div class="job">${esc(b.job || 'No job yet')}</div></div>${label ? `<span class="pill ${cls}">${label}</span>` : ''}</div>`;
+        `<div class="job">${esc(b.job || 'No job yet')}</div></div>${label ? `<span class="pill ${cls}">${label}</span>` : ''}<button class="small edit-bot" data-edit="${b.id}" aria-label="Edit Bot">⚙</button></div>`;
     }).join('');
     const groups = S.groups.map((g) => `<div class="card bot-row" data-group="${g.thread_id}"><div class="emoji">👥</div><div class="meta"><div class="name">${esc(g.name)}</div>` +
       `<div class="job">${esc(g.member_names.join(', '))}</div></div></div>`).join('');
@@ -77,7 +77,8 @@
       `<input id="nb-job" placeholder="Job (e.g. triage my inbox)" style="margin-top:8px">` +
       `<div class="row" style="display:flex;gap:8px;margin-top:10px"><button id="nb-go" class="primary" type="button">Create</button></div></div>` +
       (rows || '<p class="muted">No Bots yet — create your first one above.</p>') + (groups ? '<h3 class="section">Group chats</h3>' + groups : '');
-    el.querySelectorAll('[data-bot]').forEach((n) => n.onclick = () => openBot(n.dataset.bot));
+    el.querySelectorAll('[data-bot]').forEach((n) => n.onclick = (e) => { if (e.target.closest('[data-edit]')) return; openBot(n.dataset.bot); });
+    el.querySelectorAll('[data-edit]').forEach((b) => b.onclick = (e) => { e.stopPropagation(); openBotEdit(b.dataset.edit); });
     el.querySelectorAll('[data-group]').forEach((n) => n.onclick = () => openThread(n.dataset.group, S.groups.find((g) => g.thread_id === n.dataset.group).name, null));
     $('#new-bot').onclick = () => { const f = $('#new-bot-form'); f.hidden = !f.hidden; if (!f.hidden) $('#nb-name').focus(); };
     $('#nb-go').onclick = async () => {
@@ -87,6 +88,26 @@
         const b = await api('/api/bots', { body: { name, job: $('#nb-job').value.trim() } });
         await loadBootstrap(); openBot(b.id);
       } catch (e) { toast('Could not create Bot', e.message); }
+    };
+  }
+
+  async function openBotEdit(botId) {
+    let b;
+    try { b = await api('/api/bots/' + botId); }
+    catch (e) { toast('Could not open Bot', e.message); return; }
+    const el = $('#view-bots');
+    const card = document.createElement('div');
+    card.className = 'card';
+    card.innerHTML = `<b>Edit ${esc(b.name)}</b><input id="eb-job" placeholder="Job" value="${esc(b.job || '')}" style="margin-top:8px">` +
+      `<textarea id="eb-ins" rows="4" placeholder="Instructions (personality, rules…)" style="margin-top:8px">${esc(b.instructions || '')}</textarea>` +
+      `<div class="row" style="display:flex;gap:8px;margin-top:10px"><button id="eb-go" class="primary">Save</button><button id="eb-x">Close</button></div>`;
+    el.prepend(card);
+    card.querySelector('#eb-x').onclick = renderBots;
+    card.querySelector('#eb-go').onclick = async () => {
+      try {
+        await api('/api/bots/' + botId, { method: 'PUT', body: { job: card.querySelector('#eb-job').value.trim(), instructions: card.querySelector('#eb-ins').value.trim() } });
+        await loadBootstrap();
+      } catch (e) { toast('Could not save Bot', e.message); }
     };
   }
 
@@ -229,11 +250,25 @@
   async function renderSettings() {
     const el = $('#view-settings');
     const perm = 'Notification' in window ? Notification.permission : 'unsupported';
-    el.innerHTML = `<div class="card"><b>Notifications</b><p class="muted">Alerts appear here while this page is open. ${window.isSecureContext ? '' : 'System notifications need HTTPS; for push while the app is closed, set an ntfy topic in the desktop app (Settings &gt; Mobile).'}</p>` +
+    el.innerHTML = `<div class="card"><b>AI keys</b><p class="muted">Your Bots think through these providers. Keys stay on your server, never on this phone.</p>` +
+      ['openai', 'anthropic', 'groq', 'openrouter'].map((p) => `<div class="row" style="display:flex;gap:8px;margin-top:8px"><input id="key-${p}" type="password" placeholder="${p} API key" autocomplete="off" style="flex:1;min-width:0"><button data-key="${p}" class="small key-save">Save</button></div>`).join('') + `</div>` +
+      `<div class="card"><b>Password</b><div class="row" style="display:flex;gap:8px;margin-top:8px"><input id="new-pw" type="password" placeholder="New password (8+ characters)" style="flex:1;min-width:0"><button id="pw-go" class="small">Change</button></div></div>` +
+      `<div class="card"><b>Notifications</b><p class="muted">Alerts appear here while this page is open.${window.isSecureContext ? '' : ' System notifications need HTTPS.'}</p>` +
       `<p>System notifications: <b>${perm}</b></p>${perm === 'default' ? '<button id="ask-notif" class="primary">Enable</button>' : ''}</div>` +
-      `<div class="card"><b>Install</b><p class="muted">Use your browser menu: “Add to Home screen” to get a full-screen app icon.</p></div>` +
+      `<div class="card"><b>Install</b><p class="muted">Use your browser menu: “Add to Home screen” for the fullscreen app icon.</p></div>` +
       `<div class="card"><button id="logout">Sign out of this phone</button></div>`;
     if ($('#ask-notif')) $('#ask-notif').onclick = async () => { await Notification.requestPermission(); renderSettings(); };
+    el.querySelectorAll('.key-save').forEach((b) => b.onclick = async () => {
+      const p = b.dataset.key, v = $('#key-' + p).value.trim();
+      if (!v) { toast('AI keys', 'Paste a key first.'); return; }
+      try { await api('/api/secrets/provider:' + p, { method: 'PUT', body: { value: v } }); $('#key-' + p).value = ''; toast('Saved', p + ' key is on your server.'); }
+      catch (e) { toast('Could not save key', e.message); }
+    });
+    $('#pw-go').onclick = async () => {
+      const v = $('#new-pw').value;
+      try { await api('/api/password', { body: { password: v } }); $('#new-pw').value = ''; toast('Done', 'Password changed.'); }
+      catch (e) { toast('Could not change password', e.message); }
+    };
     $('#logout').onclick = async () => { document.cookie = 'zt_token=; Max-Age=0; path=/'; location.reload(); };
   }
 
@@ -403,8 +438,19 @@
 
   function wire() {
     $('#login-btn').onclick = async () => {
-      try { await api('/api/login', { body: { token: $('#token').value.trim() } }); await loadBootstrap(); connect(); setView('bots'); }
-      catch (e) { $('#login-err').textContent = e.message; }
+      const pw = $('#token').value, err = $('#login-err');
+      err.textContent = '';
+      try {
+        if (S.setupMode) {
+          if (pw !== $('#token2').value) { err.textContent = 'Passwords do not match.'; return; }
+          await api('/api/setup', { body: { password: pw } });
+        } else {
+          await api('/api/login', { body: { password: pw } });
+        }
+        $('#token').value = ''; $('#token2').value = '';
+        await loadBootstrap(); connect(); setView('bots');
+      }
+      catch (e) { err.textContent = e.message; }
     };
     $('#token').addEventListener('keydown', (e) => { if (e.key === 'Enter') $('#login-btn').click(); });
     document.querySelectorAll('#tabs button').forEach((b) => b.onclick = () => setView(b.dataset.view));
@@ -444,6 +490,18 @@
   async function start() {
     wire();
     if ('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js').catch(() => {});
+    try {
+      const st = await api('/api/auth_status');
+      if (st.setup_needed) {
+        S.setupMode = true;
+        $('#login-sub').textContent = 'Welcome! Choose a password for your app.';
+        $('#token').placeholder = 'Choose a password (8+ characters)';
+        $('#token2').hidden = false;
+        $('#login-btn').textContent = 'Create password';
+        showLogin();
+        return;
+      }
+    } catch (e) { /* fall through to normal start */ }
     try { await loadBootstrap(); connect(); setView('bots'); } catch (e) { /* login screen already shown */ }
     setInterval(() => { if (S.view === 'chat') updateChatStatus(); }, 1500);
   }

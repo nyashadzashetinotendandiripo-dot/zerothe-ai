@@ -16,14 +16,15 @@ from typing import Any
 from fastapi import Body, Depends, FastAPI, HTTPException, Request, Response
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, StreamingResponse
 
-from core import VERSION, backup as backup_mod, commands, packages, paths, secrets, skills as skills_mod
+from core import APP_NAME, VERSION, backup as backup_mod, commands, packages, paths, secrets, skills as skills_mod
+from core import auth as auth_mod
 from core.browser import BrowserError
 from core.bots import BotError
 from core.computer import ComputerError
 from core.engine import Engine
 from core.files import FileError
 from core.plugins import ConnectorError
-from core.providers import ProviderError, make_provider
+from core.providers import ProviderError, friendly_error, make_provider, model_warnings
 from core.routines import PRESETS
 from core.secrets import SecretStoreError
 from core.settings import PROVIDER_PRESETS
@@ -73,7 +74,7 @@ def create_app(engine: Engine, token: str) -> FastAPI:
         fails[ip] = recent
         if len(recent) >= 10:
             raise HTTPException(429, "Too many failed attempts. Wait a few minutes.")
-        ok = bool(tok) and hmac.compare_digest(tok.encode(), token.encode())
+        ok = auth_mod.credential_ok(tok, token)
         if not ok:
             fails[ip].append(now)
         return ok
@@ -98,14 +99,38 @@ def create_app(engine: Engine, token: str) -> FastAPI:
     # --------------------------------------------------------------- basics
     @app.get("/api/health")
     def health() -> dict:
-        return {"ok": True, "name": "OpenGrokBot", "version": VERSION}
+        return {"ok": True, "name": APP_NAME, "version": VERSION}
 
     @app.post("/api/login")
     def login(request: Request, response: Response, body: dict = Body(...)) -> dict:
         ip = request.client.host if request.client else "?"
-        if not check_token(str(body.get("token", "")).strip(), ip):
-            raise HTTPException(401, "That token is not right.")
-        response.set_cookie("gb_token", token, httponly=True, samesite="strict", max_age=86400 * 365)
+        cred = str(body.get("token", "") or body.get("password", "")).strip()
+        if not check_token(cred, ip):
+            raise HTTPException(401, "That password is not right.")
+        response.set_cookie("zt_token", token, httponly=True, samesite="strict", max_age=86400 * 365)
+        return {"ok": True}
+
+    @app.get("/api/auth_status")
+    def auth_status() -> dict:
+        return {"setup_needed": not auth_mod.has_password()}
+
+    @app.post("/api/setup")
+    def setup(request: Request, response: Response, body: dict = Body(...)) -> dict:
+        if auth_mod.has_password():
+            raise HTTPException(403, "This app already has a password. Sign in to change it.")
+        try:
+            auth_mod.set_password(str(body.get("password", "")))
+        except ValueError as e:
+            raise HTTPException(400, str(e))
+        response.set_cookie("zt_token", token, httponly=True, samesite="strict", max_age=86400 * 365)
+        return {"ok": True}
+
+    @app.post("/api/password", dependencies=[api])
+    def change_password(body: dict = Body(...)) -> dict:
+        try:
+            auth_mod.set_password(str(body.get("password", "")))
+        except ValueError as e:
+            raise HTTPException(400, str(e))
         return {"ok": True}
 
     @app.get("/api/bootstrap", dependencies=[api])
