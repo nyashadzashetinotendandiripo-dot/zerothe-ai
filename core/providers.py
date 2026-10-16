@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import base64
 import copy
+import difflib
 import json
 import re
 from dataclasses import dataclass, field
@@ -79,6 +80,14 @@ def estimate_tokens(messages: list[dict], system: str = "") -> int:
                 n += 1200
     return n // 4
 
+
+def model_warnings(model: str, models: list[str]) -> list[str]:
+    """Warnings for a chosen model that is not in the provider's detected list."""
+    if not model or not models or model in models:
+        return []
+    near = difflib.get_close_matches(model, models, n=3, cutoff=0.6)
+    hint = f" Did you mean: {', '.join(near)}?" if near else " Pick one from the detected list."
+    return [f"Model '{model}' isn't on this provider.{hint}"]
 
 def _load_image(block: dict) -> tuple[str, str] | None:
     if block.get("data"):
