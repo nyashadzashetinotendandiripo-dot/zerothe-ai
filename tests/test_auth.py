@@ -40,6 +40,24 @@ class AuthTest(unittest.TestCase):
         self.assertFalse(auth.credential_ok("nope", "TOK"))
         self.assertFalse(auth.credential_ok("", "TOK"))
 
+    def test_headless_fallback_file(self):
+        """No credential store (cloud VM): the salted hash goes to a 0600 file, never plaintext."""
+        import tempfile
+        from pathlib import Path
+        from core import secrets as secrets_mod
+        with tempfile.TemporaryDirectory() as td:
+            with mock.patch.object(secrets_mod, "set_secret",
+                                   side_effect=secrets_mod.SecretStoreError("no store")), \
+                 mock.patch.object(secrets_mod, "get_secret", return_value=None), \
+                 mock.patch("core.paths.data_dir", return_value=Path(td)):
+                auth.set_password("cloud password 9")
+                f = Path(td) / auth._FALLBACK_FILE
+                self.assertTrue(f.is_file())
+                self.assertNotIn("cloud password 9", f.read_text())
+                self.assertTrue(auth.has_password())
+                self.assertTrue(auth.verify("cloud password 9"))
+                self.assertFalse(auth.verify("wrong"))
+
 
 if __name__ == "__main__":
     unittest.main()
