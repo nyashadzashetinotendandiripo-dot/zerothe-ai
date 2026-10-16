@@ -1,6 +1,6 @@
 // Service worker: makes the app installable, caches the shell for fast starts, and focuses the app when a notification is tapped.
-const CACHE = 'ogb-shell-v1';
-const SHELL = ['/', '/style.css', '/app.js', '/icon.svg', '/manifest.json'];
+const CACHE = 'ogb-shell-v2';
+const SHELL = ['/', '/style.css', '/app.js', '/icon.svg', '/icon-192.png', '/icon-512.png', '/manifest.json'];
 
 self.addEventListener('install', (e) => {
   e.waitUntil(caches.open(CACHE).then((c) => c.addAll(SHELL)).then(() => self.skipWaiting()));

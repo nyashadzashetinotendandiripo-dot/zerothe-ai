@@ -30,6 +30,23 @@ def pick_stt_model(provider_kind: str, configured_model: str | None) -> str:
     raise ValueError(_NO_STT_HINT.format(kind=provider_kind or "unknown"))
 
 
+def sniff_audio_name(data: bytes) -> tuple[str, str]:
+    """Pick an upload filename + mime from container magic (Whisper validates the extension)."""
+    if data[:4] == b"RIFF" and data[8:12] == b"WAVE":
+        return "audio.wav", "audio/wav"
+    if data[:4] == b"\x1a\x45\xdf\xa3":
+        return "audio.webm", "audio/webm"
+    if data[:4] == b"OggS":
+        return "audio.ogg", "audio/ogg"
+    if data[:4] == b"fLaC":
+        return "audio.flac", "audio/flac"
+    if data[:2] == b"\xff\xfb" or data[:2] == b"\xff\xf3" or data[:3] == b"ID3":
+        return "audio.mp3", "audio/mpeg"
+    if data[4:8] == b"ftyp":
+        return "audio.m4a", "audio/mp4"
+    return "audio.wav", "audio/wav"
+
+
 def transcribe(base_url: str, api_key: str | None, wav_bytes: bytes, model: str) -> str:
     """POST wav_bytes to {base_url}/audio/transcriptions, return the transcript text."""
     import httpx
@@ -43,7 +60,8 @@ def transcribe(base_url: str, api_key: str | None, wav_bytes: bytes, model: str)
     url = base_url.rstrip("/") + "/audio/transcriptions"
     headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
     try:
-        resp = httpx.post(url, files={"file": ("audio.wav", wav_bytes, "audio/wav")},
+        fname, mime = sniff_audio_name(wav_bytes)
+        resp = httpx.post(url, files={"file": (fname, wav_bytes, mime)},
                            data={"model": model.strip()}, headers=headers, timeout=60.0)
     except Exception as e:  # httpx.TimeoutException / ConnectError etc.
         raise RuntimeError(f"STT request to {url} failed ({type(e).__name__}: {e}). "

@@ -3,13 +3,21 @@
   'use strict';
   const $ = (s, el = document) => el.querySelector(s);
   const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
-  const S = { commands: [], bots: [], groups: [], busy: {}, approvals: [], thread: null, items: [], stream: {}, view: 'bots', es: null, lastEvent: 0, screenBot: null, screenTimer: null, titleBase: document.title };
+  const S = { commands: [], bots: [], groups: [], busy: {}, approvals: [], thread: null, threads: [], items: [], stream: {}, view: 'bots', es: null, lastEvent: 0, screenBot: null, screenTimer: null, titleBase: document.title, attach: [], rec: null };
 
   // ------------------------------------------------------------------ api
   async function api(path, opts = {}) {
     const init = { credentials: 'same-origin', headers: {}, method: opts.method || 'GET' };
     if (opts.body !== undefined) { init.method = opts.method || 'POST'; init.headers['Content-Type'] = 'application/json'; init.body = JSON.stringify(opts.body); }
     const r = await fetch(path, init);
+    if (r.status === 401) { showLogin(); throw new Error('Not signed in'); }
+    const data = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(data.error || data.detail || ('HTTP ' + r.status));
+    return data;
+  }
+
+  async function apiForm(path, form) {
+    const r = await fetch(path, { method: 'POST', credentials: 'same-origin', body: form });
     if (r.status === 401) { showLogin(); throw new Error('Not signed in'); }
     const data = await r.json().catch(() => ({}));
     if (!r.ok) throw new Error(data.error || data.detail || ('HTTP ' + r.status));
@@ -64,9 +72,22 @@
     }).join('');
     const groups = S.groups.map((g) => `<div class="card bot-row" data-group="${g.thread_id}"><div class="emoji">👥</div><div class="meta"><div class="name">${esc(g.name)}</div>` +
       `<div class="job">${esc(g.member_names.join(', '))}</div></div></div>`).join('');
-    el.innerHTML = (rows || '<p class="muted">No Bots yet. Create one in the desktop app.</p>') + (groups ? '<h3 class="section">Group chats</h3>' + groups : '');
+    el.innerHTML = `<button id="new-bot" class="primary wide" type="button">＋ New Bot</button>` +
+      `<div id="new-bot-form" class="card" hidden><input id="nb-name" placeholder="Bot name" maxlength="60">` +
+      `<input id="nb-job" placeholder="Job (e.g. triage my inbox)" style="margin-top:8px">` +
+      `<div class="row" style="display:flex;gap:8px;margin-top:10px"><button id="nb-go" class="primary" type="button">Create</button></div></div>` +
+      (rows || '<p class="muted">No Bots yet — create your first one above.</p>') + (groups ? '<h3 class="section">Group chats</h3>' + groups : '');
     el.querySelectorAll('[data-bot]').forEach((n) => n.onclick = () => openBot(n.dataset.bot));
     el.querySelectorAll('[data-group]').forEach((n) => n.onclick = () => openThread(n.dataset.group, S.groups.find((g) => g.thread_id === n.dataset.group).name, null));
+    $('#new-bot').onclick = () => { const f = $('#new-bot-form'); f.hidden = !f.hidden; if (!f.hidden) $('#nb-name').focus(); };
+    $('#nb-go').onclick = async () => {
+      const name = $('#nb-name').value.trim();
+      if (!name) { $('#nb-name').placeholder = 'Name is required'; return; }
+      try {
+        const b = await api('/api/bots', { body: { name, job: $('#nb-job').value.trim() } });
+        await loadBootstrap(); openBot(b.id);
+      } catch (e) { toast('Could not create Bot', e.message); }
+    };
   }
 
   async function openBot(botId) {
@@ -80,7 +101,19 @@
     S.thread = { id: tid, title, botId, running: d.running.length > 0 };
     S.items = d.items; S.approvals = [...S.approvals.filter((a) => a.thread_id !== tid), ...d.approvals];
     setView('chat'); $('#title').textContent = title;
+    S.attach = []; renderAttach();
     renderMessages(true); renderThreadApprovals(); updateChatStatus();
+    loadThreadList(botId, tid);
+  }
+
+  async function loadThreadList(botId, current) {
+    const bar = $('#threadbar'), sel = $('#thread-sel');
+    if (!botId) { bar.hidden = true; return; }
+    bar.hidden = false;
+    try {
+      S.threads = await api('/api/bots/' + botId + '/threads');
+      sel.innerHTML = S.threads.map((t) => `<option value="${t.id}"${t.id === current ? ' selected' : ''}>${esc(t.title || 'Thread')}${t.main ? ' ★' : ''}</option>`).join('');
+    } catch (e) { bar.hidden = true; }
   }
 
   function itemHTML(it) {
@@ -147,7 +180,7 @@
     const extra = d.body || d.command || d.preview || d.text || '';
     return `<div class="card approval" data-id="${a.id}"><h4>${esc(botName(a.bot_id))}: ${esc(a.title || a.category)}</h4><div>${esc(a.summary)}</div>${taint}` +
       (extra ? `<pre>${esc(String(extra).slice(0, 800))}</pre>` : '') + (d.auto_review ? `<p class="muted">${esc(d.auto_review)}</p>` : '') +
-      `<div class="row"><button class="primary approve">Approve</button><button class="remember">Approve &amp; always</button><button class="deny">Deny</button></div></div>`;
+      `<div class="row"><button class="primary approve">Approve</button><button class="remember">Approve &amp; always</button><button class="full">Full access</button><button class="deny">Deny</button></div></div>`;
   }
   function botName(id) { const b = botById(id); return b ? b.name : 'Bot'; }
 
@@ -159,6 +192,7 @@
       if (q('.approve')) q('.approve').onclick = () => decide({ approve: true });
       if (q('.remember')) q('.remember').onclick = () => decide({ approve: true, remember: true });
       if (q('.deny')) q('.deny').onclick = () => decide({ approve: false });
+      if (q('.full')) q('.full').onclick = () => { if (confirm('Let this Bot do anything on your behalf between now and its next reply?')) decide({ approve: true, full_access: true }); };
       card.querySelectorAll('[data-ans]').forEach((b) => b.onclick = () => decide({ approve: true, answer: b.dataset.ans }));
       if (q('.send-ans')) q('.send-ans').onclick = () => { const v = q('.ans').value.trim(); if (v) decide({ approve: true, answer: v }); };
       if (q('.send-creds')) q('.send-creds').onclick = () => {
@@ -200,7 +234,7 @@
       `<div class="card"><b>Install</b><p class="muted">Use your browser menu: “Add to Home screen” to get a full-screen app icon.</p></div>` +
       `<div class="card"><button id="logout">Sign out of this phone</button></div>`;
     if ($('#ask-notif')) $('#ask-notif').onclick = async () => { await Notification.requestPermission(); renderSettings(); };
-    $('#logout').onclick = async () => { document.cookie = 'gb_token=; Max-Age=0; path=/'; location.reload(); };
+    $('#logout').onclick = async () => { document.cookie = 'zt_token=; Max-Age=0; path=/'; location.reload(); };
   }
 
   // ----------------------------------------------------------------- toasts
@@ -268,12 +302,70 @@
   // ------------------------------------------------------------------ chat
   async function send() {
     const ta = $('#input'); const text = ta.value.trim();
-    if (!text || !S.thread) return;
+    if ((!text && !S.attach.length) || !S.thread) return;
     ta.value = ''; autoGrow(); showCommands();
+    const images = S.attach.map((a) => ({ data: a.data }));
+    S.attach = []; renderAttach();
     try {
-      const d = await api('/api/threads/' + S.thread.id + '/messages', { body: { text } });
+      const d = await api('/api/threads/' + S.thread.id + '/messages', { body: { text, images } });
       if (d.switch_thread && S.thread && S.thread.botId) openThread(d.switch_thread, S.thread.title, S.thread.botId);   // /new
     } catch (e) { toast('Could not send', e.message); ta.value = text; }
+  }
+
+  function renderAttach() {
+    const bar = $('#attachbar');
+    bar.hidden = !S.attach.length;
+    bar.innerHTML = S.attach.map((a, i) => `<span class="chip"><img src="${a.url}"><button data-i="${i}" aria-label="Remove">✕</button></span>`).join('');
+    bar.querySelectorAll('button').forEach((b) => b.onclick = () => { S.attach.splice(+b.dataset.i, 1); renderAttach(); });
+  }
+
+  function downscale(file) {
+    // Shrink phone photos so uploads stay small; returns {data (base64), url (preview)}.
+    return new Promise((resolve, reject) => {
+      const img = new Image();
+      const url = URL.createObjectURL(file);
+      img.onload = () => {
+        const max = 1280, k = Math.min(1, max / Math.max(img.width, img.height));
+        const c = document.createElement('canvas');
+        c.width = Math.round(img.width * k); c.height = Math.round(img.height * k);
+        c.getContext('2d').drawImage(img, 0, 0, c.width, c.height);
+        URL.revokeObjectURL(url);
+        const durl = c.toDataURL('image/jpeg', 0.82);
+        resolve({ data: durl.split(',')[1], url: durl });
+      };
+      img.onerror = () => { URL.revokeObjectURL(url); reject(new Error('Could not read that image.')); };
+      img.src = url;
+    });
+  }
+
+  async function toggleMic() {
+    const btn = $('#mic');
+    if (S.rec) { S.rec.stop(); return; }   // stop() fires onstop below
+    if (!window.MediaRecorder) { toast('Voice', 'This browser cannot record audio.'); return; }
+    if (!S.thread || !S.thread.botId) { toast('Voice', 'Open a Bot chat first.'); return; }
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const mime = MediaRecorder.isTypeSupported('audio/webm') ? 'audio/webm' : '';
+      const mr = mime ? new MediaRecorder(stream, { mimeType: mime }) : new MediaRecorder(stream);
+      const chunks = [];
+      mr.ondataavailable = (e) => { if (e.data.size) chunks.push(e.data); };
+      mr.onstop = async () => {
+        S.rec = null; btn.classList.remove('rec');
+        stream.getTracks().forEach((t) => t.stop());
+        const blob = new Blob(chunks, { type: mr.mimeType || 'audio/webm' });
+        if (!blob.size) return;
+        btn.disabled = true;
+        try {
+          const form = new FormData();
+          form.append('file', blob, 'voice.' + (blob.type.includes('webm') ? 'webm' : 'bin'));
+          const d = await apiForm('/api/voice/transcribe?bot_id=' + encodeURIComponent(S.thread.botId), form);
+          if (d.text) { const ta = $('#input'); ta.value = (ta.value ? ta.value + ' ' : '') + d.text; autoGrow(); ta.focus(); }
+        } catch (e) { toast('Voice', e.message); }
+        btn.disabled = false;
+      };
+      S.rec = mr; mr.start(); btn.classList.add('rec');
+      toast('Recording…', 'Tap 🎙 again to stop.');
+    } catch (e) { toast('Voice', 'Microphone blocked. Allow access and try again.'); }
   }
 
   // ----------------------------------------------------------- slash commands
@@ -321,6 +413,20 @@
     $('#input').addEventListener('input', () => { autoGrow(); showCommands(); });
     $('#input').addEventListener('keydown', (e) => { const b = $('#cmdlist'); if (e.key === 'Tab' && !b.hidden) { e.preventDefault(); b.querySelector('button').click(); } if (e.key === 'Escape') b.hidden = true; });
     $('#stop').onclick = () => S.thread && api('/api/threads/' + S.thread.id + '/stop', { body: {} });
+    $('#thread-sel').onchange = (e) => { const t = S.threads.find((x) => x.id === e.target.value); if (t && S.thread) openThread(t.id, S.thread.title, S.thread.botId); };
+    $('#thread-new').onclick = async () => {
+      if (!S.thread || !S.thread.botId) return;
+      try { const t = await api('/api/bots/' + S.thread.botId + '/threads', { body: {} }); openThread(t.id, S.thread.title, S.thread.botId); }
+      catch (e) { toast('Could not start chat', e.message); }
+    };
+    $('#attach').onclick = () => $('#file').click();
+    $('#file').onchange = async (e) => {
+      for (const f of [...e.target.files].slice(0, 6 - S.attach.length)) {
+        try { S.attach.push(await downscale(f)); } catch (err) { toast('Image', err.message); }
+      }
+      e.target.value = ''; renderAttach();
+    };
+    $('#mic').onclick = toggleMic;
     $('#scr-done').onclick = () => closeScreen(true);
     $('#scr-back').onclick = () => closeScreen(false);
     $('#scr-reload').onclick = () => input({ type: 'reload' });

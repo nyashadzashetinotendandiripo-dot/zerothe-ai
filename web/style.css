@@ -64,6 +64,14 @@ h3.section { margin: 18px 4px 8px; font-size: 13px; text-transform: uppercase; l
 #cmdlist button:last-child { border-bottom: 0; } #cmdlist button:active, #cmdlist button.sel { background: var(--accent-soft, rgba(124,156,255,.15)); }
 #cmdlist b { display: block; } #cmdlist span { color: var(--muted); font-size: 13px; }
 .chat-status { padding: 6px 14px; font-size: 13px; color: var(--accent); background: #141a2b; border-bottom: 1px solid var(--line); }
+.threadbar { display: flex; gap: 6px; padding: 8px 12px 0; align-items: center; }
+.threadbar select { flex: 1; min-width: 0; }
+.attachbar { display: flex; gap: 6px; padding: 8px 12px 0; flex-wrap: wrap; }
+.attachbar .chip { position: relative; width: 56px; height: 56px; border-radius: 10px; overflow: hidden; border: 1px solid var(--line); background: var(--panel); }
+.attachbar .chip img { width: 100%; height: 100%; object-fit: cover; }
+.attachbar .chip button { position: absolute; top: 0; right: 0; padding: 0 5px; font-size: 12px; border-radius: 0 0 0 8px; background: #000a; border: none; }
+#mic.rec { filter: hue-rotate(-80deg) saturate(2); animation: pulse 1s infinite alternate; }
+@keyframes pulse { from { opacity: 1; } to { opacity: .45; } }
 #composer { display: flex; gap: 8px; padding: 10px 12px; border-top: 1px solid var(--line); align-items: flex-end; background: var(--bg); }
 #chat-approvals { padding: 0 12px; }
 .approval { border-color: #54421c; background: #1d1910; }
