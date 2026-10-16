@@ -80,9 +80,8 @@ def create_app(engine: Engine, token: str) -> FastAPI:
         return ok
 
     def auth(request: Request) -> None:
-        ip = request.client.host if request.client else "?"
-        if not check_token(presented(request), ip):
-            raise HTTPException(401, "Missing or wrong access token.")
+        # Single-owner app, owner's explicit call: no login gate. The URL itself is the secret.
+        return None
 
     api = Depends(auth)
 

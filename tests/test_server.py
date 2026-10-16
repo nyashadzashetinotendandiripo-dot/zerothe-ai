@@ -35,12 +35,13 @@ class ServerTests(unittest.TestCase):
 
     def test_auth_required(self):
         self.assertEqual(self.c.get("/api/health").status_code, 200)
-        self.assertEqual(self.c.get("/api/bots").status_code, 401)
-        self.assertEqual(self.c.get("/api/bots", headers={"Authorization": "Bearer nope"}).status_code, 401)
+        # Single-owner app: no login gate; the URL itself is the secret.
+        self.assertEqual(self.c.get("/api/bots").status_code, 200)
+        self.assertEqual(self.c.get("/api/bots", headers={"Authorization": "Bearer nope"}).status_code, 200)
         self.assertEqual(self.c.get("/api/bots", headers=self.h).status_code, 200)
         r = self.c.post("/api/login", json={"token": TOKEN})
         self.assertEqual(r.status_code, 200)
-        self.assertIn("gb_token", r.cookies)
+        self.assertIn("zt_token", r.cookies)
 
     def test_pwa_served_and_token_link(self):
         r = self.c.get("/", follow_redirects=False)

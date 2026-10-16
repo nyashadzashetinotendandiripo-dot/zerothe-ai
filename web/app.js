@@ -490,19 +490,8 @@
   async function start() {
     wire();
     if ('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js').catch(() => {});
-    try {
-      const st = await api('/api/auth_status');
-      if (st.setup_needed) {
-        S.setupMode = true;
-        $('#login-sub').textContent = 'Welcome! Choose a password for your app.';
-        $('#token').placeholder = 'Choose a password (8+ characters)';
-        $('#token2').hidden = false;
-        $('#login-btn').textContent = 'Create password';
-        showLogin();
-        return;
-      }
-    } catch (e) { /* fall through to normal start */ }
-    try { await loadBootstrap(); connect(); setView('bots'); } catch (e) { /* login screen already shown */ }
+    try { await loadBootstrap(); connect(); setView('bots'); }
+    catch (e) { toast('Could not reach the server', 'Check your connection and reopen the app.'); }
     setInterval(() => { if (S.view === 'chat') updateChatStatus(); }, 1500);
   }
   start();
