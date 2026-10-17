@@ -179,7 +179,7 @@ The Bot asks for Gmail access (you approve), works through the mailbox with a li
 | **Credentials** | Stored in Windows Credential Manager. Bots never see them: connector credentials are applied outside the model. |
 | **Action log** | Every tool call, page visited and file touched, per Bot, exportable as JSON or CSV. |
 
-**What this is not:** the terminal gate is a heuristic on command text and working folder, not an OS sandbox. A script a Bot writes can do anything your Windows user can. For hard isolation, run the computer in a VM or Docker (remote mode). Everything on the shared computer is readable by every Bot. The local server uses a bearer token over plain HTTP, so do not expose it to the internet without a VPN, tunnel or TLS. Python plugins run inside the service with your permissions, so only install code you trust.
+**What this is not:** the terminal gate is a heuristic on command text and working folder. On Linux (cloud, Docker, remote mode) every command runs inside a bubblewrap sandbox — only the workspace is mounted, read-write, in a private PID namespace, so a script cannot read the host's files; set Settings > Computer > Command sandbox to "Off" to disable it, or "Always" to refuse running without it. On Windows there is no OS sandbox: a script a Bot writes can do anything your Windows user can, so for hard isolation run the computer in a VM or Docker (remote mode). Everything on the shared computer is readable by every Bot. The local server uses a bearer token over plain HTTP, so do not expose it to the internet without a VPN, tunnel or TLS. Python plugins run inside the service with your permissions, so only install code you trust.
 
 ## Documentation
 

@@ -184,11 +184,27 @@ class Computer:
         d, _ = self.resolve(cwd or ".")
         d.mkdir(parents=True, exist_ok=True)
         timeout = max(1, min(int(timeout or 60), 900))
-        if IS_WIN and shell == "powershell":
-            argv: Any = ["powershell", "-NoProfile", "-NonInteractive", "-Command", command]
-            use_shell = False
-        else:
-            argv, use_shell = command, True
+        mode = str(self.settings.get("computer.sandbox", "auto") or "auto").strip().lower()
+        sandbox = "off"
+        argv: Any = None
+        use_shell = False
+        if mode in ("auto", "bwrap"):
+            from . import sandbox_bwrap
+            ok, why = sandbox_bwrap.available()
+            if ok:
+                net = str(self.settings.get("computer.sandbox_network", "shared") or "shared")
+                argv = sandbox_bwrap.wrap(command, cwd=d, workspace=self.workspace, network=net)
+                sandbox = "bwrap"
+            elif mode == "bwrap":
+                res: dict = {"exit": -1, "output": f"Command sandbox unavailable: {why}", "timed_out": False,
+                             "stopped": False, "seconds": 0, "sandbox": "unavailable"}
+                self.terminal_log.append({"ts": now(), "cwd": self.rel(d), "command": command, "who": who, **res})
+                return res
+        if argv is None:
+            if IS_WIN and shell == "powershell":
+                argv = ["powershell", "-NoProfile", "-NonInteractive", "-Command", command]
+            else:
+                argv, use_shell = command, True
         flags = (subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.CREATE_NO_WINDOW) if IS_WIN else 0
         t0 = time.time()
         try:
@@ -221,7 +237,7 @@ class Computer:
         if len(out) > 20000:
             out = out[:10000] + f"\n[... {len(out) - 20000} chars omitted ...]\n" + out[-10000:]
         res = {"exit": proc.returncode if proc.returncode is not None else -1, "output": out, "timed_out": timed_out,
-               "stopped": stopped, "seconds": round(time.time() - t0, 1)}
+               "stopped": stopped, "seconds": round(time.time() - t0, 1), "sandbox": sandbox}
         self.terminal_log.append({"ts": now(), "cwd": self.rel(d), "command": command, "who": who, **res})
         return res
 
@@ -356,8 +372,14 @@ class Computer:
 
     # ----------------------------------------------------------------- status
     def status(self) -> dict:
+        from . import sandbox_bwrap
+        mode = str(self.settings.get("computer.sandbox", "auto") or "auto").strip().lower()
+        name, why = sandbox_bwrap.backend()
+        net = str(self.settings.get("computer.sandbox_network", "shared") or "shared")
         return {"workspace": str(self.workspace), "browser": self.browser.status(), "browser_error": self.browser.last_error,
-                "headless": bool(self.settings.get("computer.headless", True))}
+                "headless": bool(self.settings.get("computer.headless", True)),
+                "sandbox": {"mode": mode, "available": name is not None, "why": why, "backend": name or "", "network": net,
+                            "active": name is not None and mode in ("auto", "bwrap")}}
 
     def shutdown(self) -> None:
         self.browser.shutdown()

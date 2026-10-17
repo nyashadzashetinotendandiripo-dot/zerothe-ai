@@ -171,7 +171,7 @@ Tools appear as `mcp__<server>__<tool>`. Use `${secret:NAME}` in env/headers to 
 
 **Action log.** *Action log* shows every tool call, page visited and file touched per Bot, filterable and exportable as JSON/CSV.
 
-**What this is not.** The terminal gate is a heuristic on command text and working folder, not an OS sandbox (a script a Bot wrote could do anything the OS user can). For hard isolation run the computer in a VM or Docker (remote mode). Treat the shared computer as readable by every Bot. The local web server uses a bearer token and plain HTTP; do not expose it to the internet without a VPN/tunnel/TLS.
+**What this is not.** The terminal gate is a heuristic on command text and working folder. On Linux (cloud, Docker, remote mode) commands additionally run inside a bubblewrap sandbox: only the workspace is mounted read-write, in a private PID namespace, and the host filesystem is not visible at all (Settings > Computer > Command sandbox: Auto/Always/Off). On Windows there is no OS sandbox — a script a Bot wrote could do anything the OS user can, so for hard isolation run the computer in a VM or Docker (remote mode). Treat the shared computer as readable by every Bot. The local web server uses a bearer token and plain HTTP; do not expose it to the internet without a VPN/tunnel/TLS.
 
 ## Remote mode setup
 

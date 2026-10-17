@@ -469,13 +469,18 @@ def builtin_tools(eng: "Engine") -> list[ToolSpec]:
     def run_command(ctx: ToolContext, a: dict) -> ToolResult:
         res = comp.run_command(a["command"], a.get("cwd"), int(a.get("timeout", 60)), a.get("shell", "default"), stop=ctx.run.stop, who=ctx.bot["name"])
         head = f"exit code {res['exit']} after {res['seconds']}s"
+        if res.get("sandbox") == "bwrap":
+            head += " (bwrap sandbox)"
+        elif res.get("sandbox") == "unavailable":
+            head += " (SANDBOX UNAVAILABLE)"
         if res["timed_out"]:
             head += " (TIMED OUT and was killed)"
         if res["stopped"]:
             head += " (stopped by user)"
         return ToolResult(head, data=res["output"] or "(no output)", untrusted="command output", is_error=res["exit"] not in (0,) and not res["stopped"])
 
-    add("run_command", "Run a terminal command in the shared workspace (Windows: cmd by default, or shell='powershell'). Commands outside the workspace, deleting, installing, "
+    add("run_command", "Run a terminal command in the shared workspace (Windows: cmd by default, or shell='powershell'; Linux/cloud: runs inside a bubblewrap sandbox where only the workspace is visible and writable). "
+        "Commands outside the workspace, deleting, installing, "
         "downloading or running unfamiliar programs need approval. Output is truncated.",
         {"command": s("Command line"), "cwd": s("Working folder inside the workspace"), "timeout": i("Seconds, default 60, max 900"), "shell": s("default | powershell")},
         ["command"], run_command, risk=lambda ctx, a: comp.command_risk(a["command"], a.get("cwd")), label=lambda a: f"Run: {short(a.get('command', ''), 70)}")

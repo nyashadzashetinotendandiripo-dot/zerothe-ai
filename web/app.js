@@ -427,9 +427,10 @@
     el.querySelectorAll('.set-tabs button').forEach((b) => b.onclick = () => { setTab = b.dataset.t; renderSettings(); });
     renderSetBody();
   }
+  function getS(key) { let v = S.settings; for (const k of String(key).split('.')) { if (v == null) return undefined; v = v[k]; } return v; }
   function skField(label, key, type, opts) {
-    const v = S.settings[key];
-    if (type === 'select') return '<div class="field"><label>' + label + '</label><select data-skey="' + key + '">' + opts.map(([ov, ol]) => '<option value="' + ov + '"' + (String(v) === String(ov) ? ' checked' : '') + '>' + ol + '</option>').join('') + '</select></div>';
+    const v = getS(key);
+    if (type === 'select') return '<div class="field"><label>' + label + '</label><select data-skey="' + key + '">' + opts.map(([ov, ol]) => '<option value="' + ov + '"' + (String(v) === String(ov) ? ' selected' : '') + '>' + ol + '</option>').join('') + '</select></div>';
     if (type === 'check') return '<label class="eb-radio"><input type="checkbox" data-skey="' + key + '"' + (v ? ' checked' : '') + '><span>' + label + '</span></label>';
     return '<div class="field"><label>' + label + '</label><input data-skey="' + key + '" type="' + (type || 'text') + '" value="' + esc(v == null ? '' : v) + '"></div>';
   }
@@ -473,7 +474,17 @@
     } else if (setTab === 'Computer') {
       b.innerHTML = '<div class="card"><b>Computer (browser)</b><p class="muted">How Bots drive the browser for web tasks.</p>' +
         skField('Headless browser (no visible window)', 'computer.headless', 'check') +
-        skField('Command policy', 'computer.command_policy', 'select', [['', 'Default'], ['strict', 'Strict'], ['normal', 'Normal'], ['permissive', 'Permissive']]) + save + '</div>';
+        skField('Command policy', 'computer.command_policy', 'select', [['workspace', 'Workspace only (default)'], ['ask_all', 'Ask before every command']]) +
+        skField('Command sandbox (Linux/cloud)', 'computer.sandbox', 'select', [['auto', 'Auto — sandbox when available (default)'], ['bwrap', 'Always sandbox — refuse if unavailable'], ['off', 'Off — no sandbox']]) +
+        skField('Sandbox network', 'computer.sandbox_network', 'select', [['shared', 'Network allowed (default)'], ['none', 'No network inside sandbox']]) +
+        '<p class="muted" id="set-sandbox-info" style="font-size:11px">Sandbox status: checking…</p>' + save + '</div>';
+      api('/api/computer').then((d) => {
+        const el = document.getElementById('set-sandbox-info'); if (!el) return;
+        const s = d.sandbox;
+        if (!s) { el.textContent = 'Sandbox status: not reported by this server.'; return; }
+        el.textContent = 'Sandbox status: mode ' + s.mode + ' · bwrap ' + (s.available ? 'available (' + s.why + ')' : 'unavailable (' + s.why + ')') +
+          ' · commands ' + (s.active ? 'are sandboxed' : 'run unsandboxed') + ' · network ' + (s.network === 'none' ? 'blocked' : 'allowed');
+      }).catch(() => { const el = document.getElementById('set-sandbox-info'); if (el) el.textContent = 'Sandbox status: unknown (could not reach /api/computer).'; });
     } else if (setTab === 'App') {
       b.innerHTML = '<div class="card"><b>App behaviour</b>' +
         skField('Lazy tool loading (faster start)', 'context.lazy_tools', 'check') +
@@ -482,8 +493,8 @@
         skField('Context history tokens', 'context.max_history_tokens', 'number') + save + '</div>';
     } else {
       b.innerHTML = '<div class="card"><b>Mobile access</b><p class="muted">This phone connects to your server over the network.</p>' +
-        '<div class="field"><label>Host</label><input value="' + esc(S.settings['mobile.host'] || '') + '" readonly></div>' +
-        '<div class="field"><label>Port</label><input value="' + esc(S.settings['mobile.port'] || '') + '" readonly></div></div>' +
+        '<div class="field"><label>Host</label><input value="' + esc(getS('mobile.host') || '') + '" readonly></div>' +
+        '<div class="field"><label>Port</label><input value="' + esc(getS('mobile.port') || '') + '" readonly></div></div>' +
         '<div class="card"><b>More screens</b><div class="row" style="display:flex;flex-wrap:wrap;gap:6px;margin-top:6px">' +
         ['marketplace', 'computer', 'files', 'skills', 'routines', 'plugins', 'usage', 'actionlog'].map((v) => '<button onclick="setView(\'' + v + '\')" class="small" style="flex:1 1 48%">' + v[0].toUpperCase() + v.slice(1) + '</button>').join('') + '</div></div>' +
         '<div class="card"><b>Install</b><p class="muted">Use your browser menu: “Add to Home screen” for the fullscreen app icon.</p></div>' +
@@ -828,7 +839,18 @@
     const wrap = $('#view-computer');
     wrap.innerHTML = '<div class="section">Bot screens</div><div class="cp-grid" id="cp-grid"></div>' +
       '<div class="section">Workspace files</div><div id="cp-files"></div>' +
-      '<div class="section">Terminal</div><div id="cp-term" style="padding:0 12px 8px"></div>';
+      '<div class="section">Terminal</div><div style="display:flex;gap:6px;padding:0 12px 8px"><input id="cp-term-in" placeholder="Run a command in the workspace…" style="flex:1;min-width:0;font-family:monospace" autocomplete="off"><button class="primary" id="cp-term-go">Run</button></div><div id="cp-term" style="padding:0 12px 8px"></div>';
+    const go = async () => {
+      const cmd = ($('#cp-term-in').value || '').trim(); if (!cmd) return;
+      $('#cp-term-go').disabled = true;
+      try {
+        const r = await api('/api/computer/terminal', { body: { command: cmd, timeout: 60 } });
+        toast('Exit ' + r.exit + (r.sandbox === 'bwrap' ? ' · sandboxed' : r.sandbox === 'unavailable' ? ' · no sandbox' : ''), (r.output || '').slice(0, 300) || '(no output)');
+        renderComputer();
+      } catch (e) { toast('Terminal', e.message); $('#cp-term-go').disabled = false; }
+    };
+    $('#cp-term-go').onclick = go;
+    $('#cp-term-in').onkeydown = (e) => { if (e.key === 'Enter') go(); };
     try { const d = await api('/api/computer'); S.cp.cards = (d.browser || {}); S.cp.headless = d.headless; S.cp.term = (d.terminal || []); if (d.browser_error) toast('Browser', d.browser_error); } catch (e) { toast('Computer', e.message); }
     const grid = $('#cp-grid');
     if (!(S.bots || []).length) { grid.innerHTML = '<p class="muted">Create a Bot to give it a screen.</p>'; }
@@ -843,7 +865,7 @@
         grid.appendChild(c);
       });
     }
-    $('#cp-term').innerHTML = (S.cp.term || []).slice(-8).map((e) => '<div style="margin-bottom:6px"><div style="font-size:11px;color:var(--muted)">[${esc(e.who || \'bot\')}] ${esc(e.cwd || \'.\')}> ${esc(e.command || \'\')}</div><div style="font-size:11px;white-space:pre-wrap">${esc((e.output || \'\').slice(0, 400))} <span style="color:#5a6478">(exit ${e.exit || 0})</span></div></div>').join('') || '<p class="muted">No terminal history.</p>';
+    $('#cp-term').innerHTML = (S.cp.term || []).slice(-8).map((e) => `<div style="margin-bottom:6px"><div style="font-size:11px;color:var(--muted)">[${esc(e.who || 'bot')}] ${esc(e.cwd || '.')}> ${esc(e.command || '')}</div><div style="font-size:11px;white-space:pre-wrap">${esc((e.output || '').slice(0, 400))} <span style="color:#5a6478">(exit ${e.exit || 0}${e.sandbox === 'bwrap' ? ' · sandboxed' : e.sandbox === 'unavailable' ? ' · sandbox unavailable' : ''})</span></div></div>`).join('') || '<p class="muted">No terminal history.</p>';
   }
   window.cpTake = async (bid) => { try { await api('/api/bots/' + bid + '/takeover', { body: { action: 'start' } }); openScreen(bid); } catch (e) { toast('Takeover', e.message); } };
   window.cpScreen = (bid) => openScreen(bid);

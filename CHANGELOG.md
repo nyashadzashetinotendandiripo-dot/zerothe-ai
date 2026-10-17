@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- **Command sandbox (bubblewrap).** On Linux (the cloud app, Docker, remote mode) every terminal command now runs inside a real OS sandbox: the host root is replaced by a tmpfs that mounts only read-only system directories plus your workspace (read-write), in a private PID namespace with a throwaway $HOME and /tmp — host files, credentials and other processes are simply not there. Network stays allowed by default (Settings > Computer > Sandbox network to cut it). Settings > Computer > Command sandbox: Auto (default — uses bwrap when installed, plain when not), Always (refuse to run unsandboxed), Off. Terminal results and the phone's Computer page show "sandboxed" so you can see it working. Windows desktops keep the old behaviour (no OS sandbox there). Also fixes the phone's Settings page not showing saved values (it read dotted keys against nested data, and selects never pre-selected), and the phone's Command policy select wrote values the backend ignored — it now offers the real Workspace-only / Ask-every-time modes, plus a Run box in the phone's Terminal.
+
 ## 1.6.0
 
 - **Web search.** Bots can now search the live web (`web_search` tool, DuckDuckGo — free, no API key) and answer with cited markdown links: current events, news, docs, anything after the model's training cut-off. Supports `site:` operators (e.g. `site:x.com` for X/Twitter posts). Read-only, so no approval prompt.
