@@ -42,6 +42,10 @@
 
   <section id="view-bots" class="view"></section>
 
+  <section id="view-home" class="view" hidden>
+    <div class="home-wrap"></div>
+  </section>
+
   <section id="view-chat" class="view" hidden>
     <div id="threadbar" class="threadbar">
       <select id="thread-sel" aria-label="Conversation"></select>
@@ -83,9 +87,38 @@
     <button id="scr-done" class="primary wide">Hand back to the Bot</button>
   </section>
 
+  <section id="view-marketplace" class="view" hidden>
+    <div class="mk-wrap"></div>
+  </section>
+  <section id="view-inbox" class="view" hidden>
+    <div class="ib-wrap"></div>
+  </section>
+  <section id="view-computer" class="view" hidden>
+    <div class="cp-wrap"></div>
+  </section>
+  <section id="view-files" class="view" hidden>
+    <div class="fl-wrap"></div>
+  </section>
+  <section id="view-skills" class="view" hidden>
+    <div class="sk-wrap"></div>
+  </section>
+  <section id="view-routines" class="view" hidden>
+    <div class="rt-wrap"></div>
+  </section>
+  <section id="view-plugins" class="view" hidden>
+    <div class="pl-wrap"></div>
+  </section>
+  <section id="view-usage" class="view" hidden>
+    <div class="us-wrap"></div>
+  </section>
+  <section id="view-actionlog" class="view" hidden>
+    <div class="al-wrap"></div>
+  </section>
+
   <nav id="tabs">
-    <button data-view="bots" class="active">Bots</button>
-    <button data-view="approvals">Approvals <span id="badge" hidden>0</span></button>
+    <button data-view="home" class="active">Home</button>
+    <button data-view="bots">Bots</button>
+    <button data-view="inbox">Inbox <span id="badge" hidden>0</span></button>
     <button data-view="settings">Settings</button>
   </nav>
 </main>

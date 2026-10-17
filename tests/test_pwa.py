@@ -1,4 +1,4 @@
-﻿"""The phone web app in a real (mobile-sized) Chromium: sign in with the link, open a Bot, use slash commands."""
+"""The phone web app in a real (mobile-sized) Chromium: sign in with the link, open a Bot, use slash commands."""
 from __future__ import annotations
 
 import os
@@ -17,12 +17,31 @@ from core.engine import Engine  # noqa: E402
 from service.server import create_app  # noqa: E402
 
 SHOTS = os.environ.get("PWA_SHOTS")
+WEB = Path(__file__).resolve().parent.parent / "web"
+
+
+class PwaInstallable(unittest.TestCase):
+    def test_manifest_has_android_icons(self):
+        import json
+        m = json.loads((WEB / "manifest.json").read_text(encoding="utf-8"))
+        self.assertEqual(m.get("display"), "standalone")
+        png = [i for i in m["icons"] if i.get("type") == "image/png"]
+        self.assertTrue(any(i.get("sizes") == "192x192" for i in png), "need a 192px icon for Android")
+        self.assertTrue(any(i.get("sizes") == "512x512" for i in png), "need a 512px icon for Android")
+        self.assertTrue(any("maskable" in (i.get("purpose") or "") for i in png), "need a maskable icon")
+        for i in png:
+            self.assertTrue((WEB / i["src"].lstrip("/")).is_file(), i["src"])
+
+    def test_service_worker_caches_icons(self):
+        sw = (WEB / "sw.js").read_text(encoding="utf-8")
+        self.assertIn("/icon-192.png", sw)
+        self.assertIn("/icon-512.png", sw)
 
 
 class PwaCommands(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        os.environ["OPENGROKBOT_HOME"] = tempfile.mkdtemp(prefix="gbtest-pwa-")
+        os.environ["ZEROTHEBOT_HOME"] = tempfile.mkdtemp(prefix="zttest-pwa-")
         cls.eng = Engine()
         cls.eng.settings.set("notifications.toast", False)
         cls.eng.start()
@@ -47,7 +66,12 @@ class PwaCommands(unittest.TestCase):
             pg = ctx.new_page()
             errs = []
             pg.on("pageerror", lambda e: errs.append(str(e)))
-            pg.goto(f"http://127.0.0.1:{self.port}/?token={self.token}")
+            pg.goto(f"http://127.0.0.1:{self.port}/")
+            pg.wait_for_selector("#email")
+            pg.fill("#email", "pwa@test.dev")
+            pg.fill("#token", "pwa pass 123")
+            pg.fill("#token2", "pwa pass 123")
+            pg.click("#login-btn")
             pg.wait_for_selector("[data-bot]")
             pg.click("[data-bot]")
             pg.wait_for_selector("#input")
