@@ -92,8 +92,7 @@
       try { await api('/api/bots/from_template', { body: { template: t.id } }); await loadBootstrap(); }
       catch (err) { b.disabled = false; b.textContent = 'Add'; toast('Could not add', err.message); }
     });
-    $('#new-bot').onclick = () => { const f = $('#new-bot-form'); f.hidden = !f.hidden; if (!f.hidden) $('#nb-name').focus(); };
-    wireBotForm('#new-bot-form', null, async (body) => { const b = await api('/api/bots', { body }); await loadBootstrap(); openBot(b.id); });
+    $('#new-bot').onclick = () => { const f = $('#new-bot-form'); f.hidden = !f.hidden; if (!f.hidden) { f.innerHTML = botFormHTML(); wireBotForm('#new-bot-form', null, async (body) => { const b = await api('/api/bots', { body }); await loadBootstrap(); openBot(b.id); }); $('#nb-name').focus(); } };
   }
 
   function botFormHTML(values = {}) {
@@ -308,7 +307,6 @@
     const perm = 'Notification' in window ? Notification.permission : 'unsupported';
     el.innerHTML = `<div class="card"><b>AI keys</b><p class="muted">Your Bots think through these providers. Keys stay on your server, never on this phone.</p>` +
       ['openai', 'anthropic', 'groq', 'openrouter'].map((p) => `<div class="row" style="display:flex;gap:8px;margin-top:8px"><input id="key-${p}" type="password" placeholder="${p} API key" autocomplete="off" style="flex:1;min-width:0"><button data-key="${p}" class="small key-save">Save</button></div>`).join('') + `</div>` +
-      `<div class="card"><b>Password</b><div class="row" style="display:flex;gap:8px;margin-top:8px"><input id="new-pw" type="password" placeholder="New password (8+ characters)" style="flex:1;min-width:0"><button id="pw-go" class="small">Change</button></div></div>` +
       `<div class="card"><b>Notifications</b><p class="muted">Alerts appear here while this page is open.${window.isSecureContext ? '' : ' System notifications need HTTPS.'}</p>` +
       `<p>System notifications: <b>${perm}</b></p>${perm === 'default' ? '<button id="ask-notif" class="primary">Enable</button>' : ''}</div>` +
       `<div class="card"><b>Install</b><p class="muted">Use your browser menu: “Add to Home screen” for the fullscreen app icon.</p></div>` +
@@ -320,11 +318,6 @@
       try { await api('/api/secrets/provider:' + p, { method: 'PUT', body: { value: v } }); $('#key-' + p).value = ''; toast('Saved', p + ' key is on your server.'); }
       catch (e) { toast('Could not save key', e.message); }
     });
-    $('#pw-go').onclick = async () => {
-      const v = $('#new-pw').value;
-      try { await api('/api/password', { body: { password: v } }); $('#new-pw').value = ''; toast('Done', 'Password changed.'); }
-      catch (e) { toast('Could not change password', e.message); }
-    };
     $('#logout').onclick = async () => { document.cookie = 'zt_token=; Max-Age=0; path=/'; location.reload(); };
   }
 
@@ -388,8 +381,8 @@
     updateBadge(); if (S.view === 'bots') renderBots();
     $('#login').hidden = true; $('#app').hidden = false;
     api('/api/commands').then((c) => { S.commands = c; }).catch(() => {});
-    api('/api/providers').then((p) => { S.providers = p; }).catch(() => {});
-    api('/api/templates').then((t) => { S.templates = t; }).catch(() => {});
+    api('/api/providers').then((p) => { S.providers = p; if (S.view === 'bots') renderBots(); }).catch(() => {});
+    api('/api/templates').then((t) => { S.templates = t; if (S.view === 'bots') renderBots(); }).catch(() => {});
   }
 
   // ------------------------------------------------------------------ chat
