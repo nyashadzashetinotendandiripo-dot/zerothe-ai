@@ -3,7 +3,7 @@
   'use strict';
   const $ = (s, el = document) => el.querySelector(s);
   const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
-  const S = { commands: [], bots: [], groups: [], busy: {}, approvals: [], thread: null, threads: [], items: [], stream: {}, view: 'bots', es: null, lastEvent: 0, screenBot: null, screenTimer: null, titleBase: document.title, attach: [], rec: null };
+  const S = { commands: [], bots: [], groups: [], busy: {}, approvals: [], thread: null, threads: [], items: [], stream: {}, view: 'bots', es: null, lastEvent: 0, screenBot: null, screenTimer: null, titleBase: document.title, attach: [], rec: null, providers: [], templates: [] };
 
   // ------------------------------------------------------------------ api
   async function api(path, opts = {}) {
@@ -67,27 +67,82 @@
     const el = $('#view-bots');
     const rows = S.bots.map((b) => {
       const [cls, label] = stateOf(b.id);
+      const p = (S.providers || []).find((x) => x.id === b.profile);
+      const brain = p ? `<div class="job">${esc(p.label || p.id)}${b.model ? ' · ' + esc(b.model) : ''}${p.key_set ? '' : ' · ⚠ no key'}</div>` : '';
       return `<div class="card bot-row" data-bot="${b.id}"><div class="emoji">${esc(b.emoji || '🤖')}</div><div class="meta"><div class="name">${esc(b.name)}</div>` +
-        `<div class="job">${esc(b.job || 'No job yet')}</div></div>${label ? `<span class="pill ${cls}">${label}</span>` : ''}<button class="small edit-bot" data-edit="${b.id}" aria-label="Edit Bot">⚙</button></div>`;
+        `<div class="job">${esc(b.job || 'No job yet')}</div>${brain}</div>${label ? `<span class="pill ${cls}">${label}</span>` : ''}<button class="small edit-bot" data-edit="${b.id}" aria-label="Edit Bot">⚙</button></div>`;
     }).join('');
     const groups = S.groups.map((g) => `<div class="card bot-row" data-group="${g.thread_id}"><div class="emoji">👥</div><div class="meta"><div class="name">${esc(g.name)}</div>` +
       `<div class="job">${esc(g.member_names.join(', '))}</div></div></div>`).join('');
+    const tpl = (S.templates || []).map((t) => `<div class="card tpl-row" data-tpl="${esc(t.id)}"><div class="emoji">${esc(t.emoji || '✨')}</div><div class="meta">` +
+      `<div class="name">${esc(t.name)}</div><div class="job">${esc(t.blurb || '')}</div></div>` +
+      `<button class="small tpl-add" data-add="${esc(t.id)}">Add</button></div>`).join('');
     el.innerHTML = `<button id="new-bot" class="primary wide" type="button">＋ New Bot</button>` +
-      `<div id="new-bot-form" class="card" hidden><input id="nb-name" placeholder="Bot name" maxlength="60">` +
-      `<input id="nb-job" placeholder="Job (e.g. triage my inbox)" style="margin-top:8px">` +
-      `<div class="row" style="display:flex;gap:8px;margin-top:10px"><button id="nb-go" class="primary" type="button">Create</button></div></div>` +
-      (rows || '<p class="muted">No Bots yet — create your first one above.</p>') + (groups ? '<h3 class="section">Group chats</h3>' + groups : '');
+      `<div id="new-bot-form" class="card" hidden>${botFormHTML()}</div>` +
+      (rows || '') + (groups ? '<h3 class="section">Group chats</h3>' + groups : '') +
+      (tpl ? `<h3 class="section">Ready-made Bots</h3>${tpl}` : '') +
+      (!rows && !tpl ? '<p class="muted">No Bots yet — add one below.</p>' : '');
     el.querySelectorAll('[data-bot]').forEach((n) => n.onclick = (e) => { if (e.target.closest('[data-edit]')) return; openBot(n.dataset.bot); });
     el.querySelectorAll('[data-edit]').forEach((b) => b.onclick = (e) => { e.stopPropagation(); openBotEdit(b.dataset.edit); });
     el.querySelectorAll('[data-group]').forEach((n) => n.onclick = () => openThread(n.dataset.group, S.groups.find((g) => g.thread_id === n.dataset.group).name, null));
+    el.querySelectorAll('[data-add]').forEach((b) => b.onclick = async (e) => {
+      const t = S.templates.find((x) => x.id === b.dataset.add);
+      if (!t) return;
+      b.disabled = true; b.textContent = 'Adding…';
+      try { await api('/api/bots/from_template', { body: { template: t.id } }); await loadBootstrap(); }
+      catch (err) { b.disabled = false; b.textContent = 'Add'; toast('Could not add', err.message); }
+    });
     $('#new-bot').onclick = () => { const f = $('#new-bot-form'); f.hidden = !f.hidden; if (!f.hidden) $('#nb-name').focus(); };
-    $('#nb-go').onclick = async () => {
-      const name = $('#nb-name').value.trim();
-      if (!name) { $('#nb-name').placeholder = 'Name is required'; return; }
+    wireBotForm('#new-bot-form', null, async (body) => { const b = await api('/api/bots', { body }); await loadBootstrap(); openBot(b.id); });
+  }
+
+  function botFormHTML(values = {}) {
+    return `<input id="nb-name" placeholder="Bot name" maxlength="60" value="${esc(values.name || '')}">` +
+      `<input id="nb-job" placeholder="Job (e.g. triage my inbox)" value="${esc(values.job || '')}" style="margin-top:8px">` +
+      `<div class="field"><label>Brain (AI provider)</label>${providerOptions(values.profile)}</div>` +
+      `<div class="field"><label>Model</label><div class="row" style="display:flex;gap:8px"><input id="nb-model" list="model-list" placeholder="Model" value="${esc(values.model || '')}" style="flex:1;min-width:0"><button type="button" id="nb-models" class="small">Find models</button></div>` +
+      `<datalist id="model-list"></datalist></div>`;
+  }
+
+  function providerOptions(sel) {
+    const opts = ['<option value="">No AI (local tools only)</option>']
+      .concat((S.providers || []).map((p) => `<option value="${esc(p.id)}"${p.id === sel ? ' selected' : ''}>${esc(p.label || p.id)}${p.key_set ? ' ✓' : ' ⚠ no key'}</option>`));
+    return `<select id="nb-provider">${opts.join('')}</select>`;
+  }
+
+  function wireBotForm(rootSel, botId, onSubmit) {
+    const root = document.querySelector(rootSel);
+    if (!root) return;
+    const nameEl = root.querySelector('#nb-name');
+    const jobEl = root.querySelector('#nb-job');
+    const provEl = root.querySelector('#nb-provider');
+    const modelEl = root.querySelector('#nb-model');
+    const go = root.querySelector('#nb-go');
+    const modelsBtn = root.querySelector('#nb-models');
+    const fill = (pid) => {
+      const p = (S.providers || []).find((x) => x.id === pid);
+      if (p && !modelEl.value) modelEl.value = p.model || '';
+    };
+    if (provEl) provEl.onchange = () => fill(provEl.value);
+    if (modelsBtn) modelsBtn.onclick = async () => {
+      const pid = provEl ? provEl.value : '';
+      if (!pid) { toast('Models', 'Pick a provider first.'); return; }
+      modelsBtn.disabled = true; modelsBtn.textContent = '…';
       try {
-        const b = await api('/api/bots', { body: { name, job: $('#nb-job').value.trim() } });
-        await loadBootstrap(); openBot(b.id);
-      } catch (e) { toast('Could not create Bot', e.message); }
+        const d = await api('/api/providers/' + pid + '/test', { body: {} });
+        const list = root.querySelector('#model-list');
+        if (list) list.innerHTML = (d.models || []).map((m) => `<option value="${esc(m)}">`).join('');
+        toast('Models', d.models && d.models.length ? d.models.length + ' found — tap the model field.' : 'No models listed; type one manually.');
+      } catch (e) { toast('Could not list models', e.message); }
+      modelsBtn.disabled = false; modelsBtn.textContent = 'Find models';
+    };
+    if (go) go.onclick = async () => {
+      const name = nameEl ? nameEl.value.trim() : '';
+      if (!name) { if (nameEl) nameEl.placeholder = 'Name is required'; return; }
+      const body = { name, job: jobEl ? jobEl.value.trim() : '' };
+      if (provEl && provEl.value) body.profile = provEl.value;
+      if (modelEl && modelEl.value.trim()) body.model = modelEl.value.trim();
+      await onSubmit(body);
     };
   }
 
@@ -98,17 +153,18 @@
     const el = $('#view-bots');
     const card = document.createElement('div');
     card.className = 'card';
-    card.innerHTML = `<b>Edit ${esc(b.name)}</b><input id="eb-job" placeholder="Job" value="${esc(b.job || '')}" style="margin-top:8px">` +
+    card.innerHTML = `<b>Edit ${esc(b.name)}</b>${botFormHTML(b)}` +
       `<textarea id="eb-ins" rows="4" placeholder="Instructions (personality, rules…)" style="margin-top:8px">${esc(b.instructions || '')}</textarea>` +
       `<div class="row" style="display:flex;gap:8px;margin-top:10px"><button id="eb-go" class="primary">Save</button><button id="eb-x">Close</button></div>`;
     el.prepend(card);
     card.querySelector('#eb-x').onclick = renderBots;
-    card.querySelector('#eb-go').onclick = async () => {
+    wireBotForm(card, b.id, async (body) => {
+      body.instructions = card.querySelector('#eb-ins').value.trim();
       try {
-        await api('/api/bots/' + botId, { method: 'PUT', body: { job: card.querySelector('#eb-job').value.trim(), instructions: card.querySelector('#eb-ins').value.trim() } });
+        await api('/api/bots/' + botId, { method: 'PUT', body });
         await loadBootstrap();
       } catch (e) { toast('Could not save Bot', e.message); }
-    };
+    });
   }
 
   async function openBot(botId) {
@@ -332,6 +388,8 @@
     updateBadge(); if (S.view === 'bots') renderBots();
     $('#login').hidden = true; $('#app').hidden = false;
     api('/api/commands').then((c) => { S.commands = c; }).catch(() => {});
+    api('/api/providers').then((p) => { S.providers = p; }).catch(() => {});
+    api('/api/templates').then((t) => { S.templates = t; }).catch(() => {});
   }
 
   // ------------------------------------------------------------------ chat
