@@ -68,6 +68,7 @@
     if (v === 'usage') renderUsage();
     if (v === 'actionlog') renderActionLog();
   }
+  window.setView = setView;
   function botById(id) { return S.bots.find((b) => b.id === id); }
   function stateOf(botId) {
     const b = S.busy[botId];
@@ -804,8 +805,8 @@
     const name = prompt('Routine name:'); if (!name) return;
     const bot = S.bots[0].id;
     const cron = prompt('Cron (e.g. 0 8 * * 1-5):', '0 8 * * 1-5'); if (!cron) return;
-    const prompt = prompt('What should the Bot do?'); if (!prompt) return;
-    try { await api('/api/routines', { method: 'POST', body: { bot_id: bot, name, cron, prompt } }); toast('Created', ''); S.rt.rows = await api('/api/routines'); rtRender(); } catch (e) { toast('Create failed', e.message); }
+    const task = prompt('What should the Bot do?'); if (!task) return;
+    try { await api('/api/routines', { method: 'POST', body: { bot_id: bot, name, cron, prompt: task } }); toast('Created', ''); S.rt.rows = await api('/api/routines'); rtRender(); } catch (e) { toast('Create failed', e.message); }
   };
   window.rtEdit = () => toast('Edit', 'Tap a routine row first.');
   window.rtRun = async () => { if (!S.rt.sel) { toast('Run', 'Select a routine.'); return; } try { await api('/api/routines/' + S.rt.sel.id + '/run', { method: 'POST' }); toast('Running', ''); } catch (e) { toast('Run failed', e.message); } };
