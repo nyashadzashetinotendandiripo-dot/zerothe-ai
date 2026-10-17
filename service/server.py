@@ -1,9 +1,10 @@
 """Local HTTP API used by the desktop app and the mobile PWA. Everything except /api/health and the
-OAuth callback requires the access token (Bearer header, ?token= or the gb_token cookie)."""
+OAuth callback requires the access token (Bearer header, ?token= or the zt_token cookie)."""
 from __future__ import annotations
 
 import asyncio
 import base64
+import hashlib
 import hmac
 import json
 import queue
