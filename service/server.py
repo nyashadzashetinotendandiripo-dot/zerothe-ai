@@ -74,14 +74,42 @@ def create_app(engine: Engine, token: str) -> FastAPI:
         fails[ip] = recent
         if len(recent) >= 10:
             raise HTTPException(429, "Too many failed attempts. Wait a few minutes.")
-        ok = auth_mod.credential_ok(tok, token)
+        ok = bool(tok) and hmac.compare_digest(tok.encode(), token.encode())
         if not ok:
             fails[ip].append(now)
         return ok
 
     def auth(request: Request) -> None:
-        # Single-owner app, owner's explicit call: no login gate. The URL itself is the secret.
-        return None
+        # Signed-in session (email/password or Google) or the service token.
+        if read_session(request.cookies):
+            return
+        tok = presented(request)
+        if tok and hmac.compare_digest(tok.encode(), token.encode()):
+            return
+        raise HTTPException(401, "Sign in required.")
+
+    def read_session(cookies) -> str | None:
+        """Email from a valid signed session cookie, else None."""
+        raw = cookies.get("zt_session") or ""
+        if not raw or "." not in raw:
+            return None
+        payload, sig = raw.split(".", 1)
+        want = hmac.new(token.encode(), payload.encode(), hashlib.sha256).hexdigest()
+        if not hmac.compare_digest(sig, want):
+            return None
+        try:
+            d = json.loads(base64.urlsafe_b64decode(payload + "=" * (-len(payload) % 4)))
+        except (ValueError, TypeError):
+            return None
+        if d.get("exp", 0) < time.time():
+            return None
+        return d.get("email")
+
+    def issue_session(response: Response, addr: str) -> None:
+        payload = base64.urlsafe_b64encode(
+            json.dumps({"email": addr, "exp": time.time() + 86400 * 30}).encode()).decode().rstrip("=")
+        sig = hmac.new(token.encode(), payload.encode(), hashlib.sha256).hexdigest()
+        response.set_cookie("zt_session", payload + "." + sig, httponly=True, samesite="strict", max_age=86400 * 30)
 
     api = Depends(auth)
 
@@ -103,25 +131,44 @@ def create_app(engine: Engine, token: str) -> FastAPI:
     @app.post("/api/login")
     def login(request: Request, response: Response, body: dict = Body(...)) -> dict:
         ip = request.client.host if request.client else "?"
-        cred = str(body.get("token", "") or body.get("password", "")).strip()
-        if not check_token(cred, ip):
-            raise HTTPException(401, "That password is not right.")
-        response.set_cookie("zt_token", token, httponly=True, samesite="strict", max_age=86400 * 365)
-        return {"ok": True}
+        addr = str(body.get("email", "")).strip().lower()
+        cred = str(body.get("password", "") or body.get("token", "")).strip()
+        if not auth_mod.verify_password(addr, cred):
+            if not check_token(cred, ip):   # service token still works for the desktop/API
+                raise HTTPException(401, "That email or password is not right.")
+        issue_session(response, addr or auth_mod.email() or "owner")
+        return {"ok": True, "email": addr or auth_mod.email()}
 
     @app.get("/api/auth_status")
     def auth_status() -> dict:
-        return {"setup_needed": not auth_mod.has_password()}
+        return {"needs_setup": not auth_mod.has_account(), "signed_in": False,
+                "email": auth_mod.email(), "google_ready": bool(auth_mod.google_email())}
 
-    @app.post("/api/setup")
-    def setup(request: Request, response: Response, body: dict = Body(...)) -> dict:
-        if auth_mod.has_password():
-            raise HTTPException(403, "This app already has a password. Sign in to change it.")
+    @app.post("/api/signup")
+    def signup(request: Request, response: Response, body: dict = Body(...)) -> dict:
+        if auth_mod.has_account():
+            raise HTTPException(403, "This app already has an account. Sign in instead.")
         try:
-            auth_mod.set_password(str(body.get("password", "")))
+            auth_mod.create_account(str(body.get("email", "")), str(body.get("password", "")))
         except ValueError as e:
             raise HTTPException(400, str(e))
-        response.set_cookie("zt_token", token, httponly=True, samesite="strict", max_age=86400 * 365)
+        issue_session(response, auth_mod.email())
+        return {"ok": True, "email": auth_mod.email()}
+
+    @app.post("/api/google")
+    def google_login(request: Request, response: Response, body: dict = Body(...)) -> dict:
+        if not auth_mod.has_account():
+            raise HTTPException(403, "Create your account first (email + password), then sign in with Google.")
+        try:
+            addr = auth_mod.verify_google(str(body.get("id_token", "")))
+        except ValueError as e:
+            raise HTTPException(401, str(e))
+        issue_session(response, addr)
+        return {"ok": True, "email": addr}
+
+    @app.post("/api/logout")
+    def logout(response: Response) -> dict:
+        response.delete_cookie("zt_session")
         return {"ok": True}
 
     @app.post("/api/password", dependencies=[api])
@@ -152,6 +199,7 @@ def create_app(engine: Engine, token: str) -> FastAPI:
         s = eng.settings.all()
         s.pop("providers", None)
         s["secrets_backend"] = secrets.backend_available()
+        s["google_client_id"] = eng.settings.get("auth.google_client_id", "") or ""
         return s
 
     @app.get("/api/status", dependencies=[api])

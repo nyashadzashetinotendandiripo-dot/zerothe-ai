@@ -318,7 +318,7 @@
       try { await api('/api/secrets/provider:' + p, { method: 'PUT', body: { value: v } }); $('#key-' + p).value = ''; toast('Saved', p + ' key is on your server.'); }
       catch (e) { toast('Could not save key', e.message); }
     });
-    $('#logout').onclick = async () => { document.cookie = 'zt_token=; Max-Age=0; path=/'; location.reload(); };
+    $('#logout').onclick = async () => { try { await api('/api/logout', { body: {} }); } catch (e) { /* ignore */ } document.cookie = 'zt_session=; Max-Age=0; path=/'; location.reload(); };
   }
 
   // ----------------------------------------------------------------- toasts
@@ -383,6 +383,7 @@
     api('/api/commands').then((c) => { S.commands = c; }).catch(() => {});
     api('/api/providers').then((p) => { S.providers = p; if (S.view === 'bots') renderBots(); }).catch(() => {});
     api('/api/templates').then((t) => { S.templates = t; if (S.view === 'bots') renderBots(); }).catch(() => {});
+    api('/api/settings').then((s) => { S.settings = s; $('#google-btn').hidden = !(s.google_client_id || ''); }).catch(() => {});
   }
 
   // ------------------------------------------------------------------ chat
@@ -487,22 +488,63 @@
   }
   const input = (ev) => api('/api/bots/' + S.screenBot + '/screen/input', { body: ev }).catch((e) => toast('Browser', e.message));
 
-  function wire() {
-    $('#login-btn').onclick = async () => {
-      const pw = $('#token').value, err = $('#login-err');
-      err.textContent = '';
-      try {
-        if (S.setupMode) {
-          if (pw !== $('#token2').value) { err.textContent = 'Passwords do not match.'; return; }
-          await api('/api/setup', { body: { password: pw } });
-        } else {
-          await api('/api/login', { body: { password: pw } });
-        }
-        $('#token').value = ''; $('#token2').value = '';
-        await loadBootstrap(); connect(); setView('bots');
+  function setAuthMode(signup) {
+    S.signupMode = signup;
+    $('#login-sub').textContent = signup ? 'Create your account.' : 'Sign in to your app.';
+    $('#email').placeholder = 'Email';
+    $('#token').placeholder = signup ? 'Choose a password (8+ characters)' : 'Password';
+    $('#token2').hidden = !signup;
+    $('#login-btn').textContent = signup ? 'Create account' : 'Sign in';
+    $('#signup-toggle').innerHTML = signup ? 'Already have an account? <a href="#" id="to-signup">Sign in</a>' : 'New here? <a href="#" id="to-signup">Create an account</a>';
+    $('#login-err').textContent = '';
+    const t = $('#to-signup'); if (t) t.onclick = (e) => { e.preventDefault(); setAuthMode(!signup); };
+  }
+
+  async function signInWithGoogle() {
+    const err = $('#login-err');
+    const clientId = (S.settings && S.settings.google_client_id) || '';
+    if (!clientId) { err.textContent = 'Google sign-in is not set up yet — sign in with email instead.'; return; }
+    err.textContent = '';
+    try {
+      if (!window.google || !window.google.accounts) {
+        await new Promise((res, rej) => {
+          const s = document.createElement('script');
+          s.src = 'https://accounts.google.com/gsi/client';
+          s.onload = res; s.onerror = () => rej(new Error('Could not load Google sign-in.'));
+          document.head.appendChild(s);
+        });
       }
-      catch (e) { err.textContent = e.message; }
+      const resp = await new Promise((res, rej) => {
+        window.google.accounts.id.initialize({ client_id: clientId, callback: res, auto_select: false });
+        window.google.accounts.id.prompt((n) => { if (n && n.isNotDisplayed && n.isNotDisplayed()) rej(new Error('Google sign-in was dismissed.')); });
+      });
+      const d = await api('/api/google', { body: { id_token: resp.credential } });
+      await loadBootstrap(); connect(); setView('bots');
+      toast('Signed in', d.email || 'Welcome back.');
+    } catch (e) { err.textContent = e.message; }
+  }
+
+  function wire() {
+    const go = async () => {
+      const email = $('#email').value.trim();
+      const pw = $('#token').value;
+      const err = $('#login-err');
+      err.textContent = '';
+      if (!email || !pw) { err.textContent = 'Enter your email and password.'; return; }
+      try {
+        if (S.signupMode) {
+          if (pw !== $('#token2').value) { err.textContent = 'Passwords do not match.'; return; }
+          await api('/api/signup', { body: { email, password: pw } });
+        } else {
+          await api('/api/login', { body: { email, password: pw } });
+        }
+        await loadBootstrap(); connect(); setView('bots');
+      } catch (e) { err.textContent = e.message; }
     };
+    $('#login-btn').onclick = go;
+    for (const id of ['email', 'token']) $('#' + id).addEventListener('keydown', (e) => { if (e.key === 'Enter') go(); });
+    $('#to-signup').onclick = (e) => { e.preventDefault(); setAuthMode(!S.signupMode); };
+    $('#google-btn').onclick = signInWithGoogle;
     $('#token').addEventListener('keydown', (e) => { if (e.key === 'Enter') $('#login-btn').click(); });
     document.querySelectorAll('#tabs button').forEach((b) => b.onclick = () => setView(b.dataset.view));
     $('#back').onclick = () => { S.thread = null; setView('bots'); };
@@ -541,8 +583,13 @@
   async function start() {
     wire();
     if ('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js').catch(() => {});
-    try { await loadBootstrap(); connect(); setView('bots'); }
-    catch (e) { toast('Could not reach the server', 'Check your connection and reopen the app.'); }
+    try {
+      const st = await api('/api/auth_status');
+      S.settings = st.settings || {};
+      if (st.needs_setup) { setAuthMode(true); showLogin(); return; }
+      try { await loadBootstrap(); connect(); setView('bots'); return; } catch (e) { /* fall through to sign-in */ }
+      showLogin();
+    } catch (e) { toast('Could not reach the server', 'Check your connection and reopen the app.'); }
     setInterval(() => { if (S.view === 'chat') updateChatStatus(); }, 1500);
   }
   start();

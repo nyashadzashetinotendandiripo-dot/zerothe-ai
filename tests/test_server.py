@@ -9,7 +9,7 @@ import unittest
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-os.environ["OPENGROKBOT_HOME"] = tempfile.mkdtemp(prefix="gbtest-srv-")
+os.environ["ZEROTHEBOT_HOME"] = tempfile.mkdtemp(prefix="zttest-srv-")
 
 from fastapi.testclient import TestClient  # noqa: E402
 
@@ -22,9 +22,10 @@ TOKEN = "test-token-123"
 class ServerTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        os.environ["OPENGROKBOT_HOME"] = tempfile.mkdtemp(prefix="gbtest-")   # isolated data dir per test class
+        os.environ["ZEROTHEBOT_HOME"] = tempfile.mkdtemp(prefix="zttest-")   # isolated data dir per test class
         cls.eng = Engine()
         cls.eng.settings.set("notifications.toast", False)
+        cls.eng.settings.set("memory.auto_reflect", False)
         cls.eng.start()
         cls.c = TestClient(create_app(cls.eng, TOKEN))
         cls.h = {"Authorization": f"Bearer {TOKEN}"}
@@ -35,13 +36,22 @@ class ServerTests(unittest.TestCase):
 
     def test_auth_required(self):
         self.assertEqual(self.c.get("/api/health").status_code, 200)
-        # Single-owner app: no login gate; the URL itself is the secret.
-        self.assertEqual(self.c.get("/api/bots").status_code, 200)
-        self.assertEqual(self.c.get("/api/bots", headers={"Authorization": "Bearer nope"}).status_code, 200)
+        # Sign-in gate: no session, no token -> 401
+        self.assertEqual(self.c.get("/api/bots").status_code, 401)
+        self.assertEqual(self.c.get("/api/bots", headers={"Authorization": "Bearer nope"}).status_code, 401)
+        # Service token (desktop/API) still works
         self.assertEqual(self.c.get("/api/bots", headers=self.h).status_code, 200)
-        r = self.c.post("/api/login", json={"token": TOKEN})
-        self.assertEqual(r.status_code, 200)
-        self.assertIn("zt_token", r.cookies)
+        # Email/password sign-up then sign-in
+        self.assertTrue(self.c.get("/api/auth_status").json()["needs_setup"])
+        r = self.c.post("/api/signup", json={"email": "owner@test.dev", "password": "test pass 123"})
+        self.assertEqual(r.status_code, 200, r.text)
+        self.assertIn("zt_session", r.cookies)
+        self.assertFalse(self.c.get("/api/auth_status").json()["needs_setup"])
+        self.assertEqual(self.c.get("/api/bots").status_code, 200)   # session cookie now valid
+        r = self.c.post("/api/login", json={"email": "owner@test.dev", "password": "wrong"})
+        self.assertEqual(r.status_code, 401)
+        r = self.c.post("/api/login", json={"email": "owner@test.dev", "password": "test pass 123"})
+        self.assertEqual(r.status_code, 200, r.text)
 
     def test_pwa_served_and_token_link(self):
         r = self.c.get("/", follow_redirects=False)
@@ -49,7 +59,7 @@ class ServerTests(unittest.TestCase):
         self.assertIn("ZerotheBot", r.text)
         r = self.c.get(f"/?token={TOKEN}", follow_redirects=False)
         self.assertEqual(r.status_code, 303)
-        self.assertIn("gb_token", r.headers.get("set-cookie", ""))
+        self.assertIn("zt_token", r.headers.get("set-cookie", ""))
         self.assertEqual(self.c.get("/manifest.json").status_code, 200)
         self.assertEqual(self.c.get("/sw.js").status_code, 200)
         self.assertEqual(self.c.get("/../core/db.py").status_code, 404)
@@ -92,6 +102,22 @@ class ServerTests(unittest.TestCase):
         self.assertEqual(self.c.put("/api/providers/bad", headers=self.h, json={"kind": "nope"}).status_code, 400)
         self.assertEqual(self.c.put("/api/secrets/not-allowed", headers=self.h, json={"value": "x"}).status_code, 400)
         self.assertEqual(self.c.put("/api/settings", headers=self.h, json={"network": {"mode": "open", "allow": [], "deny": ["x.test"], "block_private": True}}).status_code, 200)
+
+    def test_provider_test_full_reports_chat_failure(self):
+        self.assertEqual(self.c.put("/api/providers/guardcheck", headers=self.h,
+                                    json={"label": "Guard", "kind": "openai", "base_url": "http://127.0.0.1:9/v1",
+                                          "model": "some-model", "needs_key": False}).status_code, 200)
+        # full Test: unreachable endpoint is reported as a chat failure instead of only listing models
+        r = self.c.post("/api/providers/guardcheck/test", headers=self.h, json={"full": True})
+        self.assertEqual(r.status_code, 200, r.text)
+        d = r.json()
+        self.assertIn("models", d)
+        self.assertIn("warnings", d)
+        self.assertIsNotNone(d["chat"])
+        self.assertFalse(d["chat"]["ok"])
+        self.assertIn(d["chat"]["kind"], ("network", "unknown", "server"))
+        # the fast path (used by the model dropdown) still fails like before on an unreachable endpoint
+        self.assertNotEqual(self.c.post("/api/providers/guardcheck/test", headers=self.h, json={}).status_code, 200)
 
     def test_files_terminal_and_workspace_sandbox(self):
         self.assertEqual(self.c.put("/api/computer/file", headers=self.h, json={"path": "shared/hello.txt", "content": "hi"}).status_code, 200)

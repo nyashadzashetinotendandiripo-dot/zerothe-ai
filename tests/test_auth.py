@@ -1,62 +1,59 @@
-"""Unit tests for core/auth.py (password login). Secrets backend is faked in-memory."""
+"""Unit tests for core/auth.py (email/password + Google account sign-in)."""
+import tempfile
 import unittest
+from pathlib import Path
 from unittest import mock
 
 from core import auth
 
 
-class AuthTest(unittest.TestCase):
+class AccountTest(unittest.TestCase):
     def setUp(self):
-        self.store = {}
-        self.p = mock.patch.multiple("core.secrets", get_secret=self.store.get, set_secret=lambda n, v: self.store.__setitem__(n, v))
-        self.p.start()
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        patcher = mock.patch("core.paths.data_dir", return_value=Path(self.tmp.name))
+        patcher.start()
+        self.addCleanup(patcher.stop)
 
-    def tearDown(self):
-        self.p.stop()
+    def test_no_account_initially(self):
+        self.assertFalse(auth.has_account())
+        self.assertEqual(auth.email(), "")
 
-    def test_no_password_initially(self):
-        self.assertFalse(auth.has_password())
-        self.assertFalse(auth.verify("anything"))
+    def test_create_and_verify(self):
+        auth.create_account("Owner@Example.com", "correct horse 123")
+        self.assertTrue(auth.has_account())
+        self.assertEqual(auth.email(), "owner@example.com")
+        self.assertTrue(auth.verify_password("owner@example.com", "correct horse 123"))
+        self.assertTrue(auth.verify_password("OWNER@example.com", "correct horse 123"))  # case-insensitive
+        self.assertFalse(auth.verify_password("owner@example.com", "wrong"))
+        self.assertFalse(auth.verify_password("someone@example.com", "correct horse 123"))
 
-    def test_roundtrip(self):
-        auth.set_password("correct horse 123")
-        self.assertTrue(auth.has_password())
-        self.assertTrue(auth.verify("correct horse 123"))
-        self.assertFalse(auth.verify("wrong"))
-        self.assertFalse(auth.verify(""))
+    def test_password_never_plaintext(self):
+        auth.create_account("a@example.com", "super secret pw")
+        raw = (Path(self.tmp.name) / "account.json").read_text()
+        self.assertNotIn("super secret pw", raw)
 
-    def test_too_short(self):
+    def test_invalid_email(self):
         with self.assertRaises(ValueError):
-            auth.set_password("short")
+            auth.create_account("not-an-email", "longenough1")
 
-    def test_hash_not_plaintext(self):
-        auth.set_password("some secret pw")
-        self.assertNotIn("some secret pw", self.store.get(auth.SECRET_NAME, ""))
+    def test_too_short_password(self):
+        with self.assertRaises(ValueError):
+            auth.create_account("a@example.com", "short")
 
-    def test_credential_ok(self):
-        auth.set_password("phone login 1")
-        self.assertTrue(auth.credential_ok("TOK", "TOK"))       # service token still works
-        self.assertTrue(auth.credential_ok("phone login 1", "TOK"))  # password works too
-        self.assertFalse(auth.credential_ok("nope", "TOK"))
-        self.assertFalse(auth.credential_ok("", "TOK"))
+    def test_change_password(self):
+        auth.create_account("a@example.com", "first password 1")
+        auth.set_password("second password 2")
+        self.assertFalse(auth.verify_password("a@example.com", "first password 1"))
+        self.assertTrue(auth.verify_password("a@example.com", "second password 2"))
 
-    def test_headless_fallback_file(self):
-        """No credential store (cloud VM): the salted hash goes to a 0600 file, never plaintext."""
-        import tempfile
-        from pathlib import Path
-        from core import secrets as secrets_mod
-        with tempfile.TemporaryDirectory() as td:
-            with mock.patch.object(secrets_mod, "set_secret",
-                                   side_effect=secrets_mod.SecretStoreError("no store")), \
-                 mock.patch.object(secrets_mod, "get_secret", return_value=None), \
-                 mock.patch("core.paths.data_dir", return_value=Path(td)):
-                auth.set_password("cloud password 9")
-                f = Path(td) / auth._FALLBACK_FILE
-                self.assertTrue(f.is_file())
-                self.assertNotIn("cloud password 9", f.read_text())
-                self.assertTrue(auth.has_password())
-                self.assertTrue(auth.verify("cloud password 9"))
-                self.assertFalse(auth.verify("wrong"))
+    def test_google_allow_list(self):
+        auth.create_account("a@example.com", "password 123")
+        self.assertEqual(auth.google_email(), "")
+        acc = auth._read_account()
+        acc["google_email"] = "owner@gmail.com"
+        auth._write_account(acc)
+        self.assertEqual(auth.google_email(), "owner@gmail.com")
 
 
 if __name__ == "__main__":

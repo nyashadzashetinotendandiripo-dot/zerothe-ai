@@ -19,10 +19,16 @@
   <div class="login-card">
     <div class="logo">🤖</div>
     <h1>ZerotheBot</h1>
-    <p class="muted" id="login-sub">Sign in with your password.</p>
+    <p class="muted" id="login-sub">Sign in to your app.</p>
+    <input id="email" type="email" placeholder="Email" autocomplete="email" inputmode="email">
     <input id="token" type="password" placeholder="Password" autocomplete="current-password">
     <input id="token2" type="password" placeholder="Repeat password" hidden>
     <button id="login-btn" class="primary">Sign in</button>
+    <p id="signup-toggle" class="muted">New here? <a href="#" id="to-signup">Create an account</a></p>
+    <div class="divider"><span>or</span></div>
+    <button id="google-btn" class="google" type="button" hidden>
+      <span class="g">G</span> Continue with Google
+    </button>
     <p id="login-err" class="err"></p>
   </div>
 </section>
