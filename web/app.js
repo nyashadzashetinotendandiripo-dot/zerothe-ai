@@ -92,19 +92,21 @@
       return `<div class="card bot-row" data-bot="${b.id}"><div class="emoji">${esc(b.emoji || '🤖')}</div><div class="meta"><div class="name">${esc(b.name)}</div>` +
         `<div class="job">${esc(b.job || 'No job yet')}</div>${brain}</div>${label ? `<span class="pill ${cls}">${label}</span>` : ''}<button class="small edit-bot" data-edit="${b.id}" aria-label="Edit Bot">⚙</button></div>`;
     }).join('');
-    const groups = S.groups.map((g) => `<div class="card bot-row" data-group="${g.thread_id}"><div class="emoji">👥</div><div class="meta"><div class="name">${esc(g.name)}</div>` +
-      `<div class="job">${esc(g.member_names.join(', '))}</div></div></div>`).join('');
+    const groups = S.groups.map((g, i) => `<div class="card bot-row" data-group="${g.thread_id}"><div class="emoji">👥</div><div class="meta"><div class="name">${esc(g.name)}</div>` +
+      `<div class="job">${esc(g.member_names.join(', '))}</div></div><button class="small edit-bot" data-gedit="${i}" aria-label="Edit group">⚙</button></div>`).join('');
     const tpl = (S.templates || []).map((t) => `<div class="card tpl-row" data-tpl="${esc(t.id)}"><div class="emoji">${esc(t.emoji || '✨')}</div><div class="meta">` +
       `<div class="name">${esc(t.name)}</div><div class="job">${esc(t.blurb || '')}</div></div>` +
       `<button class="small tpl-add" data-add="${esc(t.id)}">Add</button></div>`).join('');
     el.innerHTML = `<button id="new-bot" class="primary wide" type="button">＋ New Bot</button>` +
       `<div id="new-bot-form" class="card" hidden>${botFormHTML()}</div>` +
-      (rows || '') + (groups ? '<h3 class="section">Group chats</h3>' + groups : '') +
+      (rows || '') + (groups ? '<h3 class="section" style="display:flex;justify-content:space-between;align-items:center">Group chats <button id="new-group" class="small">＋ New group</button></h3>' + groups : '<h3 class="section" style="display:flex;justify-content:space-between;align-items:center">Group chats <button id="new-group" class="small">＋ New group</button></h3>') +
       (tpl ? `<h3 class="section">Ready-made Bots</h3>${tpl}` : '') +
-      (!rows && !tpl ? '<p class="muted">No Bots yet — add one below.</p>' : '');
+      (!rows && !tpl && !groups ? '<p class="muted">No Bots yet — add one below.</p>' : '');
     el.querySelectorAll('[data-bot]').forEach((n) => n.onclick = (e) => { if (e.target.closest('[data-edit]')) return; openBot(n.dataset.bot); });
     el.querySelectorAll('[data-edit]').forEach((b) => b.onclick = (e) => { e.stopPropagation(); openBotEdit(b.dataset.edit); });
-    el.querySelectorAll('[data-group]').forEach((n) => n.onclick = () => openThread(n.dataset.group, S.groups.find((g) => g.thread_id === n.dataset.group).name, null));
+    el.querySelectorAll('[data-group]').forEach((n) => n.onclick = (e) => { if (e.target.closest('[data-gedit]')) return; openThread(n.dataset.group, S.groups.find((g) => g.thread_id === n.dataset.group).name, null); });
+    el.querySelectorAll('[data-gedit]').forEach((b) => b.onclick = (e) => { e.stopPropagation(); grpEdit(S.groups[parseInt(b.dataset.gedit, 10)]); });
+    const ng = document.getElementById('new-group'); if (ng) ng.onclick = () => grpEdit(null);
     el.querySelectorAll('[data-add]').forEach((b) => b.onclick = async (e) => {
       const t = S.templates.find((x) => x.id === b.dataset.add);
       if (!t) return;
@@ -165,26 +167,120 @@
     };
   }
 
+  // ------------------------------------------------------------ bot editor (full)
+  const EB_TABS = ['Profile', 'Model', 'Access', 'Memory', 'Manage'];
+  let eb = { bot: null, tab: 'Profile', mem: [], rules: [] };
   async function openBotEdit(botId) {
     let b;
     try { b = await api('/api/bots/' + botId); }
     catch (e) { toast('Could not open Bot', e.message); return; }
-    const el = $('#view-bots');
-    const card = document.createElement('div');
-    card.className = 'card';
-    card.innerHTML = `<b>Edit ${esc(b.name)}</b>${botFormHTML(b)}` +
-      `<textarea id="eb-ins" rows="4" placeholder="Instructions (personality, rules…)" style="margin-top:8px">${esc(b.instructions || '')}</textarea>` +
-      `<div class="row" style="display:flex;gap:8px;margin-top:10px"><button id="eb-go" class="primary">Save</button><button id="eb-x">Close</button></div>`;
-    el.prepend(card);
-    card.querySelector('#eb-x').onclick = renderBots;
-    wireBotForm(card, b.id, async (body) => {
-      body.instructions = card.querySelector('#eb-ins').value.trim();
-      try {
-        await api('/api/bots/' + botId, { method: 'PUT', body });
-        await loadBootstrap();
-      } catch (e) { toast('Could not save Bot', e.message); }
-    });
+    eb = { bot: b, tab: 'Profile', mem: [], rules: b.rules || [] };
+    try { eb.mem = await api('/api/bots/' + botId + '/memory'); } catch (e) { eb.mem = []; }
+    renderBotEditor();
   }
+  function renderBotEditor() {
+    const b = eb.bot; const el = $('#view-bots');
+    let overlay = document.getElementById('bot-editor');
+    if (!overlay) { overlay = document.createElement('div'); overlay.id = 'bot-editor'; overlay.className = 'editor-overlay'; document.body.appendChild(overlay); }
+    overlay.innerHTML = '<div class="editor-sheet"><div class="editor-head"><span class="emoji" id="be-emoji">' + esc(b.emoji || '🤖') + '</span><div><b id="be-title">' + esc(b.name) + '</b><div style="font-size:11px;color:var(--muted)">' + esc(b.job || '') + '</div></div><button id="be-close" style="margin-left:auto">✕</button></div>' +
+      '<div class="editor-tabs">' + EB_TABS.map((t) => '<button data-t="' + t + '"' + (t === eb.tab ? ' class="active"' : '') + '>' + t + '</button>').join('') + '</div>' +
+      '<div class="editor-body" id="be-body"></div></div>';
+    overlay.querySelector('#be-close').onclick = () => { overlay.remove(); renderBots(); };
+    overlay.querySelectorAll('.editor-tabs button').forEach((btn) => btn.onclick = () => { eb.tab = btn.dataset.t; renderBotEditor(); });
+    ebRenderTab();
+  }
+  function ebRenderTab() {
+    const b = eb.bot; const body = document.getElementById('be-body'); if (!body) return;
+    if (eb.tab === 'Profile') {
+      body.innerHTML = '<div class="field"><label>Name</label><input id="be-name" maxlength="60" value="' + esc(b.name || '') + '"></div>' +
+        '<div class="field"><label>Emoji</label><div class="eb-emojis" id="be-emos">' + ['🤖','📥','🧭','📧','📊','✍️','🗂️','🔍','💬','🧠','⚙️','🛡️','📅','🌐','🧵','📈'].map((e) => '<span class="eb-emo' + (e === (b.emoji || '🤖') ? ' sel' : '') + '" data-e="' + e + '">' + e + '</span>').join('') + '</div></div>' +
+        '<div class="field"><label>Job</label><input id="be-job" value="' + esc(b.job || '') + '"></div>' +
+        '<div class="field"><label>Instructions (personality, rules…)</label><textarea id="be-ins" rows="6">' + esc(b.instructions || '') + '</textarea></div>' +
+        ebSaveBar();
+      body.querySelectorAll('.eb-emo').forEach((s) => s.onclick = () => { body.querySelectorAll('.eb-emo').forEach((x) => x.classList.remove('sel')); s.classList.add('sel'); document.getElementById('be-emoji').textContent = s.dataset.e; });
+      ebWireSave(body, () => ({ name: document.getElementById('be-name').value.trim(), emoji: (body.querySelector('.eb-emo.sel') || {}).dataset ? body.querySelector('.eb-emo.sel').dataset.e : b.emoji, job: document.getElementById('be-job').value.trim(), instructions: document.getElementById('be-ins').value }));
+    } else if (eb.tab === 'Model') {
+      body.innerHTML = '<div class="field"><label>Brain (AI provider)</label>' + providerOptions(b.profile) + '</div>' +
+        '<div class="field"><label>Model</label><div class="row" style="display:flex;gap:8px"><input id="be-model" list="be-model-list" placeholder="Model" value="' + esc(b.model || '') + '" style="flex:1;min-width:0"><button type="button" id="be-models" class="small">Find models</button></div><datalist id="be-model-list"></datalist></div>' +
+        ebSaveBar();
+      const provEl = body.querySelector('#nb-provider'); provEl.id = 'be-provider';
+      const fill = () => { const p = (S.providers || []).find((x) => x.id === provEl.value); if (p && !body.querySelector('#be-model').value) body.querySelector('#be-model').value = p.model || ''; };
+      provEl.onchange = fill;
+      body.querySelector('#be-models').onclick = async () => { const pid = provEl.value; if (!pid) { toast('Models', 'Pick a provider first.'); return; } const btn = body.querySelector('#be-models'); btn.disabled = true; btn.textContent = '…'; try { const d = await api('/api/providers/' + pid + '/test', { body: {} }); body.querySelector('#be-model-list').innerHTML = (d.models || []).map((m) => '<option value="' + esc(m) + '">').join(''); toast('Models', (d.models || []).length + ' found.'); } catch (e) { toast('Could not list models', e.message); } btn.disabled = false; btn.textContent = 'Find models'; };
+      ebWireSave(body, () => { const o = { profile: body.querySelector('#be-provider').value, model: body.querySelector('#be-model').value.trim() }; if (!o.profile) delete o.profile; return o; });
+    } else if (eb.tab === 'Access') {
+      const modes = [['ask', 'Ask before acting', 'Every action needs your approval.'], ['auto_review', 'Auto-review', 'Acts, then shows you what it did.'], ['full_access', 'Full access', 'Acts without asking.']];
+      const nets = [['inherit', 'Inherit server policy'], ['allowlist', 'Allowlist only'], ['denylist', 'Block listed hosts'], ['off', 'No network']];
+      const pros = [['off', 'Off'], ['suggest', 'Suggest'], ['act', 'Act']];
+      body.innerHTML = '<div class="field"><label>Approval mode</label>' + modes.map(([v, l, d]) => '<label class="eb-radio"><input type="radio" name="be-approval" value="' + v + '"' + (b.approval_mode === v ? ' checked' : '') + '><span><b>' + l + '</b><br><span class="muted" style="font-size:11px">' + d + '</span></span></label>').join('') + '</div>' +
+        '<div class="field"><label>Network</label><select id="be-net">' + nets.map(([v, l]) => '<option value="' + v + '"' + (b.net_mode === v ? ' selected' : '') + '>' + l + '</option>').join('') + '</select></div>' +
+        '<div class="field"><label>Proactive</label><select id="be-proactive">' + pros.map(([v, l]) => '<option value="' + v + '"' + ((b.proactive || 'off') === v ? ' selected' : '') + '>' + l + '</option>').join('') + '</select></div>' +
+        '<div class="field"><label>Step limit per task</label><input id="be-steps" type="number" min="1" max="500" value="' + (b.step_limit || 40) + '"></div>' +
+        ebSaveBar();
+      ebWireSave(body, () => ({ approval_mode: (body.querySelector('input[name=be-approval]:checked') || {}).value || 'ask', net_mode: body.querySelector('#be-net').value, proactive: body.querySelector('#be-proactive').value, step_limit: parseInt(body.querySelector('#be-steps').value, 10) || 40 }));
+    } else if (eb.tab === 'Memory') {
+      body.innerHTML = '<div class="field"><label>Add a memory (pinned shows first)</label><div style="display:flex;gap:6px"><input id="be-mem-add" placeholder="Prefers short summaries" style="flex:1"><button id="be-mem-go" class="primary">Add</button></div></div>' +
+        '<div class="eb-mem" id="be-mem-list"></div>';
+      const renderMem = () => { const list = body.querySelector('#be-mem-list'); list.innerHTML = (eb.mem || []).length ? eb.mem.map((m) => '<div class="eb-mem-row"><span class="eb-pin' + (m.pinned ? ' on' : '') + '" data-id="' + m.id + '">' + (m.pinned ? '📌' : '·') + '</span><span class="eb-mem-text">' + esc(m.text || '') + '</span><button class="eb-mem-del" data-id="' + m.id + '">✕</button></div>').join('') : '<p class="muted">No memories yet.</p>'; list.querySelectorAll('.eb-pin').forEach((p) => p.onclick = async () => { try { await api('/api/bots/' + b.id + '/memory/' + p.dataset.id, { method: 'PUT', body: { pinned: !(p.classList.contains('on')) } }); eb.mem = await api('/api/bots/' + b.id + '/memory'); renderMem(); } catch (e) { toast('Memory', e.message); } }); list.querySelectorAll('.eb-mem-del').forEach((d) => d.onclick = async () => { if (!confirm('Forget this memory?')) return; try { await api('/api/bots/' + b.id + '/memory/' + d.dataset.id, { method: 'DELETE' }); eb.mem = await api('/api/bots/' + b.id + '/memory'); renderMem(); } catch (e) { toast('Memory', e.message); } }); };
+      body.querySelector('#be-mem-go').onclick = async () => { const t = body.querySelector('#be-mem-add').value.trim(); if (!t) return; try { await api('/api/bots/' + b.id + '/memory', { method: 'POST', body: { kind: 'fact', text: t, pinned: true } }); body.querySelector('#be-mem-add').value = ''; eb.mem = await api('/api/bots/' + b.id + '/memory'); renderMem(); } catch (e) { toast('Memory', e.message); } };
+      renderMem();
+    } else {
+      const paused = !!b.paused, archived = !!b.archived;
+      body.innerHTML = '<div class="field"><label>State</label><div class="eb-state"><button id="be-pause" class="' + (paused ? 'primary' : '') + '">' + (paused ? 'Resume Bot' : 'Pause Bot') + '</button><button id="be-archive" class="' + (archived ? 'primary' : '') + '">' + (archived ? 'Unarchive' : 'Archive') + '</button></div></div>' +
+        '<div class="field"><label>Export</label><div style="display:flex;gap:6px"><button id="be-export">Export (with memory)</button><button id="be-export-nm">Export (no memory)</button></div></div>' +
+        '<div class="field"><label>Danger zone</label><button id="be-del" class="danger">Delete this Bot…</button></div>';
+      body.querySelector('#be-pause').onclick = async () => { try { await api('/api/bots/' + b.id, { method: 'PUT', body: { paused: !paused } }); await loadBootstrap(); openBotEdit(b.id); } catch (e) { toast('Pause failed', e.message); } };
+      body.querySelector('#be-archive').onclick = async () => { try { await api('/api/bots/' + b.id, { method: 'PUT', body: { archived: !archived } }); await loadBootstrap(); openBotEdit(b.id); } catch (e) { toast('Archive failed', e.message); } };
+      const doExport = async (mem) => { try { const d = await api('/api/bots/' + b.id + '/export', { params: { memory: mem ? 'true' : 'false' } }); const blob = new Blob([JSON.stringify(d, null, 2)], { type: 'application/json' }); const url = URL.createObjectURL(blob); const a = document.createElement('a'); a.href = url; a.download = (b.name || 'bot') + '.json'; document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(url), 4000); toast('Exported', b.name + '.json downloaded.'); } catch (e) { toast('Export failed', e.message); } };
+      body.querySelector('#be-export').onclick = () => doExport(true);
+      body.querySelector('#be-export-nm').onclick = () => doExport(false);
+      body.querySelector('#be-del').onclick = async () => { if (!confirm('Delete ' + b.name + '? This cannot be undone.')) return; try { await api('/api/bots/' + b.id, { method: 'DELETE' }); document.getElementById('bot-editor').remove(); await loadBootstrap(); renderBots(); toast('Deleted', b.name + ' removed.'); } catch (e) { toast('Delete failed', e.message); } };
+    }
+  }
+  function ebSaveBar() { return '<div class="eb-actions"><button id="be-save" class="primary">Save</button><button id="be-x">Close</button></div>'; }
+  function ebWireSave(body, getBody) {
+    body.querySelector('#be-x').onclick = () => { const o = document.getElementById('bot-editor'); if (o) o.remove(); renderBots(); };
+    body.querySelector('#be-save').onclick = async () => {
+      const b = eb.bot; let patch; try { patch = getBody(); } catch (e) { return; }
+      if (patch.name !== undefined && !patch.name) { toast('Name is required', ''); return; }
+      try { await api('/api/bots/' + b.id, { method: 'PUT', body: patch }); await loadBootstrap(); eb.bot = await api('/api/bots/' + b.id); toast('Saved', ''); renderBotEditor(); } catch (e) { toast('Could not save', e.message); }
+    };
+  }
+
+  // ------------------------------------------------------------ group create / edit
+  function grpEdit(g) {
+    let overlay = document.getElementById('grp-editor');
+    if (!overlay) { overlay = document.createElement('div'); overlay.id = 'grp-editor'; overlay.className = 'editor-overlay'; document.body.appendChild(overlay); }
+    const memberIds = g ? (g.members || (g.member_ids || [])) : [];
+    const lead = g ? (g.lead_bot || g.lead || '') : '';
+    const bots = (S.bots || []).filter((b) => !b.archived);
+    overlay.innerHTML = '<div class="editor-sheet"><div class="editor-head"><span class="emoji">👥</span><div><b>' + (g ? 'Edit group' : 'New group') + '</b><div style="font-size:11px;color:var(--muted)">Bots that talk together</div></div><button id="grp-close" style="margin-left:auto">✕</button></div>' +
+      '<div class="editor-body">' +
+      '<div class="field"><label>Name</label><input id="grp-name" value="' + esc(g ? g.name : '') + '" placeholder="Ops room"></div>' +
+      '<div class="field"><label>Members (tap to toggle)</label><div class="grp-members" id="grp-mems">' + bots.map((b) => '<span class="grp-mem' + (memberIds.includes(b.id) ? ' sel' : '') + '" data-id="' + b.id + '">' + (b.emoji || '🤖') + ' ' + esc(b.name) + '</span>').join('') + '</div></div>' +
+      '<div class="field"><label>Lead Bot</label><select id="grp-lead"><option value="">None</option>' + bots.map((b) => '<option value="' + b.id + '"' + (b.id === lead ? ' selected' : '') + '>' + esc(b.name) + '</option>').join('') + '</select></div>' +
+      '<div class="field"><label>Goal (optional)</label><textarea id="grp-goal" rows="2">' + esc(g ? (g.goal || '') : '') + '</textarea></div>' +
+      (g ? '<div class="field"><label>Danger zone</label><button id="grp-del" class="danger">Delete group…</button></div>' : '') +
+      '<div class="eb-actions"><button id="grp-save" class="primary">Save</button></div>' +
+      '</div></div>';
+    overlay.querySelectorAll('.grp-mem').forEach((s) => s.onclick = () => s.classList.toggle('sel'));
+    overlay.querySelector('#grp-close').onclick = () => overlay.remove();
+    if (g) overlay.querySelector('#grp-del').onclick = async () => { if (!confirm('Delete group ' + g.name + '?')) return; try { await api('/api/groups/' + g.id, { method: 'DELETE' }); overlay.remove(); await loadBootstrap(); renderBots(); toast('Deleted', ''); } catch (e) { toast('Delete failed', e.message); } };
+    overlay.querySelector('#grp-save').onclick = async () => {
+      const name = overlay.querySelector('#grp-name').value.trim();
+      const members = [...overlay.querySelectorAll('.grp-mem.sel')].map((s) => s.dataset.id);
+      const goal = overlay.querySelector('#grp-goal').value.trim();
+      const lead_bot = overlay.querySelector('#grp-lead').value;
+      if (!name) { toast('Group', 'Name is required.'); return; }
+      if (!members.length) { toast('Group', 'Pick at least one Bot.'); return; }
+      try {
+        if (g) await api('/api/groups/' + g.id, { method: 'PUT', body: { name, members, goal, lead_bot } });
+        else await api('/api/groups', { method: 'POST', body: { name, members, goal, lead: lead_bot } });
+        overlay.remove(); await loadBootstrap(); renderBots(); toast('Saved', name);
+      } catch (e) { toast('Could not save group', e.message); }
+    };
+  }
+  window.grpEdit = grpEdit;
 
   async function openBot(botId) {
     const ths = await api('/api/bots/' + botId + '/threads');
@@ -322,25 +418,79 @@
     document.title = (n ? `(${n}) ` : '') + S.titleBase;
   }
 
+  const SET_TABS = ['Keys', 'Models', 'Approvals', 'Alerts', 'Computer', 'App', 'More'];
+  let setTab = 'Keys';
   async function renderSettings() {
     const el = $('#view-settings');
-    const perm = 'Notification' in window ? Notification.permission : 'unsupported';
-    el.innerHTML = `<div class="card"><b>AI keys</b><p class="muted">Your Bots think through these providers. Keys stay on your server, never on this phone.</p>` +
-      ['openai', 'anthropic', 'groq', 'openrouter'].map((p) => `<div class="row" style="display:flex;gap:8px;margin-top:8px"><input id="key-${p}" type="password" placeholder="${p} API key" autocomplete="off" style="flex:1;min-width:0"><button data-key="${p}" class="small key-save">Save</button></div>`).join('') + `</div>` +
-      `<div class="card"><b>Notifications</b><p class="muted">Alerts appear here while this page is open.${window.isSecureContext ? '' : ' System notifications need HTTPS.'}</p>` +
-      `<p>System notifications: <b>${perm}</b></p>${perm === 'default' ? '<button id="ask-notif" class="primary">Enable</button>' : ''}</div>` +
-      `<div class="card"><b>Install</b><p class="muted">Use your browser menu: “Add to Home screen” for the fullscreen app icon.</p></div>` +
-      `<div class="card"><b>More screens</b><div class="row" style="display:flex;flex-wrap:wrap;gap:6px;margin-top:6px">` +
-      ['marketplace','computer','files','skills','routines','plugins','usage','actionlog'].map((v) => `<button onclick="setView('${v}')" class="small" style="flex:1 1 48%">${v[0].toUpperCase() + v.slice(1)}</button>`).join('') + `</div></div>` +
-      `<div class="card"><button id="logout">Sign out of this phone</button></div>`;
-    if ($('#ask-notif')) $('#ask-notif').onclick = async () => { await Notification.requestPermission(); renderSettings(); };
-    el.querySelectorAll('.key-save').forEach((b) => b.onclick = async () => {
-      const p = b.dataset.key, v = $('#key-' + p).value.trim();
-      if (!v) { toast('AI keys', 'Paste a key first.'); return; }
-      try { await api('/api/secrets/provider:' + p, { method: 'PUT', body: { value: v } }); $('#key-' + p).value = ''; toast('Saved', p + ' key is on your server.'); }
-      catch (e) { toast('Could not save key', e.message); }
-    });
-    $('#logout').onclick = async () => { try { await api('/api/logout', { body: {} }); } catch (e) { /* ignore */ } document.cookie = 'zt_session=; Max-Age=0; path=/'; location.reload(); };
+    if (!S.settings || !Object.keys(S.settings).length) { try { S.settings = await api('/api/settings'); } catch (e) {} }
+    el.innerHTML = '<div class="editor-tabs set-tabs">' + SET_TABS.map((t) => '<button data-t="' + t + '"' + (t === setTab ? ' class="active"' : '') + '>' + t + '</button>').join('') + '</div><div id="set-body"></div>';
+    el.querySelectorAll('.set-tabs button').forEach((b) => b.onclick = () => { setTab = b.dataset.t; renderSettings(); });
+    renderSetBody();
+  }
+  function skField(label, key, type, opts) {
+    const v = S.settings[key];
+    if (type === 'select') return '<div class="field"><label>' + label + '</label><select data-skey="' + key + '">' + opts.map(([ov, ol]) => '<option value="' + ov + '"' + (String(v) === String(ov) ? ' checked' : '') + '>' + ol + '</option>').join('') + '</select></div>';
+    if (type === 'check') return '<label class="eb-radio"><input type="checkbox" data-skey="' + key + '"' + (v ? ' checked' : '') + '><span>' + label + '</span></label>';
+    return '<div class="field"><label>' + label + '</label><input data-skey="' + key + '" type="' + (type || 'text') + '" value="' + esc(v == null ? '' : v) + '"></div>';
+  }
+  async function setSave(extra) {
+    const body = extra || {};
+    document.querySelectorAll('#set-body [data-skey]').forEach((i) => { const k = i.dataset.skey; body[k] = i.type === 'checkbox' ? i.checked : (i.type === 'number' ? parseInt(i.value, 10) || 0 : i.value); });
+    try { S.settings = await api('/api/settings', { method: 'PUT', body }); toast('Settings saved', ''); } catch (e) { toast('Could not save', e.message); }
+  }
+  function renderSetBody() {
+    const b = document.getElementById('set-body'); if (!b) return; const perm = 'Notification' in window ? Notification.permission : 'unsupported';
+    const save = '<div class="eb-actions"><button id="set-save" class="primary">Save section</button></div>';
+    if (setTab === 'Keys') {
+      b.innerHTML = '<div class="card"><b>AI keys</b><p class="muted">Your Bots think through these providers. Keys stay on your server, never on this phone.</p>' +
+        ['openai', 'anthropic', 'groq', 'openrouter', 'mistral', 'xai'].map((p) => '<div class="row" style="display:flex;gap:8px;margin-top:8px"><input id="key-' + p + '" type="password" placeholder="' + p + ' API key" autocomplete="off" style="flex:1;min-width:0"><button data-key="' + p + '" class="small key-save">Save</button></div>').join('') +
+        '<p class="muted" style="margin-top:8px;font-size:11px">Keys on file: ' + esc((S.providers || []).filter((p) => p.key_set).map((p) => p.label || p.id).join(', ') || 'none yet') + '</p></div>' +
+        '<div class="card"><b>System notifications</b><p class="muted">Alerts appear here while this page is open.' + (window.isSecureContext ? '' : ' System notifications need HTTPS.') + '</p><p>Status: <b>' + perm + '</b></p>' + (perm === 'default' ? '<button id="ask-notif" class="primary">Enable notifications</button>' : '') + '</div>';
+      if ($('#ask-notif')) $('#ask-notif').onclick = async () => { await Notification.requestPermission(); renderSettings(); };
+      b.querySelectorAll('.key-save').forEach((btn) => btn.onclick = async () => { const p = btn.dataset.key, v = $('#key-' + p).value.trim(); if (!v) { toast('AI keys', 'Paste a key first.'); return; } try { await api('/api/secrets/provider:' + p, { method: 'PUT', body: { value: v } }); $('#key-' + p).value = ''; toast('Saved', p + ' key is on your server.'); } catch (e) { toast('Could not save key', e.message); } });
+    } else if (setTab === 'Models') {
+      b.innerHTML = '<div class="card"><b>Models & defaults</b>' +
+        skField('Default brain for new Bots', 'default_profile', 'text') +
+        skField('Default steps per task', 'defaults.step_limit', 'number') +
+        skField('Weekly token limit (0 = none)', 'usage.weekly_token_limit', 'number') +
+        skField('Usage resets on weekday (0=Sun…6=Sat)', 'usage.reset_weekday', 'number') +
+        skField('Max response tokens', 'context.max_tokens', 'number') + save + '</div>';
+    } else if (setTab === 'Approvals') {
+      const modes = [['ask', 'Ask before acting'], ['auto_review', 'Auto-review'], ['full_access', 'Full access']];
+      b.innerHTML = '<div class="card"><b>Approvals & safety</b>' +
+        skField('Default approval mode for new Bots', 'approval.default_mode', 'select', modes) +
+        skField('Approval timeout (minutes)', 'approval.timeout_min', 'number') +
+        skField('Escalate after hours (0 = never)', 'approval.escalate_after_hours', 'number') +
+        skField('Routine timeout (minutes)', 'approval.routine_timeout_min', 'number') + save + '</div>';
+    } else if (setTab === 'Alerts') {
+      b.innerHTML = '<div class="card"><b>Notifications</b>' +
+        skField('Toast when a Bot finishes', 'notifications.toast', 'check') +
+        skField('Play a sound', 'notifications.sound', 'check') +
+        skField('Min seconds between alerts', 'notifications.min_turn_seconds', 'number') +
+        skField('ntfy topic (push via ntfy.sh)', 'notifications.ntfy_topic', 'text') +
+        skField('ntfy URL (self-hosted)', 'notifications.ntfy_url', 'text') +
+        skField('Do-not-disturb until (HH:MM, blank = off)', 'notifications.dnd_until', 'text') + save + '</div>';
+    } else if (setTab === 'Computer') {
+      b.innerHTML = '<div class="card"><b>Computer (browser)</b><p class="muted">How Bots drive the browser for web tasks.</p>' +
+        skField('Headless browser (no visible window)', 'computer.headless', 'check') +
+        skField('Command policy', 'computer.command_policy', 'select', [['', 'Default'], ['strict', 'Strict'], ['normal', 'Normal'], ['permissive', 'Permissive']]) + save + '</div>';
+    } else if (setTab === 'App') {
+      b.innerHTML = '<div class="card"><b>App behaviour</b>' +
+        skField('Lazy tool loading (faster start)', 'context.lazy_tools', 'check') +
+        skField('Auto-reflect memories', 'memory.auto_reflect', 'check') +
+        skField('Proactive check-in interval (min)', 'proactive.interval_min', 'number') +
+        skField('Context history tokens', 'context.max_history_tokens', 'number') + save + '</div>';
+    } else {
+      b.innerHTML = '<div class="card"><b>Mobile access</b><p class="muted">This phone connects to your server over the network.</p>' +
+        '<div class="field"><label>Host</label><input value="' + esc(S.settings['mobile.host'] || '') + '" readonly></div>' +
+        '<div class="field"><label>Port</label><input value="' + esc(S.settings['mobile.port'] || '') + '" readonly></div></div>' +
+        '<div class="card"><b>More screens</b><div class="row" style="display:flex;flex-wrap:wrap;gap:6px;margin-top:6px">' +
+        ['marketplace', 'computer', 'files', 'skills', 'routines', 'plugins', 'usage', 'actionlog'].map((v) => '<button onclick="setView(\'' + v + '\')" class="small" style="flex:1 1 48%">' + v[0].toUpperCase() + v.slice(1) + '</button>').join('') + '</div></div>' +
+        '<div class="card"><b>Install</b><p class="muted">Use your browser menu: “Add to Home screen” for the fullscreen app icon.</p></div>' +
+        '<div class="card"><button id="logout">Sign out of this phone</button></div>';
+      $('#logout').onclick = async () => { try { await api('/api/logout', { body: {} }); } catch (e) { /* ignore */ } document.cookie = 'zt_session=; Max-Age=0; path=/'; location.reload(); };
+    }
+    const sb = document.getElementById('set-save'); if (sb) sb.onclick = () => setSave();
   }
 
   // ----------------------------------------------------------------- toasts
@@ -762,10 +912,14 @@
   // ---------------------------------------------------------------- skills
   async function renderSkills() {
     const wrap = $('#view-skills');
-    wrap.innerHTML = '<div class="sk-list" id="sk-list"></div><div class="sk-editor" id="sk-editor" hidden><textarea id="sk-text" rows="10" style="width:100%;background:#0b0d12;border:1px solid var(--line);border-radius:8px;padding:10px;color:var(--text);font-family:ui-monospace,monospace;font-size:12px"></textarea>' +
+    wrap.innerHTML = '<div class="rt-bar"><button onclick="window.skNew()" class="primary">＋ New skill</button><button onclick="window.skRecs()" id="sk-recs-btn">Recordings</button></div>' +
+      '<div class="sk-recs" id="sk-recs" hidden></div>' +
+      '<div class="sk-list" id="sk-list"></div><div class="sk-editor" id="sk-editor" hidden><textarea id="sk-text" rows="12" style="width:100%;background:#0b0d12;border:1px solid var(--line);border-radius:8px;padding:10px;color:var(--text);font-family:ui-monospace,monospace;font-size:12px"></textarea>' +
       '<div class="field" style="margin-top:8px"><label>Test with Bot</label><select id="sk-bot">' + rtBotOptions(null) + '</select></div>' +
-      '<div style="margin-top:8px;display:flex;gap:6px"><button class="primary" onclick="window.skSave()" style="flex:1">Save</button><button onclick="window.skToggle()" style="flex:1">Activate / Draft</button><button onclick="window.skTest()" style="flex:1">Test</button><button onclick="window.skEditorHide()" style="flex:1">Close</button></div><div id="sk-msg" style="margin-top:6px;font-size:12px;color:var(--muted)"></div></div>';
-    try { if (!S.loaded.has('sk')) { S.sk.skills = await api('/api/skills'); S.sk.recs = await api('/api/recordings'); S.loaded.add('sk'); } } catch (e) { toast('Skills', e.message); }
+      '<div style="margin-top:8px;display:flex;gap:6px;flex-wrap:wrap"><button class="primary" id="sk-save-btn" style="flex:1 1 40%">Save</button><button id="sk-status-btn" style="flex:1 1 40%">Activate / Draft</button><button id="sk-test-btn" style="flex:1 1 40%">Test</button><button class="danger" id="sk-del-btn" style="flex:1 1 40%">Delete</button><button id="sk-close-btn" style="flex:1 1 40%">Close</button></div><div id="sk-msg" style="margin-top:6px;font-size:12px;color:var(--muted)"></div></div>';
+    $('#sk-save-btn').onclick = window.skSave; $('#sk-status-btn').onclick = window.skToggle; $('#sk-test-btn').onclick = window.skTest; $('#sk-close-btn').onclick = window.skEditorHide; $('#sk-del-btn').onclick = window.skDel;
+    try { S.sk.skills = await api('/api/skills'); try { S.sk.recs = await api('/api/recordings'); } catch (e) { S.sk.recs = []; } } catch (e) { toast('Skills', e.message); }
+    S.loaded.add('sk');
     skRenderList();
   }
   function skRenderList() {
@@ -776,10 +930,10 @@
       r.onclick = () => skOpen(s.name);
       el.appendChild(r);
     });
-    if (!S.sk.skills.length) el.innerHTML = '<p class="muted">No skills yet.</p>';
+    if (!S.sk.skills.length) el.innerHTML = '<p class="muted">No skills yet — tap “New skill”.</p>';
   }
   window.skOpen = async (name) => {
-    try { const s = await api('/api/skills/' + name); S.sk.cur = name; $('#sk-text').value = s.raw || ''; $('#sk-editor').hidden = false; $('#sk-list').hidden = true; $('#sk-msg').textContent = ''; $('#sk-editor button:nth-of-type(2)').textContent = s.status === 'active' ? 'Make draft' : 'Activate'; } catch (e) { toast('Skill', e.message); }
+    try { const s = await api('/api/skills/' + name); S.sk.cur = name; $('#sk-text').value = s.raw || ''; $('#sk-editor').hidden = false; $('#sk-list').hidden = true; $('#sk-recs').hidden = true; $('#sk-msg').textContent = ''; const sb = $('#sk-status-btn'); if (sb) sb.textContent = s.status === 'active' ? 'Make draft' : 'Activate'; } catch (e) { toast('Skill', e.message); }
   };
   window.skEditorHide = () => { $('#sk-editor').hidden = true; $('#sk-list').hidden = false; };
   window.skSave = async () => {
@@ -788,7 +942,38 @@
   };
   window.skToggle = async () => {
     if (!S.sk.cur) return;
-    try { const s = await api('/api/skills/' + S.sk.cur + '/status', { method: 'POST', body: { status: $('#sk-editor button:nth-of-type(2)').textContent === 'Make draft' ? 'active' : 'draft' } }); $('#sk-text').value = s.raw || ''; $('#sk-editor button:nth-of-type(2)').textContent = s.status === 'active' ? 'Make draft' : 'Activate'; S.sk.skills = await api('/api/skills'); skRenderList(); toast(s.status, ''); } catch (e) { toast('Toggle failed', e.message); }
+    try { const sb = $('#sk-status-btn'); const next = sb.textContent === 'Make draft' ? 'active' : 'draft'; const s = await api('/api/skills/' + S.sk.cur + '/status', { method: 'POST', body: { status: next } }); $('#sk-text').value = s.raw || ''; sb.textContent = s.status === 'active' ? 'Make draft' : 'Activate'; S.sk.skills = await api('/api/skills'); skRenderList(); toast(s.status, ''); } catch (e) { toast('Toggle failed', e.message); }
+  };
+  window.skNew = () => {
+    let m = document.getElementById('sk-new-modal');
+    if (!m) { m = document.createElement('div'); m.id = 'sk-new-modal'; m.style = 'position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:100;display:flex;align-items:center;justify-content:center;'; document.body.appendChild(m); }
+    m.innerHTML = '<div style="background:var(--panel);border:1px solid var(--line);border-radius:12px;width:min(92vw,420px);padding:16px">' +
+      '<div style="font-weight:600;margin-bottom:8px">New skill</div>' +
+      '<div class="field"><label>Name (letters/dashes)</label><input id="snew-name" placeholder="weekly-report"></div>' +
+      '<div class="field"><label>What it does</label><input id="snew-desc" placeholder="Builds a weekly report"></div>' +
+      '<div class="field"><label>Steps</label><textarea id="snew-body" rows="6" placeholder="1. …&#10;2. …"></textarea></div>' +
+      '<div style="margin-top:12px;display:flex;gap:6px"><button id="snew-go" class="primary" style="flex:1">Create</button><button id="snew-x" style="flex:1">Cancel</button></div></div>';
+    m.querySelector('#snew-x').onclick = () => m.remove();
+    m.querySelector('#snew-go').onclick = async () => {
+      const name = m.querySelector('#snew-name').value.trim().toLowerCase().replace(/[^a-z0-9-_]+/g, '-').replace(/^-+|-+$/g, '');
+      const desc = m.querySelector('#snew-desc').value.trim(); const bodyTxt = m.querySelector('#snew-body').value.trim();
+      if (!name) { toast('Skill', 'A name is required.'); return; }
+      const raw = '---\nname: ' + name + '\ndescription: ' + desc + '\nstatus: draft\n---\n\n' + bodyTxt + '\n';
+      try { await api('/api/skills/' + name, { method: 'PUT', body: { raw } }); m.remove(); S.sk.skills = await api('/api/skills'); skRenderList(); toast('Created', name); } catch (e) { toast('Create failed', e.message); }
+    };
+  };
+  window.skDel = async () => {
+    if (!S.sk.cur || !confirm('Delete skill ' + S.sk.cur + '?')) return;
+    try { await api('/api/skills/' + S.sk.cur, { method: 'DELETE' }); S.sk.cur = null; S.sk.skills = await api('/api/skills'); skRenderList(); skEditorHide(); toast('Deleted', ''); } catch (e) { toast('Delete failed', e.message); }
+  };
+  window.skRecs = async () => {
+    const box = $('#sk-recs'); if (!box) return;
+    if (!box.hidden) { box.hidden = true; $('#sk-list').hidden = false; return; }
+    $('#sk-list').hidden = true; box.hidden = false;
+    try { if (!S.sk.recs || !S.sk.recs.length) S.sk.recs = await api('/api/recordings'); } catch (e) { S.sk.recs = []; }
+    const rows = S.sk.recs || [];
+    box.innerHTML = '<div class="section">Recorded skills (' + rows.length + ')</div>' + (rows.length ? rows.map((r) => '<div class="sk-row"><div class="dot"></div><div class="name">' + esc(r.name || r.file || 'recording') + '</div><div class="meta">' + esc(r.description || r.bot || '') + '</div></div>').join('') : '<p class="muted">No recordings yet.</p>');
+    $('#sk-recs-btn').onclick = () => { box.hidden = true; $('#sk-list').hidden = false; };
   };
   window.skTest = async () => {
     if (!S.sk.cur || !(S.bots || []).length) { toast('Test', 'Create a Bot first.'); return; }
@@ -874,16 +1059,18 @@
   }
 
   // ---------------------------------------------------------------- plugins
+  let plTab = 'conn';
   async function renderPlugins() {
     const wrap = $('#view-plugins');
-    wrap.innerHTML = '<div class="pl-tabbar"><button data-tab="conn" class="active">Connectors</button><button data-tab="mcp">MCP servers</button></div><div id="pl-conn"></div><div id="pl-mcp" hidden></div>';
-    wrap.querySelectorAll('.pl-tabbar button').forEach((b) => b.onclick = () => {
-      wrap.querySelectorAll('.pl-tabbar button').forEach((b2) => b2.classList.toggle('active', b2 === b));
-      $('#pl-conn').hidden = b.dataset.tab !== 'conn'; $('#pl-mcp').hidden = b.dataset.tab === 'conn';
-      if (b.dataset.tab === 'conn') plRenderConn(); else plRenderMcp();
-    });
-    try { if (!S.loaded.has('pl')) { const d = await api('/api/plugins'); S.pl.plugins = d.plugins || []; S.pl.catalog = d.catalog || []; S.loaded.add('pl'); } } catch (e) { toast('Plugins', e.message); }
-    await plRenderMcp(); plRenderConn();
+    wrap.innerHTML = '<div class="pl-tabbar"><button data-tab="conn">Connectors</button><button data-tab="cat">Catalog</button><button data-tab="mcp">MCP servers</button></div><div id="pl-conn" hidden></div><div id="pl-cat" hidden></div><div id="pl-mcp" hidden></div>';
+    wrap.querySelectorAll('.pl-tabbar button').forEach((b) => b.onclick = () => { plTab = b.dataset.tab; plRenderTabs(); });
+    try { const d = await api('/api/plugins'); S.pl.plugins = d.plugins || []; S.pl.catalog = d.catalog || []; S.pl.installAllowed = d.install_allowed !== false; S.loaded.add('pl'); } catch (e) { toast('Plugins', e.message); }
+    plRenderTabs();
+  }
+  function plRenderTabs() {
+    document.querySelectorAll('.pl-tabbar button').forEach((b) => b.classList.toggle('active', b.dataset.tab === plTab));
+    $('#pl-conn').hidden = plTab !== 'conn'; $('#pl-cat').hidden = plTab !== 'cat'; $('#pl-mcp').hidden = plTab !== 'mcp';
+    if (plTab === 'conn') plRenderConn(); else if (plTab === 'cat') plRenderCatalog(); else plRenderMcp();
   }
   function plRenderConn() {
     const el = $('#pl-conn'); el.innerHTML = '';
@@ -891,11 +1078,27 @@
       const ok = p.configured; const c = document.createElement('div'); c.className = 'pl-card';
       c.innerHTML = '<div class="top"><div class="name">' + esc(p.name) + '</div><div class="chip ' + (ok ? 'ok' : 'warn') + '">' + (ok ? 'connected' : ok === false ? 'needs setup' : 'blocked') + '</div></div>' +
         '<div class="desc">' + esc(p.description || '') + '</div><div class="tools">' + (p.tools || []).slice(0, 6).map((t) => esc(t.name) + (t.read_only ? '' : ' *')).join(', ') || '—' + '</div>' +
-        '<div style="margin-top:8px;display:flex;gap:6px"><button class="primary" style="flex:1" onclick="window.plConfig(\'' + p.id + '\')">Configure</button><button onclick="window.plTest(\'' + p.id + '\')" style="flex:1">Test</button></div>';
+        '<div style="margin-top:8px;display:flex;gap:6px"><button class="primary" style="flex:1" onclick="window.plConfig(\'' + p.id + '\')">Configure</button><button onclick="window.plTest(\'' + p.id + '\')" style="flex:1">Test</button>' +
+        (p.oauth ? '<button onclick="window.plConnect(\'' + p.id + '\')" style="flex:1">' + (ok ? 'Reconnect' : 'Connect') + '</button>' : '') +
+        '<button class="danger" onclick="window.plRemove(\'' + p.id + '\')" style="flex:1">Remove</button></div>';
       el.appendChild(c);
     });
-    if (!S.pl.plugins.length) el.innerHTML = '<p class="muted">No connectors yet.</p>';
+    if (!S.pl.plugins.length) el.innerHTML = '<p class="muted">No connectors yet — browse the Catalog tab.</p>';
   }
+  function plRenderCatalog() {
+    const el = $('#pl-cat'); if (!el) return;
+    const installed = new Set((S.pl.plugins || []).map((p) => p.id));
+    const rows = (S.pl.catalog || []).filter((c) => !installed.has(c.id));
+    el.innerHTML = (S.pl.installAllowed === false ? '<p class="muted">Installing new connectors is turned off by your administrator.</p>' : '') +
+      '<div class="pl-cat">' + (rows.length ? rows.map((c) => '<div class="card"><div style="display:flex;gap:8px;align-items:center"><div class="emoji">' + (c.emoji || '🔌') + '</div><div style="flex:1"><div style="font-weight:600">' + esc(c.name) + '</div><div style="font-size:11px;color:var(--muted)">' + esc(c.kind || '') + '</div></div>' + (S.pl.installAllowed === false ? '' : '<button class="small" data-install="' + esc(c.id || c.source) + '">Install</button>') + '</div><div class="desc" style="margin-top:6px;font-size:12px;color:var(--muted)">' + esc(c.description || '') + '</div></div>').join('') : '<p class="muted">Everything in the catalog is installed.</p>') + '</div>';
+    el.querySelectorAll('[data-install]').forEach((b) => b.onclick = async () => {
+      const c = rows.find((x) => (x.id || x.source) === b.dataset.install); if (!c) return;
+      b.disabled = true; b.textContent = '…';
+      try { await api('/api/plugins/install', { body: { source: c.source || c.id } }); const d = await api('/api/plugins'); S.pl.plugins = d.plugins || []; S.pl.catalog = d.catalog || []; toast('Installed', c.name); plRenderCatalog(); } catch (e) { toast('Install failed', e.message); b.disabled = false; b.textContent = 'Install'; }
+    });
+  }
+  window.plConnect = async (id) => { try { const d = await api('/api/plugins/' + id + '/connect', { method: 'POST' }); if (d.url) window.open(d.url, '_blank'); toast('Connect', 'Follow the sign-in in a new tab.'); } catch (e) { toast('Connect failed', e.message); } };
+  window.plRemove = async (id) => { const p = (S.pl.plugins || []).find((x) => x.id === id); if (!p || !confirm('Remove ' + p.name + '?')) return; try { await api('/api/plugins/' + id, { method: 'DELETE' }); const d = await api('/api/plugins'); S.pl.plugins = d.plugins || []; plRenderConn(); toast('Removed', ''); } catch (e) { toast('Remove failed', e.message); } };
   window.plConfig = async (id) => {
     const p = (S.pl.plugins || []).find((x) => x.id === id);
     if (!p) return;
@@ -909,12 +1112,48 @@
   window.plConfigSave = async (id) => {
     const m = document.getElementById('pl-modal'); const body = {};
     m.querySelectorAll('.pl-inp').forEach((i) => { if (i.value) body[i.dataset.key] = i.value; });
-    try { await api('/api/plugins/' + id + '/config', { method: 'PUT', body }); m.hidden = true; S.pl.plugins = await api('/api/plugins'); plRenderConn(); toast('Saved', ''); } catch (e) { toast('Configure failed', e.message); }
+    try { await api('/api/plugins/' + id + '/config', { method: 'PUT', body }); m.hidden = true; const d = await api('/api/plugins'); S.pl.plugins = d.plugins || []; plRenderConn(); toast('Saved', ''); } catch (e) { toast('Configure failed', e.message); }
   };
   window.plTest = async (id) => { try { const d = await api('/api/plugins/' + id + '/test', { method: 'POST' }); toast('Test', d.message || 'ok'); } catch (e) { toast('Test failed', e.message); } };
   async function plRenderMcp() {
-    const el = $('#pl-mcp'); el.innerHTML = '';
-    try { const rows = await api('/api/mcp'); el.innerHTML = rows.length ? rows.map((r) => '<div class="al-row"><div class="who">' + esc(r.name) + '</div><div class="what">' + esc(r.transport) + ' · ' + esc(r.status || '') + (r.error ? ' · ' + esc(r.error.slice(0, 30)) : '') + '</div></div>').join('') : '<p class="muted">No MCP servers.</p>'; } catch (e) { el.innerHTML = '<p class="err">Could not load MCP.</p>'; }
+    const el = $('#pl-mcp'); el.innerHTML = '<div style="padding:8px 0"><button id="mcp-add" class="primary">＋ Add MCP server</button></div><div id="mcp-rows"></div>';
+    const rows = document.getElementById('mcp-rows');
+    try {
+      const list = await api('/api/mcp'); S.pl.mcp = list || [];
+      rows.innerHTML = list.length ? list.map((r) => '<div class="pl-card"><div class="top"><div class="name">' + esc(r.name) + '</div><div class="chip ' + (r.enabled === 0 || r.enabled === false ? 'warn' : 'ok') + '">' + esc(r.transport || '') + ' · ' + (r.enabled === 0 || r.enabled === false ? 'off' : (r.status || 'on')) + '</div></div>' +
+        (r.command ? '<div class="tools" style="font-family:ui-monospace,monospace">' + esc(r.command) + (r.args ? ' ' + esc(r.args) : '') + '</div>' : '') +
+        (r.url ? '<div class="tools" style="font-family:ui-monospace,monospace">' + esc(r.url) + '</div>' : '') +
+        (r.error ? '<div class="desc" style="color:var(--bad);font-size:11px">' + esc(r.error.slice(0, 60)) + '</div>' : '') +
+        '<div style="margin-top:8px;display:flex;gap:6px"><button class="small" data-medit="' + r.id + '" style="flex:1">Edit</button><button class="small" data-mrestart="' + r.id + '" style="flex:1">Restart</button><button class="small danger" data-mdel="' + r.id + '" style="flex:1">Delete</button></div></div>').join('') : '<p class="muted">No MCP servers yet.</p>';
+      rows.querySelectorAll('[data-medit]').forEach((b) => b.onclick = () => mcpEdit(list.find((x) => x.id === b.dataset.medit)));
+      rows.querySelectorAll('[data-mrestart]').forEach((b) => b.onclick = async () => { try { await api('/api/mcp/' + b.dataset.mrestart + '/restart', { method: 'POST' }); toast('Restarted', ''); plRenderMcp(); } catch (e) { toast('Restart failed', e.message); } });
+      rows.querySelectorAll('[data-mdel]').forEach((b) => b.onclick = async () => { if (!confirm('Delete this MCP server?')) return; try { await api('/api/mcp/' + b.dataset.mdel, { method: 'DELETE' }); plRenderMcp(); toast('Deleted', ''); } catch (e) { toast('Delete failed', e.message); } });
+    } catch (e) { rows.innerHTML = '<p class="err">Could not load MCP.</p>'; }
+    const add = document.getElementById('mcp-add'); if (add) add.onclick = () => mcpEdit(null);
+  }
+  function mcpEdit(r) {
+    let m = document.getElementById('mcp-modal');
+    if (!m) { m = document.createElement('div'); m.id = 'mcp-modal'; m.style = 'position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:100;display:flex;align-items:center;justify-content:center;'; document.body.appendChild(m); }
+    const tr = r ? r.transport : 'stdio';
+    const args = r && r.args ? (Array.isArray(r.args) ? r.args.join(' ') : r.args) : '';
+    m.innerHTML = '<div style="background:var(--panel);border:1px solid var(--line);border-radius:12px;width:min(92vw,440px);max-height:86vh;overflow:auto;padding:16px">' +
+      '<div style="font-weight:600;margin-bottom:8px">' + (r ? 'Edit' : 'Add') + ' MCP server</div>' +
+      '<div class="field"><label>Name</label><input id="mcp-name" value="' + esc(r ? r.name : '') + '" placeholder="my-server"></div>' +
+      '<div class="field"><label>Transport</label><select id="mcp-transport"><option value="stdio"' + (tr === 'stdio' ? ' selected' : '') + '>stdio (local command)</option><option value="http"' + (tr === 'http' ? ' selected' : '') + '>http</option><option value="sse"' + (tr === 'sse' ? ' selected' : '') + '>sse</option></select></div>' +
+      '<div class="field" id="mcp-cmd-row"><label>Command</label><input id="mcp-command" value="' + esc(r ? (r.command || '') : '') + '" placeholder="npx -y @modelcontextprotocol/server-…"></div>' +
+      '<div class="field" id="mcp-url-row" ' + (tr === 'stdio' ? 'hidden' : '') + '><label>URL</label><input id="mcp-url" value="' + esc(r ? (r.url || '') : '') + '" placeholder="https://…"></div>' +
+      '<label class="eb-radio"><input type="checkbox" id="mcp-enabled" ' + (!r || r.enabled !== 0 && r.enabled !== false ? 'checked' : '') + '><span>Enabled</span></label>' +
+      '<div style="margin-top:12px;display:flex;gap:6px"><button id="mcp-save" class="primary" style="flex:1">Save</button><button id="mcp-cancel" style="flex:1">Cancel</button></div></div>';
+    const cmdRow = m.querySelector('#mcp-cmd-row'), urlRow = m.querySelector('#mcp-url-row');
+    m.querySelector('#mcp-transport').onchange = (e) => { const stdio = e.target.value === 'stdio'; cmdRow.hidden = !stdio; urlRow.hidden = stdio; };
+    m.querySelector('#mcp-cancel').onclick = () => m.remove();
+    m.querySelector('#mcp-save').onclick = async () => {
+      const body = { name: m.querySelector('#mcp-name').value.trim() || 'server', transport: m.querySelector('#mcp-transport').value, enabled: m.querySelector('#mcp-enabled').checked };
+      if (body.transport === 'stdio') { const c = m.querySelector('#mcp-command').value.trim(); if (!c) { toast('MCP', 'A stdio server needs a command.'); return; } body.command = c; body.args = c.split(/\s+/); body.args.shift(); }
+      else { const u = m.querySelector('#mcp-url').value.trim(); if (!u) { toast('MCP', 'A remote server needs a URL.'); return; } body.url = u; }
+      if (r) body.id = r.id;
+      try { await api('/api/mcp', { method: 'POST', body }); m.remove(); toast('Saved', ''); plRenderMcp(); } catch (e) { toast('Save failed', e.message); }
+    };
   }
 
   // ---------------------------------------------------------------- usage
