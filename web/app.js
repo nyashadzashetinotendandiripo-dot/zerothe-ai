@@ -7,6 +7,12 @@
 
   // ------------------------------------------------------------------ api
   async function api(path, opts = {}) {
+    if (opts.params) {
+      const q = new URLSearchParams();
+      for (const [k, v] of Object.entries(opts.params)) { if (v !== undefined && v !== null && v !== '') q.set(k, v); }
+      const qs = q.toString();
+      if (qs) path += (path.includes('?') ? '&' : '?') + qs;
+    }
     const init = { credentials: 'same-origin', headers: {}, method: opts.method || 'GET' };
     if (opts.body !== undefined) { init.method = opts.method || 'POST'; init.headers['Content-Type'] = 'application/json'; init.body = JSON.stringify(opts.body); }
     const r = await fetch(path, init);
@@ -590,7 +596,9 @@
         if (!S.bots.length) ht.innerHTML = '<p class="muted">No Bots yet. Create one on the Bots tab.</p>';
       } catch (e) { toast('Home', e.message); }
     };
-    load(); setInterval(load, 15000);
+    load();
+    if (S.homeTimer) clearInterval(S.homeTimer);
+    S.homeTimer = setInterval(() => { if (S.view === 'home') load(); else { clearInterval(S.homeTimer); S.homeTimer = null; } }, 15000);
   }
 
   function fmtTime(ts) {
@@ -732,7 +740,18 @@
   };
   window.flBack = () => { $('#fl-picker').hidden = false; $('#fl-preview').hidden = true; S.fl.current = null; };
   window.flUp = () => { S.fl.cwd = S.fl.cwd ? S.fl.cwd.split('/').slice(0, -1).join('/') : ''; flRender(); };
-  window.flSave = () => { if (!S.fl.current) return; api('/api/ws/raw', { params: { path: S.fl.current.path } }).then(() => { toast('Saved', S.fl.current.name + ' downloaded.'); }).catch(() => toast('Save failed', '')); };
+  window.flSave = async () => {
+    const cur = S.fl.current; if (!cur) return;
+    try {
+      const r = await fetch('/api/ws/raw?path=' + encodeURIComponent(cur.path), { credentials: 'same-origin' });
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      const blob = await r.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a'); a.href = url; a.download = cur.name || 'file'; document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 4000);
+      toast('Saved', cur.name + ' downloaded.');
+    } catch (e) { toast('Save failed', e.message); }
+  };
   window.flDel = async () => { if (!S.fl.current || !confirm('Delete ' + S.fl.current.name + '?')) return; try { await api('/api/ws/file', { method: 'DELETE', params: { path: S.fl.current.path } }); toast('Deleted', ''); flBack(); flRender(); } catch (e) { toast('Delete failed', e.message); } };
 
   function humanSize(n) { return n < 1024 ? n + ' B' : n < 1024 * 1024 ? (n / 1024).toFixed(1) + ' KB' : (n / 1024 / 1024).toFixed(1) + ' MB'; }
@@ -744,6 +763,7 @@
   async function renderSkills() {
     const wrap = $('#view-skills');
     wrap.innerHTML = '<div class="sk-list" id="sk-list"></div><div class="sk-editor" id="sk-editor" hidden><textarea id="sk-text" rows="10" style="width:100%;background:#0b0d12;border:1px solid var(--line);border-radius:8px;padding:10px;color:var(--text);font-family:ui-monospace,monospace;font-size:12px"></textarea>' +
+      '<div class="field" style="margin-top:8px"><label>Test with Bot</label><select id="sk-bot">' + rtBotOptions(null) + '</select></div>' +
       '<div style="margin-top:8px;display:flex;gap:6px"><button class="primary" onclick="window.skSave()" style="flex:1">Save</button><button onclick="window.skToggle()" style="flex:1">Activate / Draft</button><button onclick="window.skTest()" style="flex:1">Test</button><button onclick="window.skEditorHide()" style="flex:1">Close</button></div><div id="sk-msg" style="margin-top:6px;font-size:12px;color:var(--muted)"></div></div>';
     try { if (!S.loaded.has('sk')) { S.sk.skills = await api('/api/skills'); S.sk.recs = await api('/api/recordings'); S.loaded.add('sk'); } } catch (e) { toast('Skills', e.message); }
     skRenderList();
@@ -772,22 +792,51 @@
   };
   window.skTest = async () => {
     if (!S.sk.cur || !(S.bots || []).length) { toast('Test', 'Create a Bot first.'); return; }
-    try { const th = await api('/api/skills/' + S.sk.cur + '/test', { method: 'POST', body: { bot_id: S.bots[0].id, dry_run: true } }); toast('Testing', ''); openThread(th.id, 'Skill test', S.bots[0].id); } catch (e) { toast('Test failed', e.message); }
+    const bid = ($('#sk-bot') && $('#sk-bot').value) || S.bots[0].id;
+    try { const th = await api('/api/skills/' + S.sk.cur + '/test', { method: 'POST', body: { bot_id: bid, dry_run: true } }); toast('Testing', ''); openThread(th.id, 'Skill test', bid); } catch (e) { toast('Test failed', e.message); }
   };
 
   // ---------------------------------------------------------------- routines
   async function renderRoutines() {
     const wrap = $('#view-routines');
-    wrap.innerHTML = '<div class="rt-bar"><button onclick="window.rtNew()" class="primary">New routine</button><button onclick="window.rtEdit()">Edit</button><button onclick="window.rtRun()">Run now</button><button onclick="window.rtToggle()">Enable/disable</button><button onclick="window.rtDel()" style="color:var(--bad)">Delete</button></div>' +
+    wrap.innerHTML = '<div class="rt-bar"><button onclick="window.rtNew()" class="primary">New routine</button><button onclick="window.rtRun()">Run now</button><button onclick="window.rtDel()" style="color:var(--bad)">Delete</button></div>' +
+      '<div class="rt-form" id="rt-form" hidden></div>' +
       '<div class="rt-table" id="rt-table"></div><div class="rt-history" id="rt-history"></div>';
-    try { if (!S.loaded.has('rt')) { S.rt.rows = await api('/api/routines'); S.loaded.add('rt'); } } catch (e) { toast('Routines', e.message); }
+    try { S.rt.rows = await api('/api/routines'); } catch (e) { toast('Routines', e.message); }
+    S.loaded.add('rt');
     rtRender();
+  }
+  function rtBotOptions(sel) {
+    return (S.bots || []).map((b) => `<option value="${b.id}"${b.id === sel ? ' selected' : ''}>${esc(b.emoji || '🤖')} ${esc(b.name)}</option>`).join('');
+  }
+  function rtFormHTML(v = {}) {
+    return '<div class="card"><b id="rt-form-title">' + (v.id ? 'Edit routine' : 'New routine') + '</b>' +
+      '<input id="rtf-name" placeholder="Routine name" value="' + esc(v.name || '') + '" style="margin-top:8px">' +
+      '<div class="field" style="margin-top:8px"><label>Bot</label><select id="rtf-bot">' + rtBotOptions(v.bot_id) + '</select></div>' +
+      '<input id="rtf-cron" placeholder="Cron (e.g. 0 8 * * 1-5)" value="' + esc(v.cron || '0 8 * * 1-5') + '" style="margin-top:8px">' +
+      '<textarea id="rtf-prompt" placeholder="What should the Bot do?" rows="3" style="margin-top:8px;width:100%;padding:8px;border:1px solid var(--line);border-radius:8px;background:var(--panel);color:var(--text);resize:vertical">' + esc(v.prompt || '') + '</textarea>' +
+      '<div style="margin-top:10px;display:flex;gap:6px"><button class="primary" id="rtf-save" style="flex:1">Save</button><button id="rtf-cancel" style="flex:1">Cancel</button></div></div>';
+  }
+  function rtOpenForm(v) {
+    const f = $('#rt-form'); f.hidden = false; f.innerHTML = rtFormHTML(v || {});
+    $('#rtf-cancel').onclick = () => { f.hidden = true; };
+    $('#rtf-save').onclick = async () => {
+      const name = $('#rtf-name').value.trim(); const bot = $('#rtf-bot').value; const cron = $('#rtf-cron').value.trim(); const prompt = $('#rtf-prompt').value.trim();
+      if (!name || !cron) { toast('Routines', 'Name and cron are required.'); return; }
+      if (!prompt) { toast('Routines', 'Add a task for the Bot.'); return; }
+      try {
+        if (v && v.id) { await api('/api/routines/' + v.id, { method: 'PUT', body: { name, bot_id: bot, cron, prompt } }); toast('Saved', ''); }
+        else { await api('/api/routines', { method: 'POST', body: { bot_id: bot, name, cron, prompt } }); toast('Created', ''); }
+        f.hidden = true; S.rt.rows = await api('/api/routines'); S.rt.sel = null; rtRender();
+      } catch (e) { toast('Save failed', e.message); }
+    };
   }
   function rtRender() {
     const el = $('#rt-table'); el.innerHTML = '';
     (S.rt.rows || []).forEach((r) => {
       const row = document.createElement('div'); row.className = 'rt-row';
-      row.innerHTML = '<div class="toggle ' + (r.enabled ? 'on' : '') + '" onclick="window.rtToggleOne(\'' + r.id + '\', ' + !r.enabled + ')"></div><div class="name">' + esc(r.name || 'Routine') + '</div><div class="meta">' + esc(describeCron(r.cron)) + ' · ' + (r.enabled ? (r.next_run_at ? fmtTime(r.next_run_at) : '—') : 'off') + '</div>';
+      const bot = (S.bots || []).find((b) => b.id === r.bot_id);
+      row.innerHTML = '<div class="toggle ' + (r.enabled ? 'on' : '') + '" onclick="event.stopPropagation();window.rtToggleOne(\'' + r.id + '\', ' + !r.enabled + ')"></div><div class="name">' + esc(r.name || 'Routine') + '</div><div class="meta">' + esc(bot ? (bot.emoji || '🤖') + ' ' + bot.name : '') + ' · ' + esc(describeCron(r.cron)) + ' · ' + (r.enabled ? (r.next_run_at ? fmtTime(r.next_run_at) : '—') : 'off') + '</div>';
       row.onclick = () => { S.rt.sel = r; rtRenderRuns(r.id); };
       el.appendChild(row);
     });
@@ -800,22 +849,28 @@
       el.innerHTML = '<div style="font-size:11px;color:var(--muted);margin-bottom:6px">Run history</div>' + (rows.length ? rows.map((r) => '<div style="padding:6px 10px;border-bottom:1px solid #161a24;font-size:12px"><div style="display:flex;justify-content:space-between"><div>' + esc(r.routine_name || '') + '</div><div style="color:var(--muted)">' + fmtTime(r.started_at) + ' · ' + r.status + '</div></div><div style="font-size:11px;color:var(--muted);margin-top:2px">' + esc((r.result || r.error || '')).slice(0, 200) + '</div></div>').join('') : '<p class="muted">No runs yet.</p>');
     }).catch(() => el.innerHTML = '');
   }
-  window.rtNew = async () => {
-    if (!(S.bots || []).length) { toast('Routines', 'Create a Bot first.'); return; }
-    const name = prompt('Routine name:'); if (!name) return;
-    const bot = S.bots[0].id;
-    const cron = prompt('Cron (e.g. 0 8 * * 1-5):', '0 8 * * 1-5'); if (!cron) return;
-    const task = prompt('What should the Bot do?'); if (!task) return;
-    try { await api('/api/routines', { method: 'POST', body: { bot_id: bot, name, cron, prompt: task } }); toast('Created', ''); S.rt.rows = await api('/api/routines'); rtRender(); } catch (e) { toast('Create failed', e.message); }
+  window.rtNew = () => { if (!(S.bots || []).length) { toast('Routines', 'Create a Bot first.'); return; } rtOpenForm(null); };
+  window.rtEdit = () => {
+    if (!S.rt.sel) { toast('Edit', 'Tap a routine row first.'); return; }
+    rtOpenForm({ id: S.rt.sel.id, name: S.rt.sel.name, bot_id: S.rt.sel.bot_id, cron: S.rt.sel.cron, prompt: S.rt.sel.prompt });
   };
-  window.rtEdit = () => toast('Edit', 'Tap a routine row first.');
   window.rtRun = async () => { if (!S.rt.sel) { toast('Run', 'Select a routine.'); return; } try { await api('/api/routines/' + S.rt.sel.id + '/run', { method: 'POST' }); toast('Running', ''); } catch (e) { toast('Run failed', e.message); } };
-  window.rtToggle = async () => { if (!S.rt.sel) return; try { await api('/api/routines/' + S.rt.sel.id, { method: 'PUT', body: { enabled: !S.rt.sel.enabled } }); S.rt.rows = await api('/api/routines'); rtRender(); } catch (e) { toast('Toggle failed', e.message); } };
   window.rtDel = async () => { if (!S.rt.sel || !confirm('Delete routine?')) return; try { await api('/api/routines/' + S.rt.sel.id, { method: 'DELETE' }); S.rt.sel = null; S.rt.rows = await api('/api/routines'); rtRender(); $('#rt-history').innerHTML = ''; } catch (e) { toast('Delete failed', e.message); } };
   window.rtToggleOne = async (id, on) => { try { await api('/api/routines/' + id, { method: 'PUT', body: { enabled: on } }); S.rt.rows = await api('/api/routines'); rtRender(); } catch (e) {} };
   function describeCron(expr) {
     const m = { '0 8 * * 1-5': 'Weekdays 8:00', '0 7 * * *': 'Daily 7:00', '0 2 * * *': 'Overnight 2:00', '0 * * * *': 'Hourly', '0 9 * * 1': 'Mondays 9:00', '0 9 1 * *': '1st of month 9:00' };
-    return m[expr] || expr;
+    if (m[expr]) return m[expr];
+    const parts = String(expr || '').trim().split(/\s+/);
+    if (parts.length === 5) {
+      const [min, hr, dom, , dow] = parts;
+      if (min.startsWith('*/')) return 'Every ' + min.slice(2) + ' min';
+      if (hr.startsWith('*/')) return 'Every ' + hr.slice(2) + ' h';
+      const t = /^\d+$/.test(min) && /^\d+$/.test(hr) ? hr.padStart(2, '0') + ':' + min.padStart(2, '0') : min + ' ' + hr;
+      if (dow && dow !== '*') return t + ' · day ' + dow;
+      if (dom && dom !== '*') return t + ' · day ' + dom;
+      return t + ' daily';
+    }
+    return expr || '';
   }
 
   // ---------------------------------------------------------------- plugins
@@ -877,10 +932,11 @@
   // ---------------------------------------------------------------- action log
   async function renderActionLog() {
     const wrap = $('#view-actionlog');
-    try { S.al = await api('/api/approvals?status=all&limit=100'); } catch (e) { toast('Action log', e.message); }
-    const rows = (S.al || []).slice(0, 80);
+    let rows = [];
+    try { rows = await api('/api/actions', { params: { limit: 120 } }); S.al = rows; } catch (e) { toast('Action log', e.message); }
+    const dot = { ok: 'ok', error: 'error', denied: 'warn', blocked: 'warn' };
     wrap.innerHTML = '<div class="section">Recent activity</div>' +
-      (rows.length ? rows.map((a) => '<div class="al-row"><div class="dot ' + dotStatus(a.status) + '"></div><div class="who">' + esc(botName(a.bot_id)) + '</div><div class="what">' + esc(a.title || a.category) + ' · ' + esc((a.summary || '').slice(0, 50)) + '</div></div>').join('') : '<p class="muted">Nothing yet.</p>');
+      (rows.length ? rows.map((a) => '<div class="al-row"><div class="dot ' + (dot[a.status] || '') + '"></div><div class="who">' + esc(botName(a.bot_id)) + ' · ' + esc(a.tool || '') + '</div><div class="what">' + esc((a.url || a.path || a.summary || '').slice(0, 60)) + '</div><div class="when">' + fmtTime(a.ts) + '</div></div>').join('') : '<p class="muted">Nothing yet. Bot actions show up here as they happen.</p>');
   }
 
   // ---------------------------------------------------------------- settings (more screens)

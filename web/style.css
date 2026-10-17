@@ -171,7 +171,9 @@ h3.section { margin: 18px 4px 8px; font-size: 13px; text-transform: uppercase; l
 .rt-row .toggle { width: 16px; height: 16px; border-radius: 8px; border: 1px solid var(--line); flex: none; background: #141928; }
 .rt-row .toggle.on { background: var(--ok); border-color: var(--ok); }
 .rt-row .name { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.rt-row .meta { font-size: 10px; color: var(--muted); width: 100px; }
+.rt-row .meta { font-size: 10px; color: var(--muted); flex: 0 1 auto; min-width: 70px; text-align: right; }
+.rt-form { padding: 10px 12px 2px; }
+.rt-form .card { margin-bottom: 8px; }
 .rt-history { padding: 12px; border-top: 1px solid var(--line); font-size: 12px; }
 .rt-history pre { background: #0b0d12; border: 1px solid var(--line); border-radius: 8px; padding: 10px; max-height: 40vh; overflow: auto; }
 
