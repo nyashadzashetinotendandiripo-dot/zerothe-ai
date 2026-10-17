@@ -1,0 +1,10 @@
+{
+  "appId": "ai.zerothebot.app",
+  "appName": "ZerotheBot",
+  "webDir": "www",
+  "server": {
+    "url": "https://8765-agquljzsz7k42vgoenj7qr6fim.instabox.tech",
+    "androidScheme": "https"
+  },
+  "android": { "allowMixedContent": false }
+}
