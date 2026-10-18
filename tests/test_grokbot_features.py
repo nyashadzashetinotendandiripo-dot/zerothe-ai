@@ -89,6 +89,49 @@ class GrokBotParityTests(unittest.TestCase):
         self.assertTrue(d2["messages"])
         self.assertTrue(self.c.get("/api/palette", headers=self.h, params={"q": ""}).json()["total"] == 0)
 
+    def test_event_triggers_crud_and_fire(self):
+        import time
+        import types
+
+        bot = self._bot(name="Trigger Bot")
+        r = self.c.post("/api/triggers", headers=self.h,
+                        json={"bot_id": bot["id"], "name": "GitHub issue", "prompt": "Triage the issue."})
+        self.assertEqual(r.status_code, 200, r.text)
+        t = r.json()
+        self.assertTrue(t["token"])
+        self.assertIn("/api/hooks/", t["url"])
+        self.assertEqual(t["bot_name"], "Trigger Bot")
+        self.assertEqual(len(self.c.get("/api/triggers", headers=self.h, params={"bot_id": bot["id"]}).json()), 1)
+
+        calls = []
+
+        def fake_run_sync(bot_id, thread_id, task, trigger="routine", dry_run=False):
+            calls.append({"bot_id": bot_id, "task": task, "trigger": trigger})
+            return types.SimpleNamespace(turn_id="t1", final_text="done", status="done", error="")
+
+        orig = self.eng.turns.run_sync
+        self.eng.turns.run_sync = fake_run_sync
+        try:
+            h = self.c.post("/api/hooks/" + t["token"], json={"title": "Bug: crash", "number": 42})
+            self.assertEqual(h.status_code, 200, h.text)
+            self.assertTrue(h.json()["ok"])
+            deadline = time.time() + 5
+            while not calls and time.time() < deadline:
+                time.sleep(0.05)
+            self.assertTrue(calls, "webhook should have started a turn")
+            self.assertEqual(calls[0]["trigger"], "event")
+            self.assertEqual(calls[0]["bot_id"], bot["id"])
+            self.assertIn("Bug: crash", calls[0]["task"])
+        finally:
+            self.eng.turns.run_sync = orig
+
+        self.assertEqual(self.c.post("/api/hooks/does-not-exist", json={}).status_code, 400)
+        rot = self.c.post(f"/api/triggers/{t['id']}/rotate", headers=self.h)
+        self.assertEqual(rot.status_code, 200, rot.text)
+        self.assertNotEqual(rot.json()["token"], t["token"])
+        self.assertEqual(self.c.delete(f"/api/triggers/{t['id']}", headers=self.h).status_code, 200)
+        self.assertEqual(self.c.get("/api/triggers", headers=self.h, params={"bot_id": bot["id"]}).json(), [])
+
     def test_approval_rules_crud(self):
         bot = self._bot(name="Rules Bot")
         r = self.c.post("/api/rules", headers=self.h, json={"bot_id": bot["id"], "category": "shell", "pattern": "*"})

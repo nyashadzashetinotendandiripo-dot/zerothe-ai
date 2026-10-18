@@ -31,7 +31,7 @@
   function avSpec(bot) { const p = avParse(bot); const seed = avHash((bot && (bot.id || bot.name)) || 'bot'); return { shape: p.shape || AV_SHAPES[seed % AV_SHAPES.length], color: p.color || AV_COLORS[(seed >>> 4) % AV_COLORS.length] }; }
   function avSVG(bot, size, badge) { const { shape, color } = avSpec(bot); const s = size || 40; return '<svg viewBox="0 0 100 100" width="' + s + '" height="' + s + '" aria-hidden="true"><g fill="' + color + '">' + avShapeSVG(shape) + '</g>' + AV_EYES + '</svg>' + (badge ? '<i class="av-badge">★</i>' : ''); }
   function avEl(bot, size, badge) { const s = size || 40; return '<span class="av" style="width:' + s + 'px;height:' + s + 'px">' + avSVG(bot, s, badge) + '</span>'; }
-  const S = { commands: [], bots: [], groups: [], busy: {}, approvals: [], thread: null, threads: [], items: [], stream: {}, view: 'home', es: null, lastEvent: 0, screenBot: null, screenTimer: null, titleBase: document.title, attach: [], rec: null, providers: [], templates: [], loaded: new Set(), mk: [], ib: { pend: [], hist: [], handoffs: [] }, cp: { cards: [], term: [], headless: false }, fl: { entries: [], mode: 'recent', cwd: '', current: null }, sk: { skills: [], recs: [], cur: '' }, rt: { rows: [], runs: [], sel: null }, pl: { plugins: [], catalog: [], mcp: [] }, us: {}, al: [], showHidden: false, theme: null, reply: null, palette: false };
+  const S = { commands: [], bots: [], groups: [], busy: {}, approvals: [], thread: null, threads: [], items: [], stream: {}, view: 'home', es: null, lastEvent: 0, screenBot: null, screenTimer: null, titleBase: document.title, attach: [], rec: null, providers: [], templates: [], loaded: new Set(), mk: [], ib: { pend: [], hist: [], handoffs: [] }, cp: { cards: [], term: [], headless: false }, fl: { entries: [], mode: 'recent', cwd: '', current: null }, sk: { skills: [], recs: [], cur: '' }, rt: { rows: [], runs: [], sel: null }, pl: { plugins: [], catalog: [], mcp: [] }, us: {}, al: [], showHidden: false, theme: null, reply: null, palette: false, voice: null };
 
   // ---------------------------------------------------------------- appearance
   // System / Light / Dark, remembered on this phone (localStorage). "System"
@@ -303,8 +303,9 @@
     let b;
     try { b = await api('/api/bots/' + botId); }
     catch (e) { toast('Could not open Bot', e.message); return; }
-    eb = { bot: b, tab: 'Profile', mem: [], rules: b.rules || [] };
+    eb = { bot: b, tab: 'Profile', mem: [], rules: b.rules || [], triggers: [] };
     try { eb.mem = await api('/api/bots/' + botId + '/memory'); } catch (e) { eb.mem = []; }
+    try { eb.triggers = await api('/api/triggers', { params: { bot_id: botId } }); } catch (e) { eb.triggers = []; }
     renderBotEditor();
   }
   function renderBotEditor() {
@@ -364,6 +365,8 @@
         '<div class="field"><label>On this phone</label><div class="eb-state"><button id="be-pin" class="' + (pinned ? 'primary' : '') + '">' + (pinned ? 'Unpin' : 'Pin to top') + '</button><button id="be-hide" class="' + (hidden ? 'primary' : '') + '">' + (hidden ? 'Unhide' : 'Hide from team') + '</button></div></div>' +
         '<div class="field"><label>Auto-Review rules</label><p class="muted" style="font-size:11px;margin:2px 0 6px">Standing “allow automatically” rules for this Bot. Approve &amp; always adds one for you.</p><div id="be-rules"></div>' +
         '<div class="row" style="display:flex;gap:6px;margin-top:6px"><input id="be-rule-cat" placeholder="category (e.g. shell)" style="flex:1;min-width:0"><input id="be-rule-pat" placeholder="pattern or *" style="flex:1;min-width:0"><button id="be-rule-add" class="small">Add</button></div></div>' +
+        '<div class="field"><label>Event triggers</label><p class="muted" style="font-size:11px;margin:2px 0 6px">Webhooks that wake this Bot from outside (Slack/GitHub style). POST any JSON to the URL to start a run.</p><div id="be-trig"></div>' +
+        '<div class="row" style="display:flex;gap:6px;margin-top:6px"><input id="be-trig-name" placeholder="name (e.g. GitHub issue)" style="flex:1;min-width:0"><input id="be-trig-prompt" placeholder="what to do" style="flex:1;min-width:0"><button id="be-trig-add" class="small">Add</button></div></div>' +
         '<div class="field"><label>Export</label><div style="display:flex;gap:6px"><button id="be-export">Export (with memory)</button><button id="be-export-nm">Export (no memory)</button></div></div>' +
         '<div class="field"><label>Danger zone</label><button id="be-del" class="danger">Delete this Bot…</button></div>';
       body.querySelector('#be-pause').onclick = async () => { try { await api('/api/bots/' + b.id, { method: 'PUT', body: { paused: !paused } }); await loadBootstrap(); openBotEdit(b.id); } catch (e) { toast('Pause failed', e.message); } };
@@ -383,6 +386,20 @@
         const pattern = body.querySelector('#be-rule-pat').value.trim() || '*';
         if (!category) { toast('Rules', 'A category is required (e.g. shell, browser, files).'); return; }
         try { const r = await api('/api/rules', { body: { bot_id: b.id, category, pattern } }); eb.rules = [...(eb.rules || []), r]; body.querySelector('#be-rule-cat').value = ''; body.querySelector('#be-rule-pat').value = ''; renderRules(); } catch (e) { toast('Could not add rule', e.message); }
+      };
+      const renderTrig = () => {
+        const el = body.querySelector('#be-trig'); if (!el) return;
+        const ts = eb.triggers || [];
+        el.innerHTML = ts.length ? ts.map((t) => '<div class="eb-mem-row"><span class="eb-rule">' + (t.enabled ? 'on' : 'off') + '</span><span class="eb-mem-text">' + esc(t.name) + ' · ' + (t.fire_count || 0) + ' fired</span><button class="eb-mem-copy" data-url="' + esc(location.origin + t.url) + '">URL</button><button class="eb-mem-del" data-tid="' + t.id + '">✕</button></div>').join('') : '<p class="muted">No triggers yet.</p>';
+        el.querySelectorAll('[data-tid]').forEach((btn) => btn.onclick = async () => { try { await api('/api/triggers/' + btn.dataset.tid, { method: 'DELETE' }); eb.triggers = (eb.triggers || []).filter((x) => String(x.id) !== btn.dataset.tid); renderTrig(); } catch (e) { toast('Could not delete trigger', e.message); } });
+        el.querySelectorAll('[data-url]').forEach((btn) => btn.onclick = () => { const u = btn.dataset.url; const ok = () => toast('Webhook URL', u); if (navigator.clipboard) navigator.clipboard.writeText(u).then(ok, ok); else ok(); });
+      };
+      renderTrig();
+      const addTrig = body.querySelector('#be-trig-add');
+      if (addTrig) addTrig.onclick = async () => {
+        const name = body.querySelector('#be-trig-name').value.trim() || 'Trigger';
+        const prompt = body.querySelector('#be-trig-prompt').value.trim();
+        try { const t = await api('/api/triggers', { body: { bot_id: b.id, name, prompt } }); eb.triggers = [...(eb.triggers || []), t]; body.querySelector('#be-trig-name').value = ''; body.querySelector('#be-trig-prompt').value = ''; renderTrig(); toast('Trigger added', 'Copy its URL to POST events.'); } catch (e) { toast('Could not add trigger', e.message); }
       };
       const doExport = async (mem) => { try { const d = await api('/api/bots/' + b.id + '/export', { params: { memory: mem ? 'true' : 'false' } }); const blob = new Blob([JSON.stringify(d, null, 2)], { type: 'application/json' }); const url = URL.createObjectURL(blob); const a = document.createElement('a'); a.href = url; a.download = (b.name || 'bot') + '.json'; document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(url), 4000); toast('Exported', b.name + '.json downloaded.'); } catch (e) { toast('Export failed', e.message); } };
       body.querySelector('#be-export').onclick = () => doExport(true);
@@ -758,8 +775,13 @@
         skField('Lazy tool loading (faster start)', 'context.lazy_tools', 'check') +
         skField('Auto-reflect memories', 'memory.auto_reflect', 'check') +
         skField('Proactive check-in interval (min)', 'proactive.interval_min', 'number') +
-        skField('Context history tokens', 'context.max_history_tokens', 'number') + save + '</div>';
+        skField('Context history tokens', 'context.max_history_tokens', 'number') + save + '</div>' +
+        '<div class="card"><b>Voice</b><p class="muted">Read finished Bot replies out loud on this phone, or start a hands-free voice chat with the Bot you have open.</p>' +
+        '<label style="display:flex;align-items:center;gap:8px;margin-top:6px"><input type="checkbox" id="set-speak"' + (speakPref() ? ' checked' : '') + '> Read replies aloud</label>' +
+        '<button id="set-voice" class="primary" style="margin-top:10px">🎙 Start live voice chat</button></div>';
       const st = $('#set-theme'); if (st) st.onchange = () => { setTheme(st.value); toast('Appearance', st.value === 'system' ? 'Following this phone.' : st.value + ' theme.'); };
+      const sp = $('#set-speak'); if (sp) sp.onchange = () => { setSpeakPref(sp.checked); toast('Voice', sp.checked ? 'Replies will be read aloud.' : 'Spoken replies off.'); };
+      const vb = $('#set-voice'); if (vb) vb.onclick = () => { closeMenu(); openVoice(); };
     } else {
       b.innerHTML = '<div class="card"><b>Mobile access</b><p class="muted">This phone connects to your server over the network.</p>' +
         '<div class="field"><label>Host</label><input value="' + esc(getS('mobile.host') || '') + '" readonly></div>' +
@@ -820,6 +842,7 @@
         if (['done', 'stopped', 'error', 'limit', 'skipped'].includes(ev.status)) delete S.busy[ev.bot_id];
         else S.busy[ev.bot_id] = { thread_id: ev.thread_id, status: ev.status, steps: ev.steps, turn_id: ev.turn_id };
         if (S.view === 'bots') renderBots(); updateChatStatus();
+        if (['done', 'stopped', 'error', 'limit'].includes(ev.status)) { try { onTurnFinished(ev); } catch (e) { console.error(e); } }
         break;
       case 'approval': refreshApprovals(); break;
       case 'bots': case 'groups': loadBootstrap(); break;
@@ -912,6 +935,144 @@
       S.rec = mr; mr.start(); btn.classList.add('rec');
       toast('Recording…', 'Tap 🎙 again to stop.');
     } catch (e) { toast('Voice', 'Microphone blocked. Allow access and try again.'); }
+  }
+
+  // ------------------------------------------------------- live voice chat
+  // Hands-free conversation in the style of Grok Bot: it listens, transcribes,
+  // sends, speaks the reply and starts listening again. Speech-to-text runs on
+  // the server (the Bot's own provider); the spoken reply uses the phone's TTS.
+  function speakPref() { try { return localStorage.getItem('zt_speak') === '1'; } catch (e) { return false; } }
+  function setSpeakPref(on) { try { localStorage.setItem('zt_speak', on ? '1' : '0'); } catch (e) { /* ignore */ } if (!on) stopSpeech(); }
+  function stopSpeech() { try { if (window.speechSynthesis) window.speechSynthesis.cancel(); } catch (e) { /* ignore */ } }
+  function cleanSpeech(t) {
+    return String(t || '').replace(/```[\s\S]*?```/g, ' (code block) ').replace(/\[([^\]]+)\]\([^)]+\)/g, '$1')
+      .replace(/[#*_`>|]/g, ' ').replace(/\s+/g, ' ').trim();
+  }
+  function speakText(t, done) {
+    const s = cleanSpeech(t);
+    if (!s || !window.speechSynthesis) { if (done) done(); return; }
+    try {
+      window.speechSynthesis.cancel();
+      const u = new SpeechSynthesisUtterance(s.slice(0, 600));
+      u.rate = 1.02; u.pitch = 1.0;
+      if (done) { u.onend = done; u.onerror = done; }
+      window.speechSynthesis.speak(u);
+    } catch (e) { if (done) done(); }
+  }
+  function lastAssistantText() {
+    for (let i = S.items.length - 1; i >= 0; i--) { const it = S.items[i]; if (it.type === 'assistant' && it.text) return it.text; }
+    return '';
+  }
+  function orbState(s) { const o = $('#voice-orb'); if (o) o.dataset.state = s; }
+  function voiceStatus(s) { const e = $('#voice-status'); if (e) e.textContent = s; }
+
+  function openVoice() {
+    if (!S.thread || !S.thread.botId) { toast('Voice', 'Open a Bot chat first.'); return; }
+    if (!window.MediaRecorder) { toast('Voice', 'This browser cannot record audio.'); return; }
+    S.voice = { on: true, muted: false, rec: null, awaiting: false };
+    const b = botById(S.thread.botId);
+    $('#voice-av').innerHTML = b ? avEl(b, 84) : '';
+    $('#voice').hidden = false;
+    $('#voice-mute').textContent = '🔊 Speaking';
+    $('#voice-heard').textContent = '';
+    voiceStatus('Listening…'); orbState('listen');
+    listenStart();
+  }
+  function closeVoice() {
+    if (!S.voice) return;
+    S.voice.on = false;
+    if (S.voice.rec) { try { S.voice.rec.stop(); } catch (e) { /* ignore */ } }
+    S.voice = null;
+    stopSpeech();
+    $('#voice').hidden = true;
+  }
+  async function listenStart() {
+    const v = S.voice;
+    if (!v || !v.on || v.rec) return;
+    if (v.muteMic) return;
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const mime = MediaRecorder.isTypeSupported('audio/webm') ? 'audio/webm' : '';
+      const mr = mime ? new MediaRecorder(stream, { mimeType: mime }) : new MediaRecorder(stream);
+      const chunks = [];
+      let speech = false, quietSince = 0, raf = null, ctx = null;
+      const started = Date.now();
+      mr.ondataavailable = (e) => { if (e.data.size) chunks.push(e.data); };
+      try {
+        ctx = new (window.AudioContext || window.webkitAudioContext)();
+        const src = ctx.createMediaStreamSource(stream);
+        const an = ctx.createAnalyser(); an.fftSize = 1024; src.connect(an);
+        const buf = new Uint8Array(an.fftSize);
+        const tick = () => {
+          if (!S.voice || S.voice.rec !== mr) { return; }
+          an.getByteTimeDomainData(buf);
+          let sum = 0;
+          for (let i = 0; i < buf.length; i++) { const d = (buf[i] - 128) / 128; sum += d * d; }
+          const rms = Math.sqrt(sum / buf.length);
+          const now = Date.now();
+          if (rms > 0.02) { speech = true; quietSince = 0; }
+          else if (speech && !quietSince) { quietSince = now; }
+          else if (speech && quietSince && now - quietSince > 1200) { try { mr.stop(); } catch (e) { /* ignore */ } return; }
+          if (now - started > 30000) { try { mr.stop(); } catch (e) { /* ignore */ } return; }
+          raf = requestAnimationFrame(tick);
+        };
+        raf = requestAnimationFrame(tick);
+      } catch (e) { ctx = null; }
+      mr.onstop = async () => {
+        if (raf) cancelAnimationFrame(raf);
+        if (ctx) { try { ctx.close(); } catch (e) { /* ignore */ } }
+        stream.getTracks().forEach((t) => t.stop());
+        if (S.voice) S.voice.rec = null;
+        const blob = new Blob(chunks, { type: mr.mimeType || 'audio/webm' });
+        if (!speech || !blob.size) { orbState('idle'); if (S.voice && S.voice.on) setTimeout(listenStart, 350); return; }
+        orbState('think'); voiceStatus('Transcribing…');
+        try {
+          const form = new FormData();
+          form.append('file', blob, 'voice.' + (blob.type.includes('webm') ? 'webm' : 'bin'));
+          const d = await apiForm('/api/voice/transcribe?bot_id=' + encodeURIComponent(S.thread.botId), form);
+          const text = (d.text || '').trim();
+          if (!text) { voiceStatus("Didn't catch that."); if (S.voice && S.voice.on) setTimeout(listenStart, 500); return; }
+          $('#voice-heard').textContent = '“' + text + '”';
+          voiceStatus('Thinking…'); orbState('think');
+          if (S.voice) S.voice.awaiting = true;
+          await api('/api/threads/' + S.thread.id + '/messages', { body: { text, images: [] } });
+        } catch (e) {
+          voiceStatus(e.message || 'Voice error');
+          if (S.voice && S.voice.on) setTimeout(listenStart, 900);
+        }
+      };
+      v.rec = mr; mr.start();
+      voiceStatus('Listening…'); orbState('listen');
+    } catch (e) { voiceStatus('Microphone blocked. Allow access and try again.'); orbState('idle'); }
+  }
+  function stopListening() { if (S.voice && S.voice.rec) { try { S.voice.rec.stop(); } catch (e) { /* ignore */ } } }
+
+  // Called when a turn finishes (see onEvent). Drives spoken replies + the loop.
+  function onTurnFinished(ev) {
+    if (S.voice && S.voice.on && S.voice.awaiting && (!S.thread || ev.thread_id === S.thread.id)) {
+      S.voice.awaiting = false;
+      const t = lastAssistantText();
+      if (t && !S.voice.muted) {
+        voiceStatus('Speaking…'); orbState('speak');
+        speakText(t, () => { orbState('idle'); if (S.voice && S.voice.on) listenStart(); });
+      } else if (S.voice && S.voice.on) { listenStart(); }
+      return;
+    }
+    if (speakPref() && (!S.thread || ev.thread_id === S.thread.id) && !(S.voice && S.voice.on)) {
+      const t = lastAssistantText();
+      if (t) speakText(t);
+    }
+  }
+
+  function wireMic() {
+    const btn = $('#mic');
+    let hold = null, longFired = false;
+    btn.addEventListener('pointerdown', () => { longFired = false; hold = setTimeout(() => { longFired = true; openVoice(); }, 500); });
+    const cancel = () => { if (hold) { clearTimeout(hold); hold = null; } };
+    btn.addEventListener('pointerup', cancel);
+    btn.addEventListener('pointerleave', cancel);
+    btn.addEventListener('pointercancel', cancel);
+    btn.addEventListener('click', (e) => { if (longFired) { e.preventDefault(); e.stopPropagation(); longFired = false; if (hold) { clearTimeout(hold); hold = null; } return; } toggleMic(); });
   }
 
   // ----------------------------------------------------------- slash commands
@@ -1528,7 +1689,15 @@
       }
       e.target.value = ''; renderAttach();
     };
-    $('#mic').onclick = toggleMic;
+    wireMic();
+    $('#voice-x').onclick = closeVoice;
+    $('#voice-talk').onclick = () => { if (S.voice && S.voice.rec) stopListening(); else listenStart(); };
+    $('#voice-mute').onclick = () => {
+      if (!S.voice) return;
+      S.voice.muted = !S.voice.muted;
+      if (S.voice.muted) { stopSpeech(); orbState('idle'); }
+      $('#voice-mute').textContent = S.voice.muted ? '🔇 Muted' : '🔊 Speaking';
+    };
     $('#scr-done').onclick = () => closeScreen(true);
     $('#scr-back').onclick = () => closeScreen(false);
     $('#scr-reload').onclick = () => input({ type: 'reload' });

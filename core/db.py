@@ -87,6 +87,11 @@ CREATE TABLE IF NOT EXISTS recordings(
   id TEXT PRIMARY KEY, bot_id TEXT, name TEXT, steps TEXT DEFAULT '[]', status TEXT DEFAULT 'recording',
   skill_name TEXT DEFAULT '', created_at REAL
 );
+CREATE TABLE IF NOT EXISTS triggers(
+  id TEXT PRIMARY KEY, bot_id TEXT, name TEXT, token TEXT UNIQUE, prompt TEXT DEFAULT '',
+  enabled INTEGER DEFAULT 1, fire_count INTEGER DEFAULT 0, created_at REAL, last_fired_at REAL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_triggers_bot ON triggers(bot_id);
 CREATE TABLE IF NOT EXISTS usage(
   id INTEGER PRIMARY KEY AUTOINCREMENT, ts REAL, bot_id TEXT, turn_id TEXT, profile TEXT, model TEXT,
   input_tokens INTEGER DEFAULT 0, output_tokens INTEGER DEFAULT 0

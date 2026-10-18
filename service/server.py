@@ -1,5 +1,6 @@
-"""Local HTTP API used by the desktop app and the mobile PWA. Everything except /api/health and the
-OAuth callback requires the access token (Bearer header, ?token= or the zt_token cookie)."""
+"""Local HTTP API used by the desktop app and the mobile PWA. Everything except /api/health, the
+OAuth callback and the token-authenticated /api/hooks webhook requires the access token (Bearer
+header, ?token= or the zt_token cookie)."""
 from __future__ import annotations
 
 import asyncio
@@ -805,6 +806,45 @@ def create_app(engine: Engine, token: str) -> FastAPI:
     @app.get("/api/routine_runs", dependencies=[api])
     def routine_runs(routine_id: str | None = None, bot_id: str | None = None, limit: int = 50) -> list[dict]:
         return eng.routines.runs(routine_id, bot_id, limit)
+
+    # ------------------------------------------------------ event triggers
+    @app.get("/api/triggers", dependencies=[api])
+    def triggers_list(bot_id: str | None = None) -> list[dict]:
+        return eng.triggers.list(bot_id)
+
+    @app.post("/api/triggers", dependencies=[api])
+    def triggers_create(body: dict = Body(...)) -> dict:
+        return eng.triggers.create(body["bot_id"], body.get("name", "Trigger"), body.get("prompt", ""),
+                                   bool(body.get("enabled", True)))
+
+    @app.put("/api/triggers/{tid}", dependencies=[api])
+    def triggers_update(tid: str, body: dict = Body(...)) -> dict:
+        return eng.triggers.update(tid, **body)
+
+    @app.post("/api/triggers/{tid}/rotate", dependencies=[api])
+    def triggers_rotate(tid: str) -> dict:
+        return eng.triggers.rotate(tid)
+
+    @app.delete("/api/triggers/{tid}", dependencies=[api])
+    def triggers_delete(tid: str) -> dict:
+        eng.triggers.delete(tid)
+        return {"ok": True}
+
+    @app.post("/api/hooks/{token}")
+    async def hooks_fire(token: str, request: Request) -> dict:
+        """Public webhook: authenticated by the secret token in the URL, not a session cookie."""
+        payload: dict = {}
+        try:
+            raw = await request.body()
+            if raw:
+                try:
+                    parsed = json.loads(raw)
+                    payload = parsed if isinstance(parsed, dict) else {"data": parsed}
+                except ValueError:
+                    payload = {"raw": raw.decode("utf-8", "replace")[:4000]}
+        except Exception:  # noqa: BLE001
+            payload = {}
+        return eng.triggers.fire(token, payload)
 
     # ------------------------------------------------------ plugins and MCP
     @app.get("/api/plugins", dependencies=[api])

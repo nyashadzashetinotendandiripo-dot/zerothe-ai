@@ -30,6 +30,7 @@ from .templates import TEAM_PRESET, template as get_template
 from .threads import Threads
 from .tooling import ToolSpec
 from .tools_builtin import builtin_tools
+from .triggers import Triggers
 from .updates import Updates
 from .usage import Usage
 
@@ -76,6 +77,7 @@ class Engine:
         self.messaging = Messaging(self)
         self.turns = TurnManager(self)
         self.routines = Routines(self)
+        self.triggers = Triggers(self)
         self.builtin: list[ToolSpec] = builtin_tools(self)
         self._labels = {t.name: t.label for t in self.builtin if t.label}
         self.base_url = "http://127.0.0.1:8765"
