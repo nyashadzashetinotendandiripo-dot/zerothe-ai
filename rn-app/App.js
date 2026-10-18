@@ -157,7 +157,7 @@ function Shell({ children, upd, onUpd, updState }) {
 // ----------------------------------------------------------------- login
 function Login({ onDone }) {
   const [base, setBase] = useState('https://8765-agquljzsz7k42vgoenj7qr6fim.instabox.tech');
-  const [mode, setMode] = useState('email');               // email | token
+  const [mode, setMode] = useState('advance');             // advance (email+password) | token
   const [mail, setMail] = useState('');
   const [pass, setPass] = useState('');
   const [token, setToken] = useState('');
@@ -166,7 +166,7 @@ function Login({ onDone }) {
   const save = async () => {
     setErr(''); setGo(true);
     try {
-      if (mode === 'email') {
+      if (mode === 'advance') {
         await loginEmail(base, mail, pass);               // cookie session
         await saveConf(base, '', mail, pass);              // remember for silent re-login
       } else {
@@ -178,18 +178,17 @@ function Login({ onDone }) {
     catch (e) { setErr(e.message || 'Could not connect.'); }
     setGo(false);
   };
-  const ready = mode === 'email' ? (!!mail.trim() && !!pass) : !!token.trim();
+  const ready = mode === 'advance' ? (!!mail.trim() && !!pass) : !!token.trim();
   return (
     <View style={[l.box, { justifyContent: 'flex-start', paddingTop: 80 }]}>
       <Text style={l.h1}>ZerotheBot</Text>
       <Text style={l.cap}>Point the app at your server and sign in.</Text>
       <View style={l.seg}>
-        <Pressable onPress={() => setMode('email')} style={[l.segB, mode === 'email' && l.segOn]}><Text style={[l.segT, mode === 'email' && { color: C.onSolid }]}>Email & password</Text></Pressable>
-        <Pressable onPress={() => setMode('token')} style={[l.segB, mode === 'token' && l.segOn]}><Text style={[l.segT, mode === 'token' && { color: C.onSolid }]}>Service token</Text></Pressable>
+        <Pressable onPress={() => setMode('advance')} style={[l.segB, l.segOn]}><Text style={[l.segT, { color: C.onSolid }]}>Email &amp; password</Text></Pressable>
       </View>
       <Text style={l.lbl}>Server</Text>
       <TextInput style={l.inl} value={base} autoCapitalize="none" autoCorrect={false} keyboardType="url" onChangeText={setBase} />
-      {mode === 'email' ? (
+      {mode === 'advance' ? (
         <>
           <Text style={l.lbl}>Email (the one you use on the web app)</Text>
           <TextInput style={l.inl} value={mail} autoCapitalize="none" autoCorrect={false} keyboardType="email-address" onChangeText={setMail} />
@@ -208,8 +207,11 @@ function Login({ onDone }) {
       </Pressable>
       <Text style={l.cap}>
         Same sign-in as the web app — one time per install. Your phone stays signed in across app
-        updates from here on.
+        updates from here on. Google sign-in is coming next.
       </Text>
+      {mode === 'advance'
+        ? <Pressable onPress={() => setMode('token')} hitSlop={8}><Text style={l.tiny}>Sign in with a service token instead</Text></Pressable>
+        : <Pressable onPress={() => setMode('advance')} hitSlop={8}><Text style={l.tiny}>Sign in with email & password instead</Text></Pressable>}
     </View>
   );
 }
@@ -316,6 +318,7 @@ const l = StyleSheet.create({
   segB: { flex: 1, paddingVertical: 9, borderRadius: 999, backgroundColor: C.panel2, borderWidth: 1, borderColor: C.line, alignItems: 'center' },
   segOn: { backgroundColor: C.solid, borderColor: C.solid },
   segT: { color: C.muted, fontSize: 13.5, fontWeight: '700' },
+  tiny: { color: C.muted, fontSize: 12, textDecorationLine: 'underline', marginTop: 10 },
   h1: { color: C.text, fontSize: 26, fontWeight: '900', marginBottom: 2 },
   h2: { color: C.text, fontSize: 18, fontWeight: '800' },
   cap: { color: C.muted, fontSize: 13, marginBottom: 8 },
