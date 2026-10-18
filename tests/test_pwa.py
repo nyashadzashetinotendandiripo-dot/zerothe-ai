@@ -105,6 +105,36 @@ class PwaCommands(unittest.TestCase):
             self.assertEqual(errs, [])
             b.close()
 
+    def test_intelligent_ui_blocks_render_and_reply(self):
+        from playwright.sync_api import sync_playwright
+        blk = 'Pick one:\n```ui\n{"type": "buttons", "items": [{"label": "Alpha", "reply": "picked alpha"}]}\n```\ndone.'
+        tid = self.eng.threads.main_thread(self.bot["id"])["id"]
+        self.eng.threads.add(tid, "Inbox", "assistant", blk, publish=False)
+        with sync_playwright() as p:
+            b = p.chromium.launch()
+            ctx = b.new_context(viewport={"width": 390, "height": 844}, device_scale_factor=2, is_mobile=True, has_touch=True)
+            pg = ctx.new_page()
+            errs = []
+            pg.on("pageerror", lambda e: errs.append(str(e)))
+            pg.goto(f"http://127.0.0.1:{self.port}/")
+            pg.wait_for_selector("#email")
+            pg.fill("#email", "pwa@test.dev")
+            pg.fill("#token", "pwa pass 123")
+            if pg.is_visible("#token2"):
+                pg.fill("#token2", "pwa pass 123")
+            pg.click("#login-btn")
+            pg.wait_for_selector("[data-bot]")
+            pg.click("[data-bot]")
+            pg.wait_for_selector("#messages .ui-buttons button.uib")
+            self.assertIn("Alpha", pg.inner_text("#messages .ui-buttons"))
+            self.assertNotIn('"type": "buttons"', pg.inner_text("#messages"))   # raw fence JSON is never shown
+            if SHOTS:
+                pg.screenshot(path=f"{SHOTS}/phone-intelligent-ui.png")
+            pg.click("#messages .ui-buttons button.uib")                        # tapping a widget sends its reply
+            pg.wait_for_function("document.querySelector('#messages').innerText.includes('picked alpha')")
+            self.assertEqual(errs, [])
+            b.close()
+
 
 if __name__ == "__main__":
     unittest.main()

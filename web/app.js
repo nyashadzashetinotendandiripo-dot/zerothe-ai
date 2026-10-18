@@ -91,6 +91,204 @@
     return out.join('').replace(/\u0000(\d+)\u0000/g, (_, i) => blocks[+i]);
   }
 
+  // ----------------------------------------------------- Intelligent-UI blocks
+  // Markdown plus fenced ```ui JSON widgets. Protocol: core/uiblocks.py; the desktop
+  // renders these natively in ui/blocks.py — this is the phone port of the same seven
+  // components. Block actions can only send a chat reply or open a link.
+  const UI_TYPES = ['buttons', 'form', 'table', 'chart', 'steps', 'stats', 'calculator'];
+  const UI_MAX = 4;
+  const UI_FENCE = /```ui[ \t]*\r?\n([\s\S]*?)```/g;
+
+  function uiSplit(text) {
+    const segs = []; const s = String(text == null ? '' : text);
+    let pos = 0, count = 0, m;
+    UI_FENCE.lastIndex = 0;
+    while ((m = UI_FENCE.exec(s)) != null) {
+      if (m.index > pos) segs.push(['text', s.slice(pos, m.index)]);
+      if (count < UI_MAX) {
+        let data = null;
+        try { data = JSON.parse(m[1]); } catch (e) { data = null; }
+        segs.push(['ui', data]); count++; pos = m.index + m[0].length;
+      } else { pos = m.index; break; }
+    }
+    if (pos < s.length) segs.push(['text', s.slice(pos)]);
+    return segs.filter(([k, v]) => k === 'ui' || (typeof v === 'string' && v.trim()));
+  }
+
+  function uiPlain(text) {
+    const joined = uiSplit(text).filter(([k]) => k === 'text').map(([, v]) => v).join('\n\n');
+    return joined.replace(/\n{3,}/g, '\n\n').trim();
+  }
+
+  function uiStreamText(text) {
+    const s = String(text == null ? '' : text);
+    const open = s.lastIndexOf('```ui');
+    if (open < 0) return s;                                              // no widget: stream exactly as before
+    if (s.indexOf('```', open + 5) < 0) return uiPlain(s.slice(0, open)); // still building: hide the partial fence
+    return uiPlain(s);                                                   // finished block: hide JSON until it renders
+  }
+
+  function uiNum(v) {
+    const f = parseFloat(v);
+    if (!isFinite(f)) return '—';
+    const a = Math.abs(f);
+    if (a >= 1e6) return (f / 1e6).toFixed(2) + 'M';
+    if (a >= 1000) return (f / 1000).toFixed(1) + 'k';
+    return String(parseFloat(f.toPrecision(6)));
+  }
+
+  function uiEval(src) {
+    const s = String(src == null ? '' : src).trim().replace(/×/g, '*').replace(/÷/g, '/').replace(/,/g, '');
+    let i = 0;
+    const ws = () => { while (i < s.length && /\s/.test(s[i])) i++; };
+    const num = () => { ws(); const a = i; while (i < s.length && /[0-9.]/.test(s[i])) i++; if (i === a) throw new Error('n'); const v = parseFloat(s.slice(a, i)); if (!isFinite(v)) throw new Error('n'); return v; };
+    const primary = () => { ws(); if (s[i] === '(') { i++; const v = expr(); ws(); if (s[i] !== ')') throw new Error(')'); i++; return v; } return num(); };
+    const power = () => { const b = primary(); ws(); if (s.slice(i, i + 2) === '**') { i += 2; return Math.pow(b, unary()); } return b; };
+    const unary = () => { ws(); if (s[i] === '+') { i++; return unary(); } if (s[i] === '-') { i++; return -unary(); } return power(); };
+    const term = () => { let v = unary(); for (;;) { ws(); const c = s[i]; if (c === '*') { i++; v *= unary(); } else if (c === '/' && s[i + 1] === '/') { i += 2; v = Math.floor(v / unary()); } else if (c === '/') { i++; v /= unary(); } else if (c === '%') { i++; v %= unary(); } else return v; } };
+    function expr() { let v = term(); for (;;) { ws(); const c = s[i]; if (c === '+') { i++; v += term(); } else if (c === '-') { i++; v -= term(); } else return v; } }
+    const out = expr(); ws(); if (i !== s.length) throw new Error('trailing');
+    if (!isFinite(out)) throw new Error('math');
+    return out;
+  }
+
+  const UI_COLORS = ['var(--accent)', 'var(--ok)', 'var(--warn)'];
+
+  function uiButtons(d) {
+    const items = (d.items || []).slice(0, 6).filter((it) => it && typeof it === 'object' && it.label);
+    return '<div class="ui ui-buttons">' + items.map((it, idx) => {
+      const url = typeof it.open === 'string' ? it.open : '';
+      const cls = 'uib' + (idx === 0 && !url ? ' primary' : '');
+      if (url) return `<button type="button" class="${cls}" data-uiopen="${esc(url)}">${esc(it.label)}</button>`;
+      return `<button type="button" class="${cls}" data-uireply="${esc(String(it.reply || it.label))}">${esc(it.label)}</button>`;
+    }).join('') + '</div>';
+  }
+
+  function uiForm(d) {
+    const out = [];
+    if (d.title) out.push(`<div class="ui-h2">${esc(d.title)}</div>`);
+    const fields = (d.fields || []).slice(0, 8).filter((f) => f && typeof f === 'object' && f.key && f.label);
+    for (const f of fields) {
+      const key = esc(String(f.key)), kind = f.kind || 'text', ph = esc(String(f.placeholder || ''));
+      if (kind === 'long') out.push(`<label class="ui-lbl">${esc(f.label)}</label><textarea class="ui-in" rows="3" data-uikey="${key}" data-uikind="long" placeholder="${ph}"></textarea>`);
+      else if (kind === 'choice') { const opts = (f.options || []).slice(0, 12).map((o) => `<option>${esc(o)}</option>`).join(''); out.push(`<label class="ui-lbl">${esc(f.label)}</label><select class="ui-in" data-uikey="${key}" data-uikind="choice">${opts}</select>`); }
+      else if (kind === 'toggle') out.push(`<label class="ui-toggle"><input type="checkbox" data-uikey="${key}" data-uikind="toggle"> ${esc(f.label)}</label>`);
+      else out.push(`<label class="ui-lbl">${esc(f.label)}</label><input class="ui-in" data-uikey="${key}" data-uikind="text" placeholder="${ph}">`);
+    }
+    const sub = d.submit && typeof d.submit === 'object' ? d.submit : {};
+    const label = String(sub.label || 'Send');
+    const tmpl = String(sub.message || '') || fields.map((f) => String(f.key) + ': {' + String(f.key) + '}').join('\n');
+    out.push(`<button type="button" class="uib primary uiform-send" data-uitmpl="${esc(tmpl)}">${esc(label)}</button>`);
+    return '<div class="ui ui-form">' + out.join('') + '</div>';
+  }
+
+  function uiTable(d) {
+    const cols = (d.columns || []).slice(0, 8).map((c) => String(c));
+    const rows = (d.rows || []).slice(0, 30);
+    let h = '<div class="ui-scroll"><table class="ui-table"><thead><tr>' + cols.map((c) => `<th>${esc(c)}</th>`).join('') + '</tr></thead><tbody>';
+    for (const row of rows) {
+      h += '<tr>';
+      for (let c = 0; c < cols.length; c++) h += `<td>${esc(Array.isArray(row) && c < row.length ? row[c] : '')}</td>`;
+      h += '</tr>';
+    }
+    h += '</tbody></table></div>';
+    const out = [];
+    if (d.caption) out.push(`<div class="ui-cap">${esc(d.caption)}</div>`);
+    out.push(h);
+    return '<div class="ui ui-table-wrap">' + out.join('') + '</div>';
+  }
+
+  function uiChart(d) {
+    const kind = d.kind === 'line' ? 'line' : 'bar';
+    const labels = (d.labels || []).slice(0, 12).map((x) => String(x));
+    const series = (d.series || []).slice(0, 3).map((s) => ({ name: s && s.name ? String(s.name) : '', values: ((s && s.values) || []).slice(0, 12).map((v) => { const f = parseFloat(v); return isFinite(f) ? f : 0; }) }));
+    const n = Math.max(labels.length, ...series.map((s) => s.values.length), 1);
+    const mx = Math.max(1, ...series.reduce((a, s) => a.concat(s.values.map((v) => Math.abs(v))), []));
+    const W = 320, H = 150, pl = 44, pb = 24, pt = 12;
+    const pw = Math.max(10, W - pl - 8), ph = Math.max(10, H - pt - pb), step = pw / n;
+    let g = '';
+    for (let k = 0; k < 4; k++) { const y = pt + ph * k / 3; g += `<line x1="${pl}" y1="${y.toFixed(1)}" x2="${W - 8}" y2="${y.toFixed(1)}" class="ui-grid"/>`; }
+    g += `<text x="${pl - 4}" y="${pt + 4}" class="ui-axis" text-anchor="end">${esc(uiNum(mx))}</text>`;
+    g += `<text x="${pl - 4}" y="${pt + ph - 2}" class="ui-axis" text-anchor="end">0</text>`;
+    for (let i = 0; i < n; i++) {
+      const x = pl + i * step;
+      if (i < labels.length) g += `<text x="${(x + step / 2).toFixed(1)}" y="${H - pb + 14}" class="ui-axis" text-anchor="middle">${esc(labels[i].slice(0, 10))}</text>`;
+      series.forEach((s, si) => {
+        if (i >= s.values.length) return;
+        const hgt = ph * Math.abs(s.values[i]) / mx, y0 = pt + ph - hgt, col = UI_COLORS[si % 3];
+        if (kind === 'bar') { const bw = step / (series.length + 1); g += `<rect x="${(x + 2 + si * bw).toFixed(1)}" y="${y0.toFixed(1)}" width="${Math.max(2, bw - 2).toFixed(1)}" height="${Math.max(2, hgt).toFixed(1)}" rx="3" fill="${col}"/>`; }
+        else { if (i + 1 < s.values.length) { const h2 = ph * Math.abs(s.values[i + 1]) / mx; g += `<line x1="${(x + step / 2).toFixed(1)}" y1="${y0.toFixed(1)}" x2="${(x + step * 1.5).toFixed(1)}" y2="${(pt + ph - h2).toFixed(1)}" stroke="${col}" stroke-width="2"/>`; } g += `<circle cx="${(x + step / 2).toFixed(1)}" cy="${y0.toFixed(1)}" r="3" fill="${col}"/>`; }
+      });
+    }
+    const out = [];
+    if (d.title) out.push(`<div class="ui-h2">${esc(d.title)}</div>`);
+    out.push(`<svg class="ui-chart" viewBox="0 0 ${W} ${H}" preserveAspectRatio="xMidYMid meet" role="img">${g}</svg>`);
+    const leg = series.map((s, i) => s.name ? `<span class="ui-leg"><i style="background:${UI_COLORS[i % 3]}"></i>${esc(s.name)}</span>` : '').join('');
+    if (leg) out.push(`<div class="ui-legend">${leg}</div>`);
+    return '<div class="ui ui-chart-wrap">' + out.join('') + '</div>';
+  }
+
+  function uiSteps(d) {
+    const glyph = { done: ['✓', 'ok'], running: ['▶', 'go'], error: ['✗', 'bad'] };
+    const rows = (d.items || []).slice(0, 12).filter((it) => it && typeof it === 'object' && it.label).map((it) => {
+      const g = glyph[it.status] || ['○', 'faint'];
+      return `<div class="ui-step ${g[1]}"><span class="ui-step-ic">${g[0]}</span><span>${esc(it.label)}</span></div>`;
+    });
+    return '<div class="ui ui-steps">' + rows.join('') + '</div>';
+  }
+
+  function uiStats(d) {
+    const items = (d.items || []).filter((it) => it && typeof it === 'object' && it.value).slice(0, 4);
+    const list = items.length ? items : [{ value: '—', label: '' }];
+    return '<div class="ui ui-stats">' + list.map((it) => `<div class="ui-stat"><div class="ui-stat-v">${esc(it.value)}</div>${it.label ? `<div class="ui-stat-l">${esc(it.label)}</div>` : ''}</div>`).join('') + '</div>';
+  }
+
+  function uiCalc(d) {
+    const out = [];
+    if (d.title) out.push(`<div class="ui-h2">${esc(d.title)}</div>`);
+    out.push(`<input class="ui-in uicalc-in" inputmode="text" autocomplete="off" placeholder="e.g. 1200*1.2/12" value="${esc(String(d.expression || ''))}">`);
+    out.push('<div class="ui-calc-out uicalc-out">—</div>');
+    out.push('<button type="button" class="uib primary uicalc-send">Send result</button>');
+    return '<div class="ui ui-calc">' + out.join('') + '</div>';
+  }
+
+  const UI_RENDER = { buttons: uiButtons, form: uiForm, table: uiTable, chart: uiChart, steps: uiSteps, stats: uiStats, calculator: uiCalc };
+
+  function uiBlock(data) {
+    if (data && typeof data === 'object' && UI_TYPES.indexOf(data.type) >= 0) {
+      try { const h = UI_RENDER[data.type](data); if (h) return h; } catch (e) { /* a malformed block must not break the message */ }
+      return '<div class="ui-note">That interactive block didn’t render — ask the Bot to try again.</div>';
+    }
+    return '<div class="ui-note">Unsupported block type — ask the Bot to use text, buttons, a form, a table, a chart, steps, stats or a calculator.</div>';
+  }
+
+  function aiBody(it) {
+    const text = it.text || '';
+    const segs = uiSplit(text);
+    if (!segs.some(([k]) => k === 'ui')) return md(text);
+    return segs.map(([k, v]) => (k === 'text' ? md(v) : (v == null ? '<div class="ui-note">That interactive block didn’t parse — ask the Bot to try again.</div>' : uiBlock(v)))).join('');
+  }
+
+  function uiFormMessage(form, tmpl) {
+    const vals = {};
+    form.querySelectorAll('[data-uikey]').forEach((el) => { vals[el.dataset.uikey] = el.dataset.uikind === 'toggle' ? (el.checked ? 'yes' : 'no') : String(el.value); });
+    return String(tmpl || '').replace(/\{(\w+)\}/g, (m, k) => (k in vals ? vals[k] : m)).trim();
+  }
+
+  function wireUI(el) {
+    el.querySelectorAll('[data-uireply]').forEach((b) => b.addEventListener('click', (e) => { e.stopPropagation(); postReply(b.dataset.uireply, uiParent(b)); }));
+    el.querySelectorAll('[data-uiopen]').forEach((b) => b.addEventListener('click', (e) => { e.stopPropagation(); if (/^https?:/i.test(b.dataset.uiopen)) window.open(b.dataset.uiopen, '_blank', 'noopener'); }));
+    el.querySelectorAll('.uiform-send').forEach((b) => b.addEventListener('click', (e) => { e.stopPropagation(); const form = b.closest('.ui-form'); if (form) postReply(uiFormMessage(form, b.dataset.uitmpl), uiParent(b)); }));
+    el.querySelectorAll('.ui-calc').forEach((c) => {
+      const inp = c.querySelector('.uicalc-in'), out = c.querySelector('.uicalc-out'), snd = c.querySelector('.uicalc-send');
+      const recalc = () => { try { out.textContent = uiNum(uiEval(inp.value)); } catch (e) { out.textContent = '—'; } };
+      inp.addEventListener('input', recalc); recalc();
+      if (snd) snd.addEventListener('click', (e) => { e.stopPropagation(); if (out.textContent !== '—' && inp.value.trim()) postReply(inp.value.trim() + ' = ' + out.textContent, uiParent(snd)); });
+    });
+  }
+
+  function uiParent(node) { const w = node.closest('.msg-wrap'); return w ? (parseInt(w.dataset.mid, 10) || 0) : 0; }
+
   // ------------------------------------------------------------------ views
   function showLogin() { $('#app').hidden = true; $('#login').hidden = false; if (S.es) { S.es.close(); S.es = null; } }
   function openMenu() { $('#scrim').hidden = false; $('#tabs').hidden = false; }
@@ -500,7 +698,7 @@
   }
   function itemHTML(it) {
     if (it.type === 'user') return msgShell(it, `<div class="msg user">${quoteHTML(it)}${md(it.text)}${(it.images || []).map((i) => `<img src="/api/files/shots/${encodeURIComponent(i)}">`).join('')}</div>`);
-    if (it.type === 'assistant') return msgShell(it, `<div class="msg assistant">${S.thread && !S.thread.botId ? `<div class="who">${esc(it.emoji || '')} ${esc(it.name || '')}</div>` : ''}${quoteHTML(it)}${md(it.text)}</div>`);
+    if (it.type === 'assistant') return msgShell(it, `<div class="msg assistant">${S.thread && !S.thread.botId ? `<div class="who">${esc(it.emoji || '')} ${esc(it.name || '')}</div>` : ''}${quoteHTML(it)}${aiBody(it)}</div>`);
     if (it.type === 'tool') {
       const ic = { running: '●', ok: '✓', error: '✕', denied: '⛔', blocked: '⛔' }[it.status] || '•';
       const label = esc(it.label || it.tool);
@@ -517,13 +715,14 @@
     const el = $('#messages');
     const atEnd = el.scrollHeight - el.scrollTop - el.clientHeight < 120;
     let html = S.items.map(itemHTML).join('');
-    for (const [sid, st] of Object.entries(S.stream)) if (st.thread === (S.thread && S.thread.id) && st.text) html += `<div class="msg assistant">${md(st.text)}</div>`;
+    for (const [sid, st] of Object.entries(S.stream)) if (st.thread === (S.thread && S.thread.id) && st.text) html += `<div class="msg assistant">${md(uiStreamText(st.text))}</div>`;
     el.innerHTML = html;
     wireMessages(el);
     if (scroll || atEnd) el.scrollTop = el.scrollHeight;
   }
 
   function wireMessages(el) {
+    wireUI(el);
     el.querySelectorAll('.msg-wrap[data-mid]').forEach((w) => {
       const mid = parseInt(w.dataset.mid, 10); if (!mid) return;
       const bubble = w.querySelector('.msg');
@@ -879,6 +1078,13 @@
       S.reply = null; renderReplyBar();
       if (d.switch_thread && S.thread && S.thread.botId) openThread(d.switch_thread, S.thread.title, S.thread.botId);   // /new
     } catch (e) { toast('Could not send', e.message); ta.value = text; }
+  }
+
+  async function postReply(text, parentId) {
+    text = String(text || '').trim();
+    if (!text || !S.thread) return;
+    try { await api('/api/threads/' + S.thread.id + '/messages', { body: { text, images: [], parent_id: parentId || 0 } }); }
+    catch (e) { toast('Could not send', e.message); }
   }
 
   function renderAttach() {

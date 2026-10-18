@@ -406,3 +406,54 @@ h3.section, .section { margin: 14px 16px 8px; font-size: 13px; color: var(--mute
 .voice-row { display: flex; align-items: center; gap: 18px; margin-top: 6px; }
 .voice-talk { width: 66px; height: 66px; border-radius: 50%; border: 0; font-size: 26px; background: var(--solid); color: var(--on-solid); box-shadow: var(--shadow); }
 .voice-talk.rec { background: var(--bad); color: #fff; animation: pulse 1s infinite alternate; }
+
+/* --------------------------------------------------------- Intelligent-UI blocks */
+.ui { margin: 8px 0; }
+.ui-h2 { font-weight: 700; font-size: 15px; margin: 2px 0 6px; color: var(--text); }
+.ui-cap { font-size: 13px; color: var(--muted); margin-bottom: 4px; }
+.ui-note { font-size: 13px; color: var(--muted); font-style: italic; padding: 6px 2px; }
+
+.ui-buttons { display: flex; flex-direction: column; gap: 6px; }
+.uib { width: 100%; text-align: left; padding: 10px 12px; border: 1px solid var(--line); border-radius: 12px;
+  background: var(--panel); color: var(--text); font-size: 14px; font-weight: 600; }
+.uib:active { transform: scale(.99); }
+.uib.primary { background: var(--solid); color: var(--on-solid); border-color: var(--solid); }
+
+.ui-form { display: flex; flex-direction: column; gap: 6px; }
+.ui-lbl { font-size: 12px; color: var(--muted); margin-top: 2px; }
+.ui-in { width: 100%; box-sizing: border-box; padding: 9px 11px; border: 1px solid var(--line); border-radius: 10px;
+  background: var(--bg); color: var(--text); font-size: 14px; font-family: inherit; }
+.ui-in:focus { outline: none; border-color: var(--accent); }
+.ui-toggle { display: flex; align-items: center; gap: 8px; font-size: 14px; color: var(--text); }
+.ui-toggle input { width: 18px; height: 18px; }
+
+.ui-table-wrap .ui-scroll { overflow-x: auto; border: 1px solid var(--line); border-radius: 12px; }
+.ui-table { border-collapse: collapse; width: 100%; font-size: 13px; }
+.ui-table th, .ui-table td { padding: 7px 10px; text-align: left; border-bottom: 1px solid var(--line); white-space: nowrap; }
+.ui-table thead th { background: var(--panel2); font-weight: 700; color: var(--text); }
+.ui-table tbody tr:last-child td { border-bottom: 0; }
+
+.ui-chart-wrap { border: 1px solid var(--line); border-radius: 12px; padding: 10px 8px 6px; background: var(--panel); }
+.ui-chart { width: 100%; height: auto; display: block; }
+.ui-grid { stroke: var(--line); stroke-width: 1; }
+.ui-axis { fill: var(--muted); font-size: 10px; }
+.ui-legend { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 6px; font-size: 12px; color: var(--muted); }
+.ui-leg { display: inline-flex; align-items: center; gap: 5px; }
+.ui-leg i { width: 10px; height: 10px; border-radius: 3px; display: inline-block; }
+
+.ui-steps { display: flex; flex-direction: column; gap: 5px; }
+.ui-step { display: flex; align-items: flex-start; gap: 9px; font-size: 14px; color: var(--text); }
+.ui-step-ic { width: 16px; text-align: center; }
+.ui-step.ok .ui-step-ic { color: var(--ok); }
+.ui-step.go .ui-step-ic { color: var(--accent); }
+.ui-step.bad .ui-step-ic { color: var(--bad); }
+.ui-step.faint .ui-step-ic { color: var(--muted); }
+
+.ui-stats { display: flex; gap: 8px; }
+.ui-stat { flex: 1; border: 1px solid var(--line); border-radius: 12px; background: var(--panel); padding: 10px 12px; }
+.ui-stat-v { font-size: 20px; font-weight: 800; color: var(--text); }
+.ui-stat-l { font-size: 12px; color: var(--muted); margin-top: 2px; }
+
+.ui-calc { border: 1px solid var(--line); border-radius: 12px; background: var(--panel); padding: 10px; }
+.ui-calc .uicalc-out { font-size: 22px; font-weight: 800; color: var(--text); padding: 6px 2px; }
+.ui-calc .uicalc-send { margin-top: 8px; }
