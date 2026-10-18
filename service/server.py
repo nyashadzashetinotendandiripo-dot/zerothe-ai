@@ -215,7 +215,7 @@ def create_app(engine: Engine, token: str) -> FastAPI:
     @app.post("/api/bots", dependencies=[api])
     def bots_create(body: dict = Body(...)) -> dict:
         bot = eng.bots.create(body.get("name", ""), job=body.get("job", ""), instructions=body.get("instructions", ""), emoji=body.get("emoji", "🤖"),
-                              **{k: v for k, v in body.items() if k in ("profile", "model", "approval_mode", "step_limit", "net_mode", "net_allow", "net_deny", "grants", "proactive", "template")})
+                              **{k: v for k, v in body.items() if k in ("profile", "model", "approval_mode", "step_limit", "net_mode", "net_allow", "net_deny", "grants", "proactive", "template", "avatar")})
         eng.threads.main_thread(bot["id"])
         return bot
 

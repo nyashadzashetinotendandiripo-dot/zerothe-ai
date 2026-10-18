@@ -11,7 +11,7 @@ from typing import Any, Iterable
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS bots(
-  id TEXT PRIMARY KEY, name TEXT NOT NULL, emoji TEXT DEFAULT '', job TEXT DEFAULT '',
+  id TEXT PRIMARY KEY, name TEXT NOT NULL, emoji TEXT DEFAULT '', avatar TEXT DEFAULT '', job TEXT DEFAULT '',
   instructions TEXT DEFAULT '', profile TEXT DEFAULT '', model TEXT DEFAULT '',
   approval_mode TEXT DEFAULT 'ask', step_limit INTEGER DEFAULT 40,
   net_mode TEXT DEFAULT 'inherit', net_allow TEXT DEFAULT '[]', net_deny TEXT DEFAULT '[]',
@@ -104,6 +104,7 @@ CREATE TABLE IF NOT EXISTS known_logins(domain TEXT PRIMARY KEY, added_at REAL);
 
 # columns added after the first release: applied to existing databases when they are opened
 MIGRATIONS = [("bots", "daily_token_limit", "INTEGER DEFAULT 0"),
+              ("bots", "avatar", "TEXT DEFAULT ''"),
               ("routines", "ceiling_items", "INTEGER DEFAULT 0"),
               ("routines", "anomaly_pct", "INTEGER DEFAULT 0"),
               ("routines", "kill_condition", "TEXT DEFAULT ''"),

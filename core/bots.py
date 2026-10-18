@@ -8,7 +8,7 @@ from .events import EventBus
 from .settings import Admin, Settings
 
 JSON_FIELDS = {"net_allow": [], "net_deny": [], "grants": []}
-EDITABLE = {"name", "emoji", "job", "instructions", "profile", "model", "approval_mode", "step_limit", "net_mode",
+EDITABLE = {"name", "emoji", "avatar", "job", "instructions", "profile", "model", "approval_mode", "step_limit", "net_mode",
             "net_allow", "net_deny", "grants", "proactive", "paused", "archived", "template", "daily_token_limit"}
 APPROVAL_MODES = ("ask", "auto_review", "full_access")
 PROACTIVE_LEVELS = ("off", "suggest", "act")
@@ -69,7 +69,7 @@ class Bots:
         if self.get_by_name(name):
             raise BotError(f"There is already a Bot named {name}.")
         mode = opts.get("approval_mode") or self.settings.get("approval.default_mode", "ask")
-        row = {"id": new_id(), "name": name[:40], "emoji": emoji or "🤖", "job": job.strip(), "instructions": instructions.strip(),
+        row = {"id": new_id(), "name": name[:40], "emoji": emoji or "🤖", "avatar": str(opts.get("avatar", "") or ""), "job": job.strip(), "instructions": instructions.strip(),
                "profile": opts.get("profile", ""), "model": opts.get("model", ""),
                "approval_mode": mode if mode in APPROVAL_MODES else "ask",
                "step_limit": int(opts.get("step_limit") or self.settings.get("defaults.step_limit", 40)),

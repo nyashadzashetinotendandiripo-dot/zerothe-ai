@@ -3,6 +3,34 @@
   'use strict';
   const $ = (s, el = document) => el.querySelector(s);
   const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+
+  // ------------------------------------------------------- generative avatars
+  // Blob avatars in the style of Grok Bot: a colored organic shape with two white
+  // eyes. Deterministic from the Bot id so every Bot keeps its look; a chosen
+  // shape/color ("shape:#rrggbb") is stored on the Bot and wins when present.
+  const AV_SHAPES = ['circle', 'oval', 'squircle', 'pill', 'triangle', 'hexagon', 'cloud', 'drop', 'star', 'blob'];
+  const AV_COLORS = ['#111111', '#8A5A3B', '#FF3B30', '#FF9500', '#FFB300', '#22C55E', '#12B5A5', '#2E7CF6', '#A855F7', '#FF2D78', '#9AA0A6'];
+  const AV_PICK = ['#FFFFFF'].concat(AV_COLORS);
+  function avHash(s) { let h = 2166136261; const t = String(s ?? 'bot'); for (let i = 0; i < t.length; i++) { h ^= t.charCodeAt(i); h = Math.imul(h, 16777619); } return h >>> 0; }
+  function avShapeSVG(shape) {
+    switch (shape) {
+      case 'circle': return '<circle cx="50" cy="50" r="46"/>';
+      case 'oval': return '<ellipse cx="50" cy="50" rx="47" ry="38"/>';
+      case 'squircle': return '<rect x="6" y="6" width="88" height="88" rx="30"/>';
+      case 'pill': return '<rect x="4" y="29" width="92" height="42" rx="21"/>';
+      case 'triangle': return '<path d="M50 8c2 0 4 3 6 7l34 63c4 8 2 14-7 14H17c-9 0-11-6-7-14L44 15c2-4 4-7 6-7z"/>';
+      case 'hexagon': return '<path d="M50 4l38 22c4 2 6 6 6 11v26c0 5-2 9-6 11L50 96 12 74c-4-2-6-6-6-11V37c0-5 2-9 6-11z"/>';
+      case 'cloud': return '<path d="M30 88c-16 0-24-10-22-22 2-10 8-14 16-16-2-12 8-22 20-20 6-10 22-12 30-2 14-2 22 10 18 22 6 8 2 20-8 24-4 12-14 16-24 14z"/>';
+      case 'drop': return '<path d="M50 6s38 42 38 60c0 18-17 30-38 30S12 84 12 66C12 48 50 6 50 6z"/>';
+      case 'star': return '<path d="M50 4c4 22 24 42 46 46-22 4-42 24-46 46-4-22-24-42-46-46C26 46 46 26 50 4z"/>';
+      default: return '<path d="M54 6c22-2 40 14 40 36 0 16-10 24-18 30-8 12-22 24-36 20C24 88 8 78 8 58 8 40 20 28 30 22 38 16 44 8 54 6z"/>';
+    }
+  }
+  const AV_EYES = '<rect x="37" y="43" width="7" height="18" rx="3.5" fill="#fff" transform="rotate(-9 40.5 52)"/><rect x="56" y="43" width="7" height="18" rx="3.5" fill="#fff" transform="rotate(9 59.5 52)"/>';
+  function avParse(bot) { const [sh, col] = String((bot && bot.avatar) || '').split(':'); return { shape: AV_SHAPES.includes(sh) ? sh : '', color: /^#[0-9a-f]{6}$/i.test(col || '') ? col : '' }; }
+  function avSpec(bot) { const p = avParse(bot); const seed = avHash((bot && (bot.id || bot.name)) || 'bot'); return { shape: p.shape || AV_SHAPES[seed % AV_SHAPES.length], color: p.color || AV_COLORS[(seed >>> 4) % AV_COLORS.length] }; }
+  function avSVG(bot, size, badge) { const { shape, color } = avSpec(bot); const s = size || 40; return '<svg viewBox="0 0 100 100" width="' + s + '" height="' + s + '" aria-hidden="true"><g fill="' + color + '">' + avShapeSVG(shape) + '</g>' + AV_EYES + '</svg>' + (badge ? '<i class="av-badge">★</i>' : ''); }
+  function avEl(bot, size, badge) { const s = size || 40; return '<span class="av" style="width:' + s + 'px;height:' + s + 'px">' + avSVG(bot, s, badge) + '</span>'; }
   const S = { commands: [], bots: [], groups: [], busy: {}, approvals: [], thread: null, threads: [], items: [], stream: {}, view: 'home', es: null, lastEvent: 0, screenBot: null, screenTimer: null, titleBase: document.title, attach: [], rec: null, providers: [], templates: [], loaded: new Set(), mk: [], ib: { pend: [], hist: [], handoffs: [] }, cp: { cards: [], term: [], headless: false }, fl: { entries: [], mode: 'recent', cwd: '', current: null }, sk: { skills: [], recs: [], cur: '' }, rt: { rows: [], runs: [], sel: null }, pl: { plugins: [], catalog: [], mcp: [] }, us: {}, al: [] };
 
   // ------------------------------------------------------------------ api
@@ -52,14 +80,27 @@
 
   // ------------------------------------------------------------------ views
   function showLogin() { $('#app').hidden = true; $('#login').hidden = false; if (S.es) { S.es.close(); S.es = null; } }
+  function openMenu() { $('#scrim').hidden = false; $('#tabs').hidden = false; }
+  function closeMenu() { $('#scrim').hidden = true; $('#tabs').hidden = true; }
+  function initials(email) { const s = String(email || '').split('@')[0].replace(/[^a-zA-Z]/g, ''); return (s.slice(0, 2) || 'me').toUpperCase(); }
+  function setAcct(email) { const el = $('#hdr-avatar span'); if (el) el.textContent = initials(email); }
   function setView(v) {
     S.view = v;
     const views = ['home', 'bots', 'chat', 'inbox', 'settings', 'marketplace', 'computer', 'files', 'skills', 'routines', 'plugins', 'usage', 'actionlog', 'screen'];
     for (const id of views) $('#view-' + id).hidden = id !== v;
     document.querySelectorAll('#tabs button').forEach((b) => b.classList.toggle('active', b.dataset.view === v || (v === 'chat' && b.dataset.view === 'bots')));
-    $('#tabs').hidden = v === 'screen';
-    $('#back').hidden = !(v === 'chat');
-    $('#title').textContent = { home: 'Home', bots: 'Bots', chat: S.thread && S.thread.title || 'Chat', inbox: 'Inbox', settings: 'Settings', marketplace: 'Marketplace', computer: 'Computer', files: 'Files', skills: 'Skills', routines: 'Routines', plugins: 'Plugins', usage: 'Usage', actionlog: 'Action log', screen: 'Browser' }[v] || $('#title').textContent;
+    closeMenu();
+    $('#back').hidden = v === 'bots';
+    $('#hdr-search').hidden = v !== 'bots';
+    $('#hdr-new').hidden = v !== 'bots';
+    $('#hdr-computer').hidden = v !== 'chat';
+    $('#hdr-computer').dataset.botid = (S.thread && S.thread.botId) || '';
+    if (v === 'chat' && S.thread && S.thread.botId) {
+      const b = botById(S.thread.botId);
+      $('#title').innerHTML = b ? '<span class="chip">' + avEl(b, 26) + '<b>' + esc(b.name) + '</b><span class="glyph">▾</span></span>' : '<span class="chip"><b>' + esc(S.thread.title || 'Chat') + '</b></span>';
+    } else {
+      $('#title').textContent = { home: 'Home', bots: 'Bots', chat: 'Chat', inbox: 'Inbox', settings: 'Settings', marketplace: 'Marketplace', computer: 'Computer', files: 'Files', skills: 'Skills', routines: 'Routines', plugins: 'Plugins', usage: 'Usage', actionlog: 'Action log', screen: 'Browser' }[v] || $('#title').textContent;
+    }
     if (v === 'home') renderHome();
     if (v === 'bots') renderBots();
     if (v === 'chat') { renderMessages(true); updateChatStatus(); }
@@ -83,38 +124,103 @@
     return ['work', b.status === 'retrying' ? 'retrying' : 'working'];
   }
 
+  function humanTime(ts) {
+    if (!ts) return '';
+    const d = new Date(ts < 1e12 ? ts * 1000 : ts); const now = new Date();
+    if (d.toDateString() === now.toDateString()) return d.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
+    if (new Date(now.getTime() - 864e5).toDateString() === d.toDateString()) return 'Yesterday';
+    return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+  }
+
+  function avatarPickerHTML(spec) {
+    return '<div class="avpick">' +
+      '<div class="avpick-preview"></div>' +
+      '<div class="avpick-shapes">' + AV_SHAPES.map((s) => '<button type="button" class="avsh" data-shape="' + s + '" aria-label="' + s + '"><svg viewBox="0 0 100 100" width="26" height="26"><g>' + avShapeSVG(s) + '</g></svg></button>').join('') + '</div>' +
+      '<div class="avpick-colors">' + AV_PICK.map((c) => '<button type="button" class="avcol" data-color="' + c + '" style="background:' + c + '" aria-label="' + c + '"></button>').join('') + '</div>' +
+      '</div>';
+  }
+  function wireAvatarPicker(host) {
+    const state = { shape: host.dataset.shape, color: host.dataset.color };
+    const sync = () => {
+      host.dataset.shape = state.shape; host.dataset.color = state.color;
+      host.querySelector('.avpick-preview').innerHTML = '<span class="av" style="width:92px;height:92px">' + avSVG({ avatar: state.shape + ':' + state.color }, 92) + '</span>';
+      host.querySelectorAll('.avsh').forEach((b) => { b.classList.toggle('sel', b.dataset.shape === state.shape); b.querySelector('g').setAttribute('fill', state.color); });
+      host.querySelectorAll('.avcol').forEach((b) => b.classList.toggle('sel', b.dataset.color.toLowerCase() === state.color.toLowerCase()));
+    };
+    host.querySelectorAll('.avsh').forEach((b) => b.onclick = () => { state.shape = b.dataset.shape; sync(); });
+    host.querySelectorAll('.avcol').forEach((b) => b.onclick = () => { state.color = b.dataset.color; sync(); });
+    sync();
+  }
+
   function renderBots() {
     const el = $('#view-bots');
-    const rows = S.bots.map((b) => {
+    const q = (S.botQuery || '').toLowerCase().trim();
+    const bots = S.bots.filter((b) => !q || (b.name + ' ' + (b.job || '')).toLowerCase().includes(q));
+    const busy = bots.filter((b) => { const [k] = stateOf(b.id); return k === 'work' || k === 'wait'; });
+    const favs = (busy.length ? busy : bots).slice(0, 6);
+    const favHTML = favs.map((b, i) => {
+      const [, label] = stateOf(b.id);
+      return '<button type="button" class="fav" data-bot="' + b.id + '">' + avEl(b, 62, i === 0 && busy.length > 0) +
+        '<span class="fav-name">' + esc(b.name) + '</span>' + (label ? '<span class="fav-state">' + esc(label) + '</span>' : '') + '</button>';
+    }).join('');
+    const rows = bots.map((b) => {
       const [cls, label] = stateOf(b.id);
       const p = (S.providers || []).find((x) => x.id === b.profile);
-      const brain = p ? `<div class="job">${esc(p.label || p.id)}${b.model ? ' · ' + esc(b.model) : ''}${p.key_set ? '' : ' · ⚠ no key'}</div>` : '';
-      return `<div class="card bot-row" data-bot="${b.id}"><div class="emoji">${esc(b.emoji || '🤖')}</div><div class="meta"><div class="name">${esc(b.name)}</div>` +
-        `<div class="job">${esc(b.job || 'No job yet')}</div>${brain}</div>${label ? `<span class="pill ${cls}">${label}</span>` : ''}<button class="small edit-bot" data-edit="${b.id}" aria-label="Edit Bot">⚙</button></div>`;
+      const sub = b.job || (p ? (p.label || p.id) : 'No job yet');
+      return '<div class="grow" data-bot="' + b.id + '">' + avEl(b, 44) +
+        '<div class="g-main"><div class="g-name">' + esc(b.name) + '</div><div class="g-sub">' + esc(sub) + '</div></div>' +
+        '<div class="g-right">' + (label ? '<span class="pill ' + cls + '">' + esc(label) + '</span>' : '') + '<span class="g-time">' + esc(humanTime(b.updated_at)) + '</span></div></div>';
     }).join('');
-    const groups = S.groups.map((g, i) => `<div class="card bot-row" data-group="${g.thread_id}"><div class="emoji">👥</div><div class="meta"><div class="name">${esc(g.name)}</div>` +
-      `<div class="job">${esc(g.member_names.join(', '))}</div></div><button class="small edit-bot" data-gedit="${i}" aria-label="Edit group">⚙</button></div>`).join('');
-    const tpl = (S.templates || []).map((t) => `<div class="card tpl-row" data-tpl="${esc(t.id)}"><div class="emoji">${esc(t.emoji || '✨')}</div><div class="meta">` +
-      `<div class="name">${esc(t.name)}</div><div class="job">${esc(t.blurb || '')}</div></div>` +
-      `<button class="small tpl-add" data-add="${esc(t.id)}">Add</button></div>`).join('');
-    el.innerHTML = `<button id="new-bot" class="primary wide" type="button">＋ New Bot</button>` +
-      `<div id="new-bot-form" class="card" hidden>${botFormHTML()}</div>` +
-      (rows || '') + (groups ? '<h3 class="section" style="display:flex;justify-content:space-between;align-items:center">Group chats <button id="new-group" class="small">＋ New group</button></h3>' + groups : '<h3 class="section" style="display:flex;justify-content:space-between;align-items:center">Group chats <button id="new-group" class="small">＋ New group</button></h3>') +
-      (tpl ? `<h3 class="section">Ready-made Bots</h3>${tpl}` : '') +
-      (!rows && !tpl && !groups ? '<p class="muted">No Bots yet — add one below.</p>' : '');
-    el.querySelectorAll('[data-bot]').forEach((n) => n.onclick = (e) => { if (e.target.closest('[data-edit]')) return; openBot(n.dataset.bot); });
-    el.querySelectorAll('[data-edit]').forEach((b) => b.onclick = (e) => { e.stopPropagation(); openBotEdit(b.dataset.edit); });
-    el.querySelectorAll('[data-group]').forEach((n) => n.onclick = (e) => { if (e.target.closest('[data-gedit]')) return; openThread(n.dataset.group, S.groups.find((g) => g.thread_id === n.dataset.group).name, null); });
-    el.querySelectorAll('[data-gedit]').forEach((b) => b.onclick = (e) => { e.stopPropagation(); grpEdit(S.groups[parseInt(b.dataset.gedit, 10)]); });
-    const ng = document.getElementById('new-group'); if (ng) ng.onclick = () => grpEdit(null);
+    const groups = S.groups.map((g, i) => '<div class="grow" data-group="' + g.thread_id + '"><span class="av grp-av">' + '👥' + '</span>' +
+      '<div class="g-main"><div class="g-name">' + esc(g.name) + '</div><div class="g-sub">' + esc(g.member_names.join(', ')) + '</div></div>' +
+      '<div class="g-right"><button type="button" class="ghost circ gedit" data-gedit="' + i + '" aria-label="Edit group">⚙</button></div></div>').join('');
+    const tpl = (S.templates || []).map((t) => '<div class="grow" data-tpl="' + esc(t.id) + '"><span class="av tpl-av">' + esc(t.emoji || '✨') + '</span>' +
+      '<div class="g-main"><div class="g-name">' + esc(t.name) + '</div><div class="g-sub">' + esc(t.blurb || '') + '</div></div>' +
+      '<button type="button" class="pill-btn tpl-add" data-add="' + esc(t.id) + '">Add</button></div>').join('');
+    el.innerHTML =
+      '<div class="searchrow" id="bots-search"' + (S.botSearch ? '' : ' hidden') + '><input id="bot-q" type="search" placeholder="Search Bots" value="' + esc(S.botQuery || '') + '"><button type="button" id="bot-q-x" class="ghost circ" aria-label="Clear">✕</button></div>' +
+      (q ? '' : (favs.length ? '<div class="favrow">' + favHTML + '</div>' : '')) +
+      (!bots.length && !q ? '<div class="empty"><div class="empty-h">Meet your first Bot</div><p class="muted">Bots you create show up here.</p><button id="empty-new" class="primary">Create a Bot</button></div>' : '') +
+      (rows ? '<div class="glist">' + rows + '</div>' : (q ? '<p class="muted pad">No Bots match “' + esc(S.botQuery) + '”.</p>' : '')) +
+      (groups ? '<div class="sect-row"><span class="section">Group chats</span><button type="button" class="ghost pill-btn" id="new-group">＋ New group</button></div><div class="glist">' + groups + '</div>' : (!q ? '<div class="sect-row"><span class="section">Group chats</span><button type="button" class="ghost pill-btn" id="new-group">＋ New group</button></div>' : '')) +
+      (tpl && !q ? '<div class="section">Ready-made Bots</div><div class="glist">' + tpl + '</div>' : '');
+    el.querySelectorAll('.fav[data-bot]').forEach((n) => n.onclick = () => openBot(n.dataset.bot));
+    el.querySelectorAll('.grow[data-bot]').forEach((n) => n.onclick = () => openBot(n.dataset.bot));
+    el.querySelectorAll('.grow[data-group]').forEach((n) => n.onclick = (e) => { if (e.target.closest('.gedit')) return; openThread(n.dataset.group, S.groups.find((g) => g.thread_id === n.dataset.group).name, null); });
+    el.querySelectorAll('.gedit').forEach((b) => b.onclick = (e) => { e.stopPropagation(); grpEdit(S.groups[parseInt(b.dataset.gedit, 10)]); });
+    const ng = $('#new-group'); if (ng) ng.onclick = () => grpEdit(null);
     el.querySelectorAll('[data-add]').forEach((b) => b.onclick = async (e) => {
+      e.stopPropagation();
       const t = S.templates.find((x) => x.id === b.dataset.add);
       if (!t) return;
       b.disabled = true; b.textContent = 'Adding…';
       try { await api('/api/bots/from_template', { body: { template: t.id } }); await loadBootstrap(); }
       catch (err) { b.disabled = false; b.textContent = 'Add'; toast('Could not add', err.message); }
     });
-    $('#new-bot').onclick = () => { const f = $('#new-bot-form'); f.hidden = !f.hidden; if (!f.hidden) { f.innerHTML = botFormHTML(); wireBotForm('#new-bot-form', null, async (body) => { const b = await api('/api/bots', { body }); await loadBootstrap(); openBot(b.id); }); $('#nb-name').focus(); } };
+    const en = $('#empty-new'); if (en) en.onclick = () => openBotSheet();
+    const qi = $('#bot-q'); if (qi) { qi.oninput = () => { S.botQuery = qi.value; const pos = qi.selectionStart; renderBots(); const nq = $('#bot-q'); if (nq) { nq.focus(); nq.setSelectionRange(pos, pos); } }; }
+    const qx = $('#bot-q-x'); if (qx) qx.onclick = () => { S.botQuery = ''; S.botSearch = false; renderBots(); };
+  }
+
+  function openBotSheet() {
+    const spec = avSpec({ id: 'seed-' + Math.random().toString(36).slice(2) });
+    const overlay = document.createElement('div');
+    overlay.className = 'sheet-overlay'; overlay.id = 'newbot-sheet';
+    overlay.innerHTML = '<div class="sheet"><div class="sheet-head"><button type="button" class="ghost circ" id="nb-x" aria-label="Close">✕</button><b>Create New Bot</b></div>' +
+      '<div class="sheet-body">' +
+      '<input id="nb-name" class="sheet-name" placeholder="Bot name" maxlength="60">' +
+      '<div class="pickhost" data-picker data-shape="' + spec.shape + '" data-color="' + spec.color + '">' + avatarPickerHTML(spec) + '</div>' +
+      '<div class="field"><label>Job</label><input id="nb-job" placeholder="e.g. triage my inbox"></div>' +
+      '<div class="field"><label>Brain</label>' + providerOptions() + '</div>' +
+      '<div class="field"><label>Model</label><div class="row2"><input id="nb-model" list="model-list" placeholder="Model"><button type="button" id="nb-models" class="ghost pill-btn">Find models</button></div><datalist id="model-list"></datalist></div>' +
+      '</div>' +
+      '<div class="sheet-foot"><button type="button" id="nb-go" class="primary wide">Create</button></div></div>';
+    document.body.appendChild(overlay);
+    overlay.onclick = (e) => { if (e.target === overlay) overlay.remove(); };
+    overlay.querySelector('#nb-x').onclick = () => overlay.remove();
+    wireAvatarPicker(overlay.querySelector('[data-picker]'));
+    wireBotForm('#newbot-sheet', null, async (body) => { const b = await api('/api/bots', { body }); overlay.remove(); await loadBootstrap(); openBot(b.id); });
+    const n = overlay.querySelector('#nb-name'); if (n) n.focus();
   }
 
   function botFormHTML(values = {}) {
@@ -163,6 +269,8 @@
       const body = { name, job: jobEl ? jobEl.value.trim() : '' };
       if (provEl && provEl.value) body.profile = provEl.value;
       if (modelEl && modelEl.value.trim()) body.model = modelEl.value.trim();
+      const host = root.querySelector('[data-picker]');
+      if (host && host.dataset.shape && host.dataset.color) body.avatar = host.dataset.shape + ':' + host.dataset.color;
       await onSubmit(body);
     };
   }
@@ -182,7 +290,7 @@
     const b = eb.bot; const el = $('#view-bots');
     let overlay = document.getElementById('bot-editor');
     if (!overlay) { overlay = document.createElement('div'); overlay.id = 'bot-editor'; overlay.className = 'editor-overlay'; document.body.appendChild(overlay); }
-    overlay.innerHTML = '<div class="editor-sheet"><div class="editor-head"><span class="emoji" id="be-emoji">' + esc(b.emoji || '🤖') + '</span><div><b id="be-title">' + esc(b.name) + '</b><div style="font-size:11px;color:var(--muted)">' + esc(b.job || '') + '</div></div><button id="be-close" style="margin-left:auto">✕</button></div>' +
+    overlay.innerHTML = '<div class="editor-sheet"><div class="editor-head">' + avEl(b, 40) + '<div><b id="be-title">' + esc(b.name) + '</b><div style="font-size:11px;color:var(--muted)">' + esc(b.job || '') + '</div></div><button id="be-close" style="margin-left:auto">✕</button></div>' +
       '<div class="editor-tabs">' + EB_TABS.map((t) => '<button data-t="' + t + '"' + (t === eb.tab ? ' class="active"' : '') + '>' + t + '</button>').join('') + '</div>' +
       '<div class="editor-body" id="be-body"></div></div>';
     overlay.querySelector('#be-close').onclick = () => { overlay.remove(); renderBots(); };
@@ -192,13 +300,18 @@
   function ebRenderTab() {
     const b = eb.bot; const body = document.getElementById('be-body'); if (!body) return;
     if (eb.tab === 'Profile') {
+      const spec = avSpec(b);
       body.innerHTML = '<div class="field"><label>Name</label><input id="be-name" maxlength="60" value="' + esc(b.name || '') + '"></div>' +
-        '<div class="field"><label>Emoji</label><div class="eb-emojis" id="be-emos">' + ['🤖','📥','🧭','📧','📊','✍️','🗂️','🔍','💬','🧠','⚙️','🛡️','📅','🌐','🧵','📈'].map((e) => '<span class="eb-emo' + (e === (b.emoji || '🤖') ? ' sel' : '') + '" data-e="' + e + '">' + e + '</span>').join('') + '</div></div>' +
+        '<div class="field"><label>Avatar</label><div class="pickhost" data-picker data-shape="' + spec.shape + '" data-color="' + spec.color + '">' + avatarPickerHTML(spec) + '</div></div>' +
         '<div class="field"><label>Job</label><input id="be-job" value="' + esc(b.job || '') + '"></div>' +
         '<div class="field"><label>Instructions (personality, rules…)</label><textarea id="be-ins" rows="6">' + esc(b.instructions || '') + '</textarea></div>' +
         ebSaveBar();
-      body.querySelectorAll('.eb-emo').forEach((s) => s.onclick = () => { body.querySelectorAll('.eb-emo').forEach((x) => x.classList.remove('sel')); s.classList.add('sel'); document.getElementById('be-emoji').textContent = s.dataset.e; });
-      ebWireSave(body, () => ({ name: document.getElementById('be-name').value.trim(), emoji: (body.querySelector('.eb-emo.sel') || {}).dataset ? body.querySelector('.eb-emo.sel').dataset.e : b.emoji, job: document.getElementById('be-job').value.trim(), instructions: document.getElementById('be-ins').value }));
+      wireAvatarPicker(body.querySelector('[data-picker]'));
+      ebWireSave(body, () => {
+        const o = { name: document.getElementById('be-name').value.trim(), job: document.getElementById('be-job').value.trim(), instructions: document.getElementById('be-ins').value };
+        const h = body.querySelector('[data-picker]'); if (h && h.dataset.shape && h.dataset.color) o.avatar = h.dataset.shape + ':' + h.dataset.color;
+        return o;
+      });
     } else if (eb.tab === 'Model') {
       body.innerHTML = '<div class="field"><label>Brain (AI provider)</label>' + providerOptions(b.profile) + '</div>' +
         '<div class="field"><label>Model</label><div class="row" style="display:flex;gap:8px"><input id="be-model" list="be-model-list" placeholder="Model" value="' + esc(b.model || '') + '" style="flex:1;min-width:0"><button type="button" id="be-models" class="small">Find models</button></div><datalist id="be-model-list"></datalist></div>' +
@@ -292,7 +405,7 @@
     const d = await api('/api/threads/' + tid);
     S.thread = { id: tid, title, botId, running: d.running.length > 0 };
     S.items = d.items; S.approvals = [...S.approvals.filter((a) => a.thread_id !== tid), ...d.approvals];
-    setView('chat'); $('#title').textContent = title;
+    setView('chat');
     S.attach = []; renderAttach();
     renderMessages(true); renderThreadApprovals(); updateChatStatus();
     loadThreadList(botId, tid);
@@ -305,6 +418,7 @@
     try {
       S.threads = await api('/api/bots/' + botId + '/threads');
       sel.innerHTML = S.threads.map((t) => `<option value="${t.id}"${t.id === current ? ' selected' : ''}>${esc(t.title || 'Thread')}${t.main ? ' ★' : ''}</option>`).join('');
+      bar.hidden = S.threads.length <= 1;
     } catch (e) { bar.hidden = true; }
   }
 
@@ -313,7 +427,10 @@
     if (it.type === 'assistant') return `<div class="msg assistant">${S.thread && !S.thread.botId ? `<div class="who">${esc(it.emoji || '')} ${esc(it.name || '')}</div>` : ''}${md(it.text)}</div>`;
     if (it.type === 'tool') {
       const ic = { running: '●', ok: '✓', error: '✕', denied: '⛔', blocked: '⛔' }[it.status] || '•';
-      return `<div class="tool ${it.status}"><span class="ic">${ic}</span><span>${esc(it.label || it.tool)}${(it.images || []).map((i) => `<img src="/api/files/shots/${encodeURIComponent(i)}">`).join('')}</span></div>`;
+      const label = esc(it.label || it.tool);
+      const shot = (it.images || []).map((i) => `<img src="/api/files/shots/${encodeURIComponent(i)}">`).join('');
+      if (!shot && it.status === 'ok' && String(it.tool || '') === 'notice') return `<div class="ack">${label}</div>`;
+      return `<div class="tool ${it.status}"><span class="ic">${ic}</span><span>${label}${shot}</span></div>`;
     }
     if (it.type === 'notice') return it.level === 'cmd' ? `<div class="notice cmd">${md(it.text)}</div>` : `<div class="notice ${esc(it.level)}">${esc(it.text)}</div>`;
     if (it.type === 'system_note') return `<div class="notice">${esc(it.text.slice(0, 200))}</div>`;
@@ -585,7 +702,7 @@
   function renderAttach() {
     const bar = $('#attachbar');
     bar.hidden = !S.attach.length;
-    bar.innerHTML = S.attach.map((a, i) => `<span class="chip"><img src="${a.url}"><button data-i="${i}" aria-label="Remove">✕</button></span>`).join('');
+    bar.innerHTML = S.attach.map((a, i) => `<span class="chipx"><img src="${a.url}"><button data-i="${i}" aria-label="Remove">✕</button></span>`).join('');
     bar.querySelectorAll('button').forEach((b) => b.onclick = () => { S.attach.splice(+b.dataset.i, 1); renderAttach(); });
   }
 
@@ -673,7 +790,7 @@
 
   function setAuthMode(signup) {
     S.signupMode = signup;
-    $('#login-sub').textContent = signup ? 'Create your account.' : 'Sign in to your app.';
+    $('#login-sub').textContent = signup ? 'Create your account.' : 'Your team of always-on Bots that finish the work.';
     $('#email').placeholder = 'Email';
     $('#token').placeholder = signup ? 'Choose a password (8+ characters)' : 'Password';
     $('#token2').hidden = !signup;
@@ -1215,7 +1332,7 @@
         } else {
           await api('/api/login', { body: { email, password: pw } });
         }
-        await loadBootstrap(); connect(); setView('bots');
+        await loadBootstrap(); connect(); setAcct(email); setView('bots');
       } catch (e) { err.textContent = e.message; }
     };
     $('#login-btn').onclick = go;
@@ -1223,7 +1340,14 @@
     $('#to-signup').onclick = (e) => { e.preventDefault(); setAuthMode(!S.signupMode); };
     $('#google-btn').onclick = signInWithGoogle;
     $('#token').addEventListener('keydown', (e) => { if (e.key === 'Enter') $('#login-btn').click(); });
-    document.querySelectorAll('#tabs button').forEach((b) => b.onclick = () => setView(b.dataset.view));
+    document.querySelectorAll('#tabs button[data-view]').forEach((b) => b.onclick = () => { closeMenu(); setView(b.dataset.view); });
+    const mo = $('#menu-signout'); if (mo) mo.onclick = async () => { closeMenu(); try { await api('/api/logout', { body: {} }); } catch (e) { /* ignore */ } location.reload(); };
+    const sc = $('#scrim'); if (sc) sc.onclick = () => closeMenu();
+    const av = $('#hdr-avatar'); if (av) av.onclick = () => { if ($('#tabs').hidden) openMenu(); else closeMenu(); };
+    const hs = $('#hdr-search'); if (hs) hs.onclick = () => { S.botSearch = !S.botSearch; if (!S.botSearch) S.botQuery = ''; renderBots(); const qi = $('#bot-q'); if (qi) qi.focus(); };
+    const hn = $('#hdr-new'); if (hn) hn.onclick = () => openBotSheet();
+    const hc = $('#hdr-computer'); if (hc) hc.onclick = () => { const bid = hc.dataset.botid; if (bid) openScreen(bid); };
+    const ttl = $('#title'); if (ttl) ttl.onclick = () => { if (S.view === 'chat' && S.thread && S.thread.botId) openBotEdit(S.thread.botId); };
     $('#back').onclick = () => { S.thread = null; setView('bots'); };
     $('#composer').onsubmit = (e) => { e.preventDefault(); send(); };
     $('#input').addEventListener('input', () => { autoGrow(); showCommands(); });
@@ -1264,7 +1388,7 @@
       const st = await api('/api/auth_status');
       S.settings = st.settings || {};
       if (st.needs_setup) { setAuthMode(true); showLogin(); return; }
-      try { await loadBootstrap(); connect(); setView('home'); return; } catch (e) { /* fall through to sign-in */ }
+      try { await loadBootstrap(); connect(); setAcct(st.email); setView('bots'); return; } catch (e) { /* fall through to sign-in */ }
       showLogin();
     } catch (e) { toast('Could not reach the server', 'Check your connection and reopen the app.'); }
     setInterval(() => { if (S.view === 'chat') updateChatStatus(); }, 1500);

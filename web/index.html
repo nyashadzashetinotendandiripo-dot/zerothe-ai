@@ -3,9 +3,10 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content">
-<meta name="theme-color" content="#0f1115">
+<meta name="theme-color" content="#f2f2f1">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
 <link rel="manifest" href="/manifest.json">
 <link rel="icon" href="/icon.svg" type="image/svg+xml">
 <link rel="apple-touch-icon" href="/icon.svg">
@@ -17,27 +18,36 @@
 
 <section id="login" hidden>
   <div class="login-card">
-    <div class="logo">🤖</div>
-    <h1>ZerotheBot</h1>
-    <p class="muted" id="login-sub">Sign in to your app.</p>
-    <input id="email" type="email" placeholder="Email" autocomplete="email" inputmode="email">
-    <input id="token" type="password" placeholder="Password" autocomplete="current-password">
-    <input id="token2" type="password" placeholder="Repeat password" hidden>
-    <button id="login-btn" class="primary">Sign in</button>
-    <p id="signup-toggle" class="muted">New here? <a href="#" id="to-signup">Create an account</a></p>
-    <div class="divider"><span>or</span></div>
-    <button id="google-btn" class="google" type="button" hidden>
-      <span class="g">G</span> Continue with Google
-    </button>
-    <p id="login-err" class="err"></p>
+    <div class="blobfield" aria-hidden="true">
+      <span class="bf bf-green"></span><span class="bf bf-orange"></span>
+      <span class="bf bf-red"></span><span class="bf bf-blue"></span><span class="bf bf-pink"></span>
+    </div>
+    <div class="login-inner">
+      <h1>ZerotheBot</h1>
+      <p class="muted" id="login-sub">Your team of always-on Bots that finish the work.</p>
+      <input id="email" type="email" placeholder="Email" autocomplete="email" inputmode="email">
+      <input id="token" type="password" placeholder="Password" autocomplete="current-password">
+      <input id="token2" type="password" placeholder="Repeat password" hidden>
+      <button id="login-btn" class="primary">Log in</button>
+      <p id="signup-toggle" class="muted">New here? <a href="#" id="to-signup">Create an account</a></p>
+      <div class="divider"><span>or</span></div>
+      <button id="google-btn" class="google" type="button" hidden>
+        <span class="g">G</span> Continue with Google
+      </button>
+      <p id="login-err" class="err"></p>
+    </div>
   </div>
 </section>
 
 <main id="app" hidden>
   <header id="topbar">
-    <button id="back" class="icon" aria-label="Back" hidden>‹</button>
+    <button id="back" class="hbtn" aria-label="Back" hidden>‹</button>
     <div id="title">Bots</div>
-    <div id="conn" class="dot off" title="Connection"></div>
+    <span id="conn" class="dot off" title="Connection"></span>
+    <button id="hdr-computer" class="hbtn" aria-label="Bot computer" hidden>▭</button>
+    <button id="hdr-search" class="hbtn" aria-label="Search">⌕</button>
+    <button id="hdr-new" class="hbtn fill" aria-label="New Bot">＋</button>
+    <button id="hdr-avatar" class="avatar-btn" aria-label="Menu"><span>AA</span></button>
   </header>
 
   <section id="view-bots" class="view"></section>
@@ -47,9 +57,9 @@
   </section>
 
   <section id="view-chat" class="view" hidden>
-    <div id="threadbar" class="threadbar">
+    <div id="threadbar" class="threadbar" hidden>
       <select id="thread-sel" aria-label="Conversation"></select>
-      <button id="thread-new" class="small" type="button">＋ New</button>
+      <button id="thread-new" class="ghost pill-btn" type="button">＋ New</button>
     </div>
     <div id="chat-status" class="chat-status" hidden></div>
     <div id="messages"></div>
@@ -57,12 +67,14 @@
     <div id="cmdlist" role="listbox" aria-label="Commands" hidden></div>
     <div id="attachbar" class="attachbar" hidden></div>
     <form id="composer">
-      <button id="attach" type="button" class="icon" aria-label="Attach image">📎</button>
+      <button id="attach" type="button" class="composer-plus" aria-label="Attach image">＋</button>
       <input id="file" type="file" accept="image/*" multiple hidden>
-      <button id="mic" type="button" class="icon" aria-label="Voice message">🎙</button>
-      <textarea id="input" rows="1" placeholder="Message… (/ for commands)" enterkeyhint="send"></textarea>
+      <div class="composer-pill">
+        <textarea id="input" rows="1" placeholder="Message… (/ for commands)" enterkeyhint="send"></textarea>
+        <button id="mic" type="button" class="pill-icon" aria-label="Voice message">🎙</button>
+      </div>
       <button id="stop" type="button" class="stop" hidden>Stop</button>
-      <button id="send" type="submit" class="primary">Send</button>
+      <button id="send" type="submit" class="send-btn" aria-label="Send">↑</button>
     </form>
   </section>
 
@@ -71,18 +83,18 @@
 
   <section id="view-screen" class="view" hidden>
     <div class="screen-bar">
-      <button id="scr-back" class="small">‹ Back</button>
-      <button id="scr-reload" class="small">⟳</button>
+      <button id="scr-back" class="ghost pill-btn">‹ Back</button>
+      <button id="scr-reload" class="ghost pill-btn">⟳</button>
       <input id="scr-url" placeholder="Go to URL" inputmode="url" autocapitalize="off">
-      <button id="scr-go" class="small">Go</button>
+      <button id="scr-go" class="ghost pill-btn">Go</button>
     </div>
     <div class="screen-wrap"><img id="scr-img" alt="Bot screen"></div>
     <div class="screen-bar">
       <input id="scr-text" placeholder="Type into the page…">
-      <button id="scr-type" class="small">Type</button>
-      <button id="scr-enter" class="small">⏎</button>
-      <button id="scr-up" class="small">▲</button>
-      <button id="scr-down" class="small">▼</button>
+      <button id="scr-type" class="ghost pill-btn">Type</button>
+      <button id="scr-enter" class="ghost pill-btn">⏎</button>
+      <button id="scr-up" class="ghost pill-btn">▲</button>
+      <button id="scr-down" class="ghost pill-btn">▼</button>
     </div>
     <button id="scr-done" class="primary wide">Hand back to the Bot</button>
   </section>
@@ -115,11 +127,22 @@
     <div class="al-wrap"></div>
   </section>
 
-  <nav id="tabs">
-    <button data-view="home" class="active">Home</button>
-    <button data-view="bots">Bots</button>
-    <button data-view="inbox">Inbox <span id="badge" hidden>0</span></button>
-    <button data-view="settings">Settings</button>
+  <div id="scrim" hidden></div>
+  <nav id="tabs" hidden>
+    <div class="sheet-grip"></div>
+    <button data-view="bots" class="active"><span>Bots</span></button>
+    <button data-view="home"><span>Home</span></button>
+    <button data-view="inbox"><span>Inbox</span> <span id="badge" hidden>0</span></button>
+    <button data-view="marketplace"><span>Marketplace</span></button>
+    <button data-view="computer"><span>Computer</span></button>
+    <button data-view="files"><span>Files</span></button>
+    <button data-view="skills"><span>Skills</span></button>
+    <button data-view="routines"><span>Routines</span></button>
+    <button data-view="plugins"><span>Plugins</span></button>
+    <button data-view="usage"><span>Usage</span></button>
+    <button data-view="actionlog"><span>Action log</span></button>
+    <button data-view="settings"><span>Settings</span></button>
+    <button id="menu-signout" class="danger"><span>Sign out</span></button>
   </nav>
 </main>
 <script src="/app.js"></script>
