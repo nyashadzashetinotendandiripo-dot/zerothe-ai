@@ -29,7 +29,9 @@ fi
 log "expo prebuild"
 npx expo prebuild -p android --no-install --clean
 
-# 4. Sign the release like the shell app (debug keystore => no Play-Store keystore needed for sideload)
+# 4. Sign everything with the GLOBAL ~/.android/debug.keystore — the same key the
+#    first shell APK was signed with, so this APK upgrade-installs over it.
+sed -i "s|storeFile file('debug.keystore')|storeFile file(System.getProperty(\"user.home\") + \"/.android/debug.keystore\")|" android/app/build.gradle
 sed -i 's/signingConfig signingConfigs.release/signingConfig signingConfigs.debug/' android/app/build.gradle || true
 grep -c signingConfig android/app/build.gradle || true
 
