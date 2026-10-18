@@ -4,6 +4,7 @@ import { StatusBar as ExpoStatus } from 'expo-status-bar';
 import { api, connectEvents, loadKey, saveConf, tryConf, clearConf, conf, cfgGet, K_SERVER, K_TOKEN } from './src/session';
 import { C } from './src/theme';
 import { checkUpdate, installUpdate, APP_VERSION } from './src/updates';
+import Connect from './src/Connect';
 import Chat from './src/Chat';
 
 export default function App() {
@@ -108,13 +109,19 @@ export default function App() {
 
   if (screen === 'settings') return (
     <Shell upd={upd} onUpd={doUpdate} updState={updState}>
-      <Settings onBack={() => setScreen('bots')} onOut={async () => { await clearConf(); setSigned(false); }} onCheck={runCheck} />
+      <Settings onBack={() => setScreen('bots')} onOut={async () => { await clearConf(); setSigned(false); }} onCheck={runCheck} onPlug={() => setScreen('connect')} />
+    </Shell>
+  );
+
+  if (screen === 'connect') return (
+    <Shell upd={upd} onUpd={doUpdate} updState={updState}>
+      <Connect onBack={() => setScreen('bots')} />
     </Shell>
   );
 
   return (
     <Shell upd={upd} onUpd={doUpdate} updState={updState}>
-      <Bots bots={bots} busy={busy} onOpen={openBot} onGear={() => setScreen('settings')} onNew={newBot} />
+      <Bots bots={bots} busy={busy} onOpen={openBot} onGear={() => setScreen('settings')} onPlug={() => setScreen('connect')} onNew={newBot} />
     </Shell>
   );
 }
@@ -164,13 +171,14 @@ function Login({ onDone }) {
 }
 
 // ----------------------------------------------------------------- bots
-function Bots({ bots, busy, onOpen, onGear, onNew }) {
+function Bots({ bots, busy, onOpen, onGear, onPlug, onNew }) {
   const [modal, setModal] = useState(null);
   return (
     <View style={b.box}>
       <View style={b.hdr}>
         <Text style={b.h1}>Bots</Text>
         <View style={{ flexDirection: 'row', gap: 14 }}>
+          <Pressable onPress={onPlug} hitSlop={8}><Text style={b.ic}>🧩</Text></Pressable>
           <Pressable onPress={() => setModal({})} hitSlop={8}><Text style={b.ic}>＋</Text></Pressable>
           <Pressable onPress={onGear} hitSlop={8}><Text style={b.ic}>⚙</Text></Pressable>
         </View>
@@ -220,7 +228,7 @@ function NewBotModal({ onDone }) {
 }
 
 // ----------------------------------------------------------------- settings
-function Settings({ onBack, onOut, onCheck }) {
+function Settings({ onBack, onOut, onCheck, onPlug }) {
   const c2 = conf();
   const [updMsg, setUpdMsg] = useState('');
   const [checking, setChecking] = useState(false);
@@ -238,6 +246,9 @@ function Settings({ onBack, onOut, onCheck }) {
         <View style={{ width: 30 }} />
       </View>
       <View style={{ padding: 14, gap: 10 }}>
+        <Pressable onPress={onPlug} style={[l.btn, { backgroundColor: C.panel2, borderWidth: 1, borderColor: C.line }]}>
+          <Text style={[l.btnT, { color: C.text }]}>🧩 Connectors & MCP servers</Text>
+        </Pressable>
         <Text style={l.lbl}>Server</Text>
         <Text style={b.job} selectable>{c2.base}</Text>
         <Text style={l.lbl}>Token</Text>

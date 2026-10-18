@@ -1,10 +1,10 @@
 // Intelligent-UI widgets (React-Native port of the phone ```ui protocol, core/uiblocks.py).
 import React, { useMemo, useState, useEffect } from 'react';
-import { Text, View, TextInput, Pressable, ScrollView, StyleSheet } from 'react-native';
+import { Text, View, TextInput, Pressable, ScrollView, StyleSheet, Image, Linking } from 'react-native';
 import Svg, { Rect, Circle, Line } from 'react-native-svg';
 import { C } from './theme';
 
-const TYPES = ['buttons', 'form', 'table', 'chart', 'steps', 'stats', 'calculator'];
+const TYPES = ['buttons', 'form', 'table', 'chart', 'steps', 'stats', 'calculator', 'cards'];
 const MAX = 4;
 const FENCE = /```ui[ \t]*\r?\n([\s\S]*?)```/g;
 
@@ -77,7 +77,7 @@ function Buttons({ d, reply }) {
     <View style={st.col}>
       {items.map((it, idx) => {
         const url = typeof it.open === 'string' ? it.open : '';
-        if (url) return <Btn key={idx} label={it.label} primary={false} onPress={() => { if (/^https?:/i.test(url)) require('react-native').Linking.openURL(url); }} />;
+        if (url) return <Btn key={idx} label={it.label} primary={false} onPress={() => { if (/^https?:/i.test(url)) Linking.openURL(url); }} />;
         return <Btn key={idx} label={it.label} primary={idx === 0} onPress={() => reply(String(it.reply || it.label))} />;
       })}
     </View>
@@ -223,7 +223,37 @@ function Calc({ d, reply }) {
   );
 }
 
-const RENDER = { buttons: Buttons, form: Form, table: Table, chart: Chart, steps: Steps, stats: Stats, calculator: Calc };
+function Cards({ d, reply }) {
+  const cards = (d.cards || []).slice(0, 5).filter((c) => c && c.title);
+  const acts = (d.actions || []).slice(0, 4).filter((it) => it && it.label);
+  return (
+    <View style={st.col}>
+      {!!d.title && <Text style={st.h2}>{d.title}</Text>}
+      {cards.map((c, i) => (
+        <View key={i} style={st.cardRow}>
+          {(typeof c.image === 'string' && /^https?:/i.test(c.image)) ? (
+            <Image source={{ uri: c.image }} style={st.cardImg} resizeMode="cover" />
+          ) : null}
+          <View style={{ flex: 1, minWidth: 0 }}>
+            <Text style={st.cardT}>{String(c.title)}</Text>
+            {!!c.price && <Text style={st.cardP}>{String(c.price)}</Text>}
+            {!!c.why && <Text style={st.cardWhy}>{String(c.why)}</Text>}
+            {!!c.specs && <Text style={st.cardSpecs}>{String(c.specs)}</Text>}
+          </View>
+        </View>
+      ))}
+      {!cards.length && <Text style={st.cap}>No cards.</Text>}
+      {acts.length ? <View style={st.col}>{acts.map((it, idx) => (
+        <Btn key={idx} label={it.label} primary={idx === 0} onPress={() => {
+          const url = typeof it.open === 'string' ? it.open : '';
+          if (/^https?:/i.test(url)) Linking.openURL(url); else reply(String(it.reply || it.label));
+        }} />
+      ))}</View> : null}
+    </View>
+  );
+}
+
+const RENDER = { buttons: Buttons, form: Form, table: Table, chart: Chart, steps: Steps, stats: Stats, calculator: Calc, cards: Cards };
 
 export function uiBlock(d, reply) {
   if (d && typeof d === 'object' && TYPES.indexOf(d.type) >= 0) {
@@ -264,5 +294,11 @@ const st = StyleSheet.create({
   rowGlyph: { color: C.text, fontSize: 15 },
   txt: { color: C.text, fontSize: 14.5, flex: 1 },
   dot: { width: 10, height: 10, borderRadius: 3 },
+  cardRow: { flexDirection: 'row', gap: 10, backgroundColor: C.panel, borderWidth: 1, borderColor: C.line, borderRadius: 12, padding: 10, alignItems: 'flex-start' },
+  cardImg: { width: 72, height: 72, borderRadius: 10, backgroundColor: C.panel2 },
+  cardT: { color: C.text, fontSize: 14.5, fontWeight: '800' },
+  cardP: { color: C.ok, fontSize: 14, fontWeight: '800', marginTop: 1 },
+  cardWhy: { color: C.text, fontSize: 12.5, marginTop: 4, opacity: .92 },
+  cardSpecs: { color: C.muted, fontSize: 12, marginTop: 3 },
   note: { color: C.muted, fontStyle: 'italic', marginVertical: 4 },
 });

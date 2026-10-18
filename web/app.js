@@ -95,7 +95,7 @@
   // Markdown plus fenced ```ui JSON widgets. Protocol: core/uiblocks.py; the desktop
   // renders these natively in ui/blocks.py — this is the phone port of the same seven
   // components. Block actions can only send a chat reply or open a link.
-  const UI_TYPES = ['buttons', 'form', 'table', 'chart', 'steps', 'stats', 'calculator'];
+  const UI_TYPES = ['buttons', 'form', 'table', 'chart', 'steps', 'stats', 'calculator', 'cards'];
   const UI_MAX = 4;
   const UI_FENCE = /```ui[ \t]*\r?\n([\s\S]*?)```/g;
 
@@ -252,7 +252,28 @@
     return '<div class="ui ui-calc">' + out.join('') + '</div>';
   }
 
-  const UI_RENDER = { buttons: uiButtons, form: uiForm, table: uiTable, chart: uiChart, steps: uiSteps, stats: uiStats, calculator: uiCalc };
+  function uiCards(d) {
+    const out = [];
+    if (d.title) out.push(`<div class="ui-h2">${esc(d.title)}</div>`);
+    const cards = (d.cards || []).slice(0, 5).filter((c) => c && typeof c === 'object' && c.title);
+    for (const c of cards) {
+      const img = (typeof c.image === 'string' && /^https:\/\//i.test(c.image))
+        ? `<img class="ui-card-img" src="${esc(c.image)}" alt="" referrerpolicy="no-referrer" loading="lazy" onerror="this.remove()">` : '';
+      out.push('<div class="ui-card">' + img
+        + '<div class="ui-card-body">'
+        + `<div class="ui-card-t">${esc(c.title)}</div>`
+        + (c.price ? `<div class="ui-card-p">${esc(String(c.price))}</div>` : '')
+        + (c.why ? `<div class="ui-card-why">${esc(String(c.why))}</div>` : '')
+        + (c.specs ? `<div class="ui-card-specs">${esc(String(c.specs))}</div>` : '')
+        + '</div></div>');
+    }
+    if (!cards.length) out.push('<div class="ui-cap">No cards.</div>');
+    const acts = (d.actions || []).slice(0, 4).filter((it) => it && typeof it === 'object' && it.label);
+    if (acts.length) out.push(uiButtons({ items: acts }));
+    return '<div class="ui ui-cards">' + out.join('') + '</div>';
+  }
+
+  const UI_RENDER = { buttons: uiButtons, form: uiForm, table: uiTable, chart: uiChart, steps: uiSteps, stats: uiStats, calculator: uiCalc, cards: uiCards };
 
   function uiBlock(data) {
     if (data && typeof data === 'object' && UI_TYPES.indexOf(data.type) >= 0) {

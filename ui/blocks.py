@@ -347,4 +347,4 @@ def render_block(data: object, ctx: BlockCtx) -> QWidget:
         except Exception:  # noqa: BLE001 (a malformed block must not break the message)
             pass
         return label("That interactive block didn't render — ask the Bot to try again.", faint=True)
-    return label("Unsupported block type — ask the Bot to use text, buttons, a form, a table, a chart, steps, stats or a calculator.", faint=True)
+    return label("Unsupported block type — ask the Bot to use text, buttons, a form, a table, a chart, steps, stats, a calculator or cards.", faint=True)

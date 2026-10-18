@@ -16,6 +16,8 @@ export default function Chat({ thread, threads, onSwitch, onBack, onEvent }) {
   const [replyTo, setReplyTo] = useState(null);
   const [text, setText] = useState('');
   const [loading, setLoading] = useState(true);
+  const [reasonOpen, setReasonOpen] = useState(false);
+  const [liveBig, setLiveBig] = useState(false);
   const listRef = useRef(null);
 
   const load = useCallback(async () => {
@@ -90,6 +92,11 @@ export default function Chat({ thread, threads, onSwitch, onBack, onEvent }) {
   };
 
   const streamRows = Object.entries(streams).filter(([, t]) => t);
+  const acts = items.filter((i) => i.type === 'tool');
+  const lastAct = acts[acts.length - 1] || null;
+  const shotItems = acts.filter((i) => (i.images || []).length);
+  const lastShot = shotItems.length ? String(shotItems[shotItems.length - 1].images.slice(-1)[0]) : null;
+  const shotUri = lastShot ? API_BASE + '/api/files/shots/' + encodeURIComponent(lastShot) : null;
   return (
     <KeyboardAvoidingView style={{ flex: 1, backgroundColor: C.bg }} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
       <View style={st.header}>
@@ -102,6 +109,34 @@ export default function Chat({ thread, threads, onSwitch, onBack, onEvent }) {
           ))}
         </View>
       </View>
+      <Pressable style={st.reasonHead} onPress={() => setReasonOpen(!reasonOpen)}>
+        <Text style={st.reasonT}>⚡ Reasoning <Text style={st.reasonN}>{acts.length}</Text></Text>
+        <Text style={st.reasonIcon}>{reasonOpen ? '▾' : '▸'}</Text>
+      </Pressable>
+      {reasonOpen && (
+        <ScrollView style={st.reasonBody} nestedScrollEnabled>
+          {acts.length ? [...acts].reverse().map((it, i) => (
+            <View key={i} style={st.reasonRow}>
+              <Text style={[st.reasonGlyph, { color: (TOOL_GLYPH[it.status] !== '✕' && it.status !== 'error' && it.status !== 'denied' && it.status !== 'blocked') ? C.ok : C.bad }]}>
+                {TOOL_GLYPH[it.status] || '•'}</Text>
+              <Text style={st.reasonTxt} numberOfLines={2}>{it.label || it.tool}</Text>
+            </View>
+          )) : <Text style={st.reasonEmpty}>No activity yet — the Bot's tool steps will stream here.</Text>}
+        </ScrollView>
+      )}
+      {!!busy && lastAct && (
+        <Pressable style={st.live} onPress={() => (shotUri ? setLiveBig(!liveBig) : null)}>
+          <View style={st.liveHead}>
+            <Text style={st.liveLbl} numberOfLines={1}>
+              🖥 {busy.status === 'waiting_approval' ? 'needs your approval' : 'live on the screen'}{lastAct.label ? ' — ' + lastAct.label : ''}
+            </Text>
+            {!!shotUri && <Text style={st.liveIcon}>{liveBig ? '▾' : '▸'}</Text>}
+          </View>
+          {!!shotUri && (
+            <Image style={liveBig ? st.liveImg : st.liveImgSm} source={{ uri: shotUri }} resizeMode="contain" />
+          )}
+        </Pressable>
+      )}
       {loading ? <ActivityIndicator style={{ marginTop: 24 }} color={C.muted} /> : (
         <FlatList
           ref={listRef}
@@ -190,4 +225,19 @@ const st = StyleSheet.create({
   inputRow: { flexDirection: 'row', alignItems: 'flex-end', gap: 8, padding: 10 },
   input: { flex: 1, backgroundColor: C.panel, borderWidth: 1, borderColor: C.line, borderRadius: 14, color: C.text, fontSize: 15, paddingHorizontal: 12, paddingTop: 10, paddingBottom: 6, maxHeight: 110 },
   send: { color: C.solid, fontSize: 22, paddingBottom: 6, paddingHorizontal: 6 },
+  reasonHead: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 14, paddingVertical: 6, backgroundColor: C.panel2, borderTopWidth: 1, borderBottomWidth: 1, borderColor: C.line },
+  reasonT: { color: C.text, fontSize: 13, fontWeight: '700' },
+  reasonN: { color: C.muted, fontWeight: '400' },
+  reasonIcon: { color: C.muted, fontSize: 14 },
+  reasonBody: { maxHeight: 190, backgroundColor: C.bg, paddingHorizontal: 14, paddingVertical: 6, borderBottomWidth: 1, borderColor: C.line },
+  reasonRow: { flexDirection: 'row', gap: 8, alignItems: 'center', paddingVertical: 2 },
+  reasonGlyph: { fontSize: 12, width: 14, textAlign: 'center' },
+  reasonTxt: { color: C.text, fontSize: 13, flex: 1 },
+  reasonEmpty: { color: C.muted, fontSize: 12.5, paddingVertical: 4 },
+  live: { backgroundColor: '#0b1120', borderBottomWidth: 1, borderColor: C.line },
+  liveHead: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 14, paddingTop: 7, paddingBottom: 3 },
+  liveLbl: { color: C.ok, fontSize: 12.5, fontWeight: '600', flex: 1 },
+  liveIcon: { color: C.muted, fontSize: 13, paddingLeft: 8 },
+  liveImg: { width: '100%', height: 320 },
+  liveImgSm: { width: '100%', height: 180 },
 });

@@ -39,7 +39,7 @@ class PwaUiBlocks(unittest.TestCase):
 
     def test_every_type_has_styles(self):
         css = (WEB / "style.css").read_text(encoding="utf-8")
-        for cls in (".ui-buttons", ".ui-form", ".ui-table", ".ui-chart", ".ui-steps", ".ui-stats", ".ui-calc", ".ui-note"):
+        for cls in (".ui-buttons", ".ui-form", ".ui-table", ".ui-chart", ".ui-steps", ".ui-stats", ".ui-calc", ".ui-cards", ".ui-note"):
             self.assertIn(cls, css, cls)
 
 

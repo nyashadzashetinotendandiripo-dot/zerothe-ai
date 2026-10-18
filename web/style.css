@@ -457,3 +457,13 @@ h3.section, .section { margin: 14px 16px 8px; font-size: 13px; color: var(--mute
 .ui-calc { border: 1px solid var(--line); border-radius: 12px; background: var(--panel); padding: 10px; }
 .ui-calc .uicalc-out { font-size: 22px; font-weight: 800; color: var(--text); padding: 6px 2px; }
 .ui-calc .uicalc-send { margin-top: 8px; }
+
+.ui-cards { display: flex; flex-direction: column; gap: 8px; }
+.ui-card { display: flex; gap: 10px; border: 1px solid var(--line); border-radius: 12px; background: var(--panel); padding: 10px; }
+.ui-card-img { width: 72px; height: 72px; object-fit: cover; border-radius: 10px; background: var(--panel2); flex-shrink: 0; }
+.ui-card-body { flex: 1; min-width: 0; }
+.ui-card-t { font-weight: 800; font-size: 14px; color: var(--text); }
+.ui-card-p { font-weight: 800; font-size: 14px; color: var(--ok); margin-top: 1px; }
+.ui-card-why { font-size: 12.5px; color: var(--text); margin-top: 4px; opacity: .9; }
+.ui-card-specs { font-size: 12px; color: var(--muted); margin-top: 3px; }
+.ui-cards + .ui, .ui-cards .ui-buttons { margin-top: 2px; }

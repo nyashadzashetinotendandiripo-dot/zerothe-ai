@@ -9,17 +9,18 @@ A Bot composes a reply from markdown plus fenced ````ui` JSON blocks::
     ```
 
 The desktop client renders each block as a native widget (buttons, forms, tables,
-charts, progress steps, stat cards, calculator). Only these seven types exist and
-block actions can only send a chat reply or open a link: anything consequential
-still goes through tools and the normal approval cards. This module is Qt-free so
-the parser stays unit-testable; rendering lives in ui/blocks.py.
+charts, progress steps, stat cards, calculator, comparison cards). Only these
+eight types exist and block actions can only send a chat reply or open a link:
+anything consequential still goes through tools and the normal approval cards.
+This module is Qt-free so the parser stays unit-testable; rendering lives in
+ui/blocks.py.
 """
 from __future__ import annotations
 
 import json
 import re
 
-BLOCK_TYPES = ("buttons", "form", "table", "chart", "steps", "stats", "calculator")
+BLOCK_TYPES = ("buttons", "form", "table", "chart", "steps", "stats", "calculator", "cards")
 MAX_BLOCKS = 4
 
 _FENCE = re.compile(r"```ui[ \t]*\r?\n(.*?)```", re.DOTALL)
@@ -68,5 +69,6 @@ When the user would be helped by more than prose, compose parts of your reply as
 - steps: {"type": "steps", "items": [{"label": "...", "status": "done|running|pending|error"}]} — plans and progress.
 - stats: {"type": "stats", "items": [{"value": "1.27M", "label": "Tokens"}]} — up to 4 headline numbers.
 - calculator: {"type": "calculator", "expression": "1200*1.2/12"} — a working calculator for money/math questions the user can tweak.
+- cards: {"type": "cards", "title": "Top picks", "cards": [{"image": "https://…jpg", "title": "Name", "why": "why you picked it (<=25 words)", "price": "$18", "specs": "short specs"}], "actions": [{"label": "Approve & buy #1", "reply": "Buy option 1 (Stumptown)"}]} — comparison cards for products/options/choices with images. Max 5 cards, up to 4 actions. "image" must be a public https image URL (only include when you actually have one).
 
 Rules: valid JSON only (double quotes); short labels; at most 4 blocks per reply; buttons/forms only send chat replies or open links — anything consequential (send, buy, delete, run, schedule) still goes through your tools and the user's approvals, never through a widget. When plain text answers best, use plain text."""
