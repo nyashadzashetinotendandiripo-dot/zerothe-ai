@@ -1,0 +1,25 @@
+{
+  "expo": {
+    "name": "ZerotheBot",
+    "slug": "zerothebot",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "dark",
+    "scheme": "zerothebot",
+    "android": {
+      "package": "ai.zerothebot.rn",
+      "versionCode": 1,
+      "adaptiveIcon": {
+        "backgroundColor": "#0f1115",
+        "foregroundImage": "./assets/android-icon-foreground.png",
+        "backgroundImage": "./assets/android-icon-background.png",
+        "monochromeImage": "./assets/android-icon-monochrome.png"
+      },
+      "allowBackup": false
+    },
+    "web": {
+      "favicon": "./assets/favicon.png"
+    }
+  }
+}
