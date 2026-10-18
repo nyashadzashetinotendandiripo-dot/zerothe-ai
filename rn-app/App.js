@@ -3,6 +3,7 @@ import { View, Text, TextInput, Pressable, FlatList, StyleSheet } from 'react-na
 import { StatusBar as ExpoStatus } from 'expo-status-bar';
 import { api, connectEvents, loadKey, saveConf, tryConf, clearConf, conf, cfgGet, K_SERVER, K_TOKEN } from './src/session';
 import { C } from './src/theme';
+import { checkUpdate, installUpdate, APP_VERSION } from './src/updates';
 import Chat from './src/Chat';
 
 export default function App() {
@@ -15,6 +16,26 @@ export default function App() {
   const lastRef = useRef(0);
   const evtRef = useRef(null);
   const chatHandler = useRef(null);
+  const [upd, setUpd] = useState(null);                    // available update
+  const [updState, setUpdState] = useState('idle');        // idle | checking | installing | failed
+
+  const runCheck = useCallback(async (quiet = true) => {
+    if (!quiet) setUpdState('checking');
+    const u = await checkUpdate();
+    setUpd(u);
+    if (!quiet) setUpdState(u ? 'idle' : 'idle');
+    return u;
+  }, []);
+
+  useEffect(() => { if (ready) runCheck(true); }, [ready, runCheck]);
+
+  const doUpdate = useCallback(async () => {
+    const u = upd || await runCheck(true);
+    if (!u) return;
+    setUpdState('installing');
+    const how = await installUpdate(u);
+    setUpdState(how === 'installing' ? 'idle' : how === 'download' ? 'idle' : 'failed');
+  }, [upd, runCheck]);
 
   useEffect(() => { (async () => {
     await loadKey();
@@ -74,7 +95,7 @@ export default function App() {
   if (!signed) return <Login onDone={() => { setSigned(true); setScreen('bots'); refresh(); }} />;
 
   if (screen === 'chat' && chat) return (
-    <Shell>
+    <Shell upd={upd} onUpd={doUpdate} updState={updState}>
       <Chat
         thread={{ id: chat.threadId }}
         threads={chat.threads}
@@ -86,20 +107,31 @@ export default function App() {
   );
 
   if (screen === 'settings') return (
-    <Shell>
-      <Settings onBack={() => setScreen('bots')} onOut={async () => { await clearConf(); setSigned(false); }} />
+    <Shell upd={upd} onUpd={doUpdate} updState={updState}>
+      <Settings onBack={() => setScreen('bots')} onOut={async () => { await clearConf(); setSigned(false); }} onCheck={runCheck} />
     </Shell>
   );
 
   return (
-    <Shell>
+    <Shell upd={upd} onUpd={doUpdate} updState={updState}>
       <Bots bots={bots} busy={busy} onOpen={openBot} onGear={() => setScreen('settings')} onNew={newBot} />
     </Shell>
   );
 }
 
-function Shell({ children }) {
-  return (<View style={{ flex: 1, backgroundColor: C.bg }}>{children}<ExpoStatus style="light" /></View>);
+function Shell({ children, upd, onUpd, updState }) {
+  return (
+    <View style={{ flex: 1, backgroundColor: C.bg }}>{children}
+      {!!upd && (
+        <Pressable onPress={onUpd} style={sh.banner} disabled={updState === 'installing'}>
+          <Text style={sh.bannerT}>
+            {updState === 'installing' ? `Downloading ZerotheBot ${upd.version}…` : `Update available: ZerotheBot ${upd.version} — tap to install`}
+          </Text>
+        </Pressable>
+      )}
+      <ExpoStatus style="light" />
+    </View>
+  );
 }
 
 // ----------------------------------------------------------------- login
@@ -188,8 +220,16 @@ function NewBotModal({ onDone }) {
 }
 
 // ----------------------------------------------------------------- settings
-function Settings({ onBack, onOut }) {
+function Settings({ onBack, onOut, onCheck }) {
   const c2 = conf();
+  const [updMsg, setUpdMsg] = useState('');
+  const [checking, setChecking] = useState(false);
+  const check = async () => {
+    setChecking(true); setUpdMsg('');
+    try { const u = await onCheck(true); setUpdMsg(u ? ('New version ' + u.version + ' is available — banner to install it is on screen.') : 'You are up to date.'); }
+    catch (e) { setUpdMsg('Could not check: ' + (e.message || 'network')); }
+    setChecking(false);
+  };
   return (
     <View style={b.box}>
       <View style={b.hdr}>
@@ -202,6 +242,10 @@ function Settings({ onBack, onOut }) {
         <Text style={b.job} selectable>{c2.base}</Text>
         <Text style={l.lbl}>Token</Text>
         <Text style={b.job}>{String(c2.token).slice(0, 6)}••••••</Text>
+        <Pressable onPress={check} disabled={checking} style={[l.btn, { backgroundColor: C.panel2, borderWidth: 1, borderColor: C.line, marginTop: 8 }]}>
+          <Text style={[l.btnT, { color: C.text }]}>{checking ? 'Checking…' : 'Check for updates'}</Text>
+        </Pressable>
+        <Text style={l.cap}>App version {APP_VERSION} {updMsg ? '· ' + updMsg : ''}</Text>
         <Pressable onPress={onOut} style={[l.btn, { backgroundColor: C.badSoft, borderWidth: 1, borderColor: '#5c2723', marginTop: 12 }]}>
           <Text style={[l.btnT, { color: C.bad }]}>Sign out</Text>
         </Pressable>
@@ -236,6 +280,10 @@ const b = StyleSheet.create({
 });
 
 const s = StyleSheet.create({ back: { color: C.text, fontSize: 28, fontWeight: '600', width: 30 } });
+const sh = StyleSheet.create({
+  banner: { backgroundColor: C.okSoft, borderTopWidth: 1, borderColor: C.line, paddingVertical: 12, paddingHorizontal: 14, height: 44, justifyContent: 'center' },
+  bannerT: { color: C.ok, fontWeight: '700', fontSize: 13 },
+});
 const m = StyleSheet.create({
   scrim: { position: 'absolute', inset: 0, backgroundColor: 'rgba(0,0,0,.65)', alignItems: 'center', justifyContent: 'center', padding: 20 },
   modal: { width: '100%', backgroundColor: C.panel, borderWidth: 1, borderColor: C.line, borderRadius: 18, padding: 16, gap: 8 },
