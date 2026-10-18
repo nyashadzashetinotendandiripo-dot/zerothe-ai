@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState, useCallback } from 'react';
 import { View, Text, TextInput, Pressable, FlatList, StyleSheet } from 'react-native';
 import { StatusBar as ExpoStatus } from 'expo-status-bar';
-import { api, connectEvents, loadKey, saveConf, tryConf, clearConf, conf, cfgGet, K_SERVER, K_TOKEN } from './src/session';
+import { api, connectEvents, loadKey, saveConf, tryConf, clearConf, conf, cfgGet, K_SERVER, K_TOKEN, K_EMAIL, K_PASS, loginEmail } from './src/session';
 import { C } from './src/theme';
 import { checkUpdate, installUpdate, APP_VERSION } from './src/updates';
 import Connect from './src/Connect';
@@ -41,7 +41,16 @@ export default function App() {
   useEffect(() => { (async () => {
     await loadKey();
     const saved = await cfgGet(K_SERVER), tok = await cfgGet(K_TOKEN);
+    const mail = await cfgGet(K_EMAIL), pass = await cfgGet(K_PASS);
     if (saved && tok) { await saveConf(saved, tok); setSigned(true); await refresh(); }
+    else if (saved && mail && pass) {
+      // silent re-login with the stored web credentials (cookie session)
+      try {
+        await loginEmail(saved, mail, pass);
+        await saveConf(saved, '', mail, pass);
+        setSigned(true); await refresh();
+      } catch (e) { /* stale password: stay on the login screen, keep values */ }
+    }
     setReady(true);
   })(); }, []);
 
@@ -93,7 +102,11 @@ export default function App() {
   };
 
   if (!ready) return null;
-  if (!signed) return <Login onDone={() => { setSigned(true); setScreen('bots'); refresh(); }} />;
+  if (!signed) return (
+    <Shell upd={upd} onUpd={doUpdate} updState={updState}>
+      <Login onDone={() => { setSigned(true); setScreen('bots'); refresh(); }} />
+    </Shell>
+  );
 
   if (screen === 'chat' && chat) return (
     <Shell upd={upd} onUpd={doUpdate} updState={updState}>
@@ -144,28 +157,59 @@ function Shell({ children, upd, onUpd, updState }) {
 // ----------------------------------------------------------------- login
 function Login({ onDone }) {
   const [base, setBase] = useState('https://8765-agquljzsz7k42vgoenj7qr6fim.instabox.tech');
+  const [mode, setMode] = useState('email');               // email | token
+  const [mail, setMail] = useState('');
+  const [pass, setPass] = useState('');
   const [token, setToken] = useState('');
   const [err, setErr] = useState('');
   const [go, setGo] = useState(false);
   const save = async () => {
     setErr(''); setGo(true);
-    try { await tryConf(base, token); await saveConf(base, token); onDone(); }
+    try {
+      if (mode === 'email') {
+        await loginEmail(base, mail, pass);               // cookie session
+        await saveConf(base, '', mail, pass);              // remember for silent re-login
+      } else {
+        await tryConf(base, token);
+        await saveConf(base, token);                      // clears stale creds? keep old email if any
+      }
+      onDone();
+    }
     catch (e) { setErr(e.message || 'Could not connect.'); }
     setGo(false);
   };
+  const ready = mode === 'email' ? (!!mail.trim() && !!pass) : !!token.trim();
   return (
-    <View style={l.box}>
-      <ExpoStatus style="light" />
+    <View style={[l.box, { justifyContent: 'flex-start', paddingTop: 80 }]}>
       <Text style={l.h1}>ZerotheBot</Text>
-      <Text style={l.cap}>Point the app at your server and paste its service token.</Text>
+      <Text style={l.cap}>Point the app at your server and sign in.</Text>
+      <View style={l.seg}>
+        <Pressable onPress={() => setMode('email')} style={[l.segB, mode === 'email' && l.segOn]}><Text style={[l.segT, mode === 'email' && { color: C.onSolid }]}>Email & password</Text></Pressable>
+        <Pressable onPress={() => setMode('token')} style={[l.segB, mode === 'token' && l.segOn]}><Text style={[l.segT, mode === 'token' && { color: C.onSolid }]}>Service token</Text></Pressable>
+      </View>
       <Text style={l.lbl}>Server</Text>
       <TextInput style={l.inl} value={base} autoCapitalize="none" autoCorrect={false} keyboardType="url" onChangeText={setBase} />
-      <Text style={l.lbl}>Service token</Text>
-      <TextInput style={l.inl} value={token} autoCapitalize="none" autoCorrect={false} secureTextEntry onChangeText={setToken} />
+      {mode === 'email' ? (
+        <>
+          <Text style={l.lbl}>Email (the one you use on the web app)</Text>
+          <TextInput style={l.inl} value={mail} autoCapitalize="none" autoCorrect={false} keyboardType="email-address" onChangeText={setMail} />
+          <Text style={l.lbl}>Password</Text>
+          <TextInput style={l.inl} value={pass} secureTextEntry onChangeText={setPass} />
+        </>
+      ) : (
+        <>
+          <Text style={l.lbl}>Service token</Text>
+          <TextInput style={l.inl} value={token} autoCapitalize="none" autoCorrect={false} secureTextEntry onChangeText={setToken} />
+        </>
+      )}
       {!!err && <Text style={l.err}>{err}</Text>}
-      <Pressable onPress={save} disabled={!token.trim()} style={({ pressed }) => [l.btn, (!token.trim() || !go) && null, pressed && { opacity: .9 }]}>
+      <Pressable onPress={save} disabled={!ready || go} style={({ pressed }) => [l.btn, !ready && { opacity: .5 }, pressed && { opacity: .9 }]}>
         <Text style={l.btnT}>{go ? 'Checking…' : 'Sign in'}</Text>
       </Pressable>
+      <Text style={l.cap}>
+        Same sign-in as the web app — one time per install. Your phone stays signed in across app
+        updates from here on.
+      </Text>
     </View>
   );
 }
@@ -268,6 +312,10 @@ function Settings({ onBack, onOut, onCheck, onPlug }) {
 
 const l = StyleSheet.create({
   box: { flex: 1, backgroundColor: C.bg, justifyContent: 'center', padding: 22, gap: 8 },
+  seg: { flexDirection: 'row', gap: 6, marginTop: 8, marginBottom: 2 },
+  segB: { flex: 1, paddingVertical: 9, borderRadius: 999, backgroundColor: C.panel2, borderWidth: 1, borderColor: C.line, alignItems: 'center' },
+  segOn: { backgroundColor: C.solid, borderColor: C.solid },
+  segT: { color: C.muted, fontSize: 13.5, fontWeight: '700' },
   h1: { color: C.text, fontSize: 26, fontWeight: '900', marginBottom: 2 },
   h2: { color: C.text, fontSize: 18, fontWeight: '800' },
   cap: { color: C.muted, fontSize: 13, marginBottom: 8 },

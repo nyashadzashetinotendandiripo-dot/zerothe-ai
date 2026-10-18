@@ -19,21 +19,25 @@ export async function cfgDel(key) {
 
 export const K_SERVER = 'zt_server';
 export const K_TOKEN = 'zt_token';
+export const K_EMAIL = 'zt_email';
+export const K_PASS = 'zt_pass';
 
 // ------------------------------------------------------------ session
 export let API_BASE = '';
 let TOKEN = '';
 
 export async function loadKey() { TOKEN = (await cfgGet(K_TOKEN)) || ''; }
-export async function saveConf(base, token) {
+export async function saveConf(base, token, email, pass) {
   API_BASE = String(base || '').replace(/\/+$/, '');
   TOKEN = String(token || '').trim();
   await cfgSet(K_SERVER, API_BASE);
   await cfgSet(K_TOKEN, TOKEN);
+  if (email !== undefined) await cfgSet(K_EMAIL, String(email || '').trim().toLowerCase());
+  if (pass !== undefined) await cfgSet(K_PASS, String(pass || ''));
 }
 export async function clearConf() {
   API_BASE = ''; TOKEN = '';
-  await cfgDel(K_SERVER); await cfgDel(K_TOKEN);
+  await cfgDel(K_SERVER); await cfgDel(K_TOKEN); await cfgDel(K_EMAIL); await cfgDel(K_PASS);
 }
 
 export function conf() { return { base: API_BASE, token: TOKEN }; }
@@ -61,6 +65,16 @@ export async function tryConf(base, token) {          // validate before saving
   const d = await r.json().catch(() => null);
   if (!d) throw new Error('Server answered but not in the right language.');
   return { ok: true, email: null };
+}
+
+// Sign in with the same email + password as the web app (server sets zt_session cookie).
+export async function loginEmail(base, email, pass) {
+  const b = String(base || '').replace(/\/+$/, '');
+  const r = await fetch(b + '/api/login', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ email: String(email || '').trim().toLowerCase(), password: String(pass || '') }) });
+  const d = await r.json().catch(() => ({}));
+  if (r.status !== 200) throw new Error(d.error || 'That email or password was not accepted.');
+  return { ok: true, email: d.email || email };
 }
 
 // ------------------------------------------------------------ live events (SSE)
