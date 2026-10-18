@@ -15,8 +15,9 @@ CREATE TABLE IF NOT EXISTS bots(
   instructions TEXT DEFAULT '', profile TEXT DEFAULT '', model TEXT DEFAULT '',
   approval_mode TEXT DEFAULT 'ask', step_limit INTEGER DEFAULT 40,
   net_mode TEXT DEFAULT 'inherit', net_allow TEXT DEFAULT '[]', net_deny TEXT DEFAULT '[]',
-  grants TEXT DEFAULT '[]', proactive TEXT DEFAULT 'off', template TEXT DEFAULT '',
-  paused INTEGER DEFAULT 0, archived INTEGER DEFAULT 0, created_at REAL, updated_at REAL
+  grants TEXT DEFAULT '[]', proactive TEXT DEFAULT 'off', template TEXT DEFAULT '', label TEXT DEFAULT '',
+  pinned INTEGER DEFAULT 0, hidden INTEGER DEFAULT 0, paused INTEGER DEFAULT 0, archived INTEGER DEFAULT 0,
+  created_at REAL, updated_at REAL
 );
 CREATE TABLE IF NOT EXISTS threads(
   id TEXT PRIMARY KEY, bot_id TEXT, group_id TEXT, kind TEXT DEFAULT 'dm', title TEXT DEFAULT '',
@@ -30,9 +31,14 @@ CREATE TABLE IF NOT EXISTS groups(
 );
 CREATE TABLE IF NOT EXISTS messages(
   id INTEGER PRIMARY KEY AUTOINCREMENT, thread_id TEXT NOT NULL, author TEXT, role TEXT,
-  kind TEXT DEFAULT 'llm', content TEXT, anchor INTEGER, turn_id TEXT, created_at REAL
+  kind TEXT DEFAULT 'llm', content TEXT, anchor INTEGER, turn_id TEXT, parent_id INTEGER DEFAULT 0, created_at REAL
 );
 CREATE INDEX IF NOT EXISTS idx_messages_thread ON messages(thread_id, id);
+CREATE TABLE IF NOT EXISTS reactions(
+  id INTEGER PRIMARY KEY AUTOINCREMENT, message_id INTEGER NOT NULL, author TEXT DEFAULT 'user', emoji TEXT,
+  created_at REAL
+);
+CREATE INDEX IF NOT EXISTS idx_reactions_msg ON reactions(message_id);
 CREATE TABLE IF NOT EXISTS turns(
   id TEXT PRIMARY KEY, bot_id TEXT, thread_id TEXT, trigger TEXT, status TEXT,
   started_at REAL, ended_at REAL, steps INTEGER DEFAULT 0, error TEXT DEFAULT '', tainted INTEGER DEFAULT 0
@@ -105,6 +111,10 @@ CREATE TABLE IF NOT EXISTS known_logins(domain TEXT PRIMARY KEY, added_at REAL);
 # columns added after the first release: applied to existing databases when they are opened
 MIGRATIONS = [("bots", "daily_token_limit", "INTEGER DEFAULT 0"),
               ("bots", "avatar", "TEXT DEFAULT ''"),
+              ("bots", "label", "TEXT DEFAULT ''"),
+              ("bots", "pinned", "INTEGER DEFAULT 0"),
+              ("bots", "hidden", "INTEGER DEFAULT 0"),
+              ("messages", "parent_id", "INTEGER DEFAULT 0"),
               ("routines", "ceiling_items", "INTEGER DEFAULT 0"),
               ("routines", "anomaly_pct", "INTEGER DEFAULT 0"),
               ("routines", "kill_condition", "TEXT DEFAULT ''"),

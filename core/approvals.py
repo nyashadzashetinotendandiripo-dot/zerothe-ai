@@ -123,6 +123,13 @@ class ApprovalManager:
     def delete_rule(self, rule_id: int) -> None:
         self.db.execute("DELETE FROM approval_rules WHERE id=?", (rule_id,))
 
+    def create_rule(self, bot_id: str, category: str, pattern: str = "*") -> dict:
+        """Add a standing "allow automatically" rule for a Bot (the Auto-Review rules editor)."""
+        row = {"bot_id": str(bot_id), "category": str(category or "").strip()[:80],
+               "pattern": str(pattern or "*").strip()[:200] or "*", "created_at": now()}
+        rid = self.db.insert("approval_rules", row)
+        return self.db.one("SELECT * FROM approval_rules WHERE id=?", (rid,)) or {**row, "id": rid}
+
     # -- core ------------------------------------------------------------------
     def request(self, ctx: ToolContext, risk: Risk, tool: str, args: dict) -> Decision:
         bot = ctx.bot

@@ -8,8 +8,8 @@ from .events import EventBus
 from .settings import Admin, Settings
 
 JSON_FIELDS = {"net_allow": [], "net_deny": [], "grants": []}
-EDITABLE = {"name", "emoji", "avatar", "job", "instructions", "profile", "model", "approval_mode", "step_limit", "net_mode",
-            "net_allow", "net_deny", "grants", "proactive", "paused", "archived", "template", "daily_token_limit"}
+EDITABLE = {"name", "emoji", "avatar", "label", "job", "instructions", "profile", "model", "approval_mode", "step_limit", "net_mode",
+            "net_allow", "net_deny", "grants", "proactive", "pinned", "hidden", "paused", "archived", "template", "daily_token_limit"}
 APPROVAL_MODES = ("ask", "auto_review", "full_access")
 PROACTIVE_LEVELS = ("off", "suggest", "act")
 
@@ -31,6 +31,9 @@ class Bots:
             row[k] = jload(row.get(k), d)
         row["paused"] = bool(row["paused"])
         row["archived"] = bool(row["archived"])
+        row["pinned"] = bool(row.get("pinned"))
+        row["hidden"] = bool(row.get("hidden"))
+        row["label"] = row.get("label") or ""
         row["daily_token_limit"] = int(row.get("daily_token_limit") or 0)
         row["effective_approval_mode"] = self.effective_approval_mode(row)
         return row
@@ -59,7 +62,8 @@ class Bots:
         return self.get(ref) or self.get_by_name(ref)
 
     def list(self, include_archived: bool = False) -> list[dict]:
-        rows = self.db.query("SELECT * FROM bots" + ("" if include_archived else " WHERE archived=0") + " ORDER BY created_at")
+        rows = self.db.query("SELECT * FROM bots" + ("" if include_archived else " WHERE archived=0")
+                             + " ORDER BY pinned DESC, created_at")
         return [self._out(r) for r in rows]  # type: ignore
 
     def create(self, name: str, job: str = "", instructions: str = "", emoji: str = "🤖", **opts: Any) -> dict:
@@ -69,7 +73,8 @@ class Bots:
         if self.get_by_name(name):
             raise BotError(f"There is already a Bot named {name}.")
         mode = opts.get("approval_mode") or self.settings.get("approval.default_mode", "ask")
-        row = {"id": new_id(), "name": name[:40], "emoji": emoji or "🤖", "avatar": str(opts.get("avatar", "") or ""), "job": job.strip(), "instructions": instructions.strip(),
+        row = {"id": new_id(), "name": name[:40], "emoji": emoji or "🤖", "avatar": str(opts.get("avatar", "") or ""),
+               "label": str(opts.get("label", "") or "").strip()[:40], "job": job.strip(), "instructions": instructions.strip(),
                "profile": opts.get("profile", ""), "model": opts.get("model", ""),
                "approval_mode": mode if mode in APPROVAL_MODES else "ask",
                "step_limit": int(opts.get("step_limit") or self.settings.get("defaults.step_limit", 40)),
@@ -99,8 +104,10 @@ class Bots:
                 raise BotError("approval_mode must be 'ask', 'auto_review' or 'full_access'.")
             if k == "proactive" and v not in PROACTIVE_LEVELS:
                 raise BotError("proactive must be off, suggest or act.")
-            if k in ("paused", "archived"):
+            if k in ("paused", "archived", "pinned", "hidden"):
                 v = int(bool(v))
+            if k == "label":
+                v = str(v).strip()[:40]
             if k == "step_limit":
                 v = max(1, min(500, int(v)))
             if k == "daily_token_limit":

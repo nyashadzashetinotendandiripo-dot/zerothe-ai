@@ -172,6 +172,15 @@ def create_app(engine: Engine, token: str) -> FastAPI:
         response.delete_cookie("zt_session")
         return {"ok": True}
 
+    @app.post("/api/account/delete", dependencies=[api])
+    def account_delete(response: Response, body: dict = Body(default={})) -> dict:
+        want = str(body.get("confirm", "")).strip().lower()
+        if not want or want != (auth_mod.email() or "").strip().lower():
+            raise HTTPException(400, "Type your email address to confirm deleting the account.")
+        auth_mod.delete_account()
+        response.delete_cookie("zt_session")
+        return {"ok": True, "deleted": True}
+
     @app.post("/api/password", dependencies=[api])
     def change_password(body: dict = Body(...)) -> dict:
         try:
@@ -265,6 +274,18 @@ def create_app(engine: Engine, token: str) -> FastAPI:
     async def bots_import(request: Request) -> dict:
         data = await request.body()
         return await asyncio.to_thread(packages.import_bot, eng, data, request.query_params.get("name"))
+
+    @app.get("/api/rules", dependencies=[api])
+    def rules_list(bot_id: str = "") -> list[dict]:
+        return eng.approvals.rules(bot_id or None)
+
+    @app.post("/api/rules", dependencies=[api])
+    def rules_create(body: dict = Body(default={})) -> dict:
+        bot_id = str(body.get("bot_id", "")).strip()
+        category = str(body.get("category", "")).strip()
+        if not bot_id or not category:
+            raise HTTPException(400, "bot_id and category are required.")
+        return eng.approvals.create_rule(bot_id, category, str(body.get("pattern", "*")))
 
     @app.delete("/api/rules/{rid}", dependencies=[api])
     def rule_delete(rid: int) -> dict:
@@ -409,6 +430,33 @@ def create_app(engine: Engine, token: str) -> FastAPI:
     def search(q: str = "", limit: int = 30) -> dict:
         return eng.search.run(q, max(1, min(100, limit)))
 
+    @app.get("/api/palette", dependencies=[api])
+    def palette(q: str = "", limit: int = 8) -> dict:
+        """One search across Bots, group chats, messages, files and routines (the mobile search field)."""
+        q = (q or "").strip()
+        n = max(1, min(20, limit))
+        out: dict[str, Any] = {"query": q, "bots": [], "groups": [], "messages": [], "files": [], "routines": [], "total": 0}
+        if not q:
+            return out
+        low = q.lower()
+        out["bots"] = [{"id": b["id"], "name": b["name"], "emoji": b["emoji"], "avatar": b.get("avatar", ""), "job": b.get("job", "")}
+                       for b in eng.bots.list() if low in b["name"].lower() or low in (b.get("job") or "").lower()][:n]
+        out["groups"] = [{"id": g["id"], "name": g.get("name") or "", "thread_id": g.get("thread_id") or ""}
+                         for g in eng.messaging.list_groups() if low in (g.get("name") or "").lower()][:n]
+        out["routines"] = [{"id": r["id"], "name": r.get("name") or "", "bot_id": r.get("bot_id") or "", "enabled": r.get("enabled")}
+                           for r in eng.routines.list()
+                           if low in ((r.get("name") or "") + " " + (r.get("prompt") or "") + " " + (r.get("skill") or "")).lower()][:n]
+        try:
+            out["files"] = (eng.files.search(q, n) or [])[:n]
+        except Exception:  # noqa: BLE001 - search must never fail the palette
+            out["files"] = []
+        try:
+            out["messages"] = (eng.search.run(q, n).get("messages") or [])[:n]
+        except Exception:  # noqa: BLE001
+            out["messages"] = []
+        out["total"] = sum(len(out[k]) for k in ("bots", "groups", "messages", "files", "routines"))
+        return out
+
     @app.get("/api/threads/{tid}/export", dependencies=[api])
     def thread_export(tid: str) -> Response:
         th = eng.threads.get(tid)
@@ -425,6 +473,15 @@ def create_app(engine: Engine, token: str) -> FastAPI:
     @app.post("/api/threads/{tid}/stop", dependencies=[api])
     def thread_stop(tid: str) -> dict:
         return {"stopped": eng.turns.stop_thread(tid)}
+
+    # ---------------------------------------------------- reactions
+    @app.post("/api/messages/{mid}/reactions", dependencies=[api])
+    def message_react(mid: int, body: dict = Body(default={})) -> dict:
+        return eng.threads.toggle_reaction(mid, body.get("emoji", ""), body.get("author", "user"))
+
+    @app.delete("/api/messages/{mid}/reactions", dependencies=[api])
+    def message_unreact(mid: int, emoji: str = "", author: str = "user") -> dict:
+        return eng.threads.remove_reaction(mid, emoji, author)
 
     @app.get("/api/files/shots/{name}")
     def shot(name: str, request: Request) -> Response:
@@ -534,6 +591,40 @@ def create_app(engine: Engine, token: str) -> FastAPI:
         d = eng.computer.status()
         d["terminal"] = list(eng.computer.terminal_log)[-30:]
         return d
+
+    @app.post("/api/computer/restart", dependencies=[api])
+    def computer_restart() -> dict:
+        """Recover: close every browser screen and start the browser cleanly again."""
+        try:
+            for b in eng.bots.list():
+                try:
+                    eng.computer.browser.drop_screen(b["id"])
+                except Exception:  # noqa: BLE001
+                    pass
+            eng.computer.browser.restart()
+        except Exception as e:  # noqa: BLE001
+            raise HTTPException(400, f"Could not restart the browser: {e}")
+        return {"ok": True, "restarted": True}
+
+    @app.post("/api/computer/reset", dependencies=[api])
+    def computer_reset() -> dict:
+        """Reset: recover the browser and clear the terminal history / takeovers."""
+        try:
+            for b in eng.bots.list():
+                try:
+                    eng.computer.browser.drop_screen(b["id"])
+                    if eng.computer.takeover_active(b["id"]):
+                        eng.computer.takeover_end(b["id"])
+                except Exception:  # noqa: BLE001
+                    pass
+            eng.computer.browser.restart()
+            try:
+                eng.computer.terminal_log.clear()
+            except Exception:  # noqa: BLE001
+                pass
+        except Exception as e:  # noqa: BLE001
+            raise HTTPException(400, f"Could not reset the computer: {e}")
+        return {"ok": True, "reset": True}
 
     @app.get("/api/bots/{bot_id}/screen.jpg")
     def screen_jpg(bot_id: str, request: Request, q: int = 60) -> Response:

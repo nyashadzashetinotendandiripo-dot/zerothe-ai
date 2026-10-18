@@ -31,7 +31,20 @@
   function avSpec(bot) { const p = avParse(bot); const seed = avHash((bot && (bot.id || bot.name)) || 'bot'); return { shape: p.shape || AV_SHAPES[seed % AV_SHAPES.length], color: p.color || AV_COLORS[(seed >>> 4) % AV_COLORS.length] }; }
   function avSVG(bot, size, badge) { const { shape, color } = avSpec(bot); const s = size || 40; return '<svg viewBox="0 0 100 100" width="' + s + '" height="' + s + '" aria-hidden="true"><g fill="' + color + '">' + avShapeSVG(shape) + '</g>' + AV_EYES + '</svg>' + (badge ? '<i class="av-badge">★</i>' : ''); }
   function avEl(bot, size, badge) { const s = size || 40; return '<span class="av" style="width:' + s + 'px;height:' + s + 'px">' + avSVG(bot, s, badge) + '</span>'; }
-  const S = { commands: [], bots: [], groups: [], busy: {}, approvals: [], thread: null, threads: [], items: [], stream: {}, view: 'home', es: null, lastEvent: 0, screenBot: null, screenTimer: null, titleBase: document.title, attach: [], rec: null, providers: [], templates: [], loaded: new Set(), mk: [], ib: { pend: [], hist: [], handoffs: [] }, cp: { cards: [], term: [], headless: false }, fl: { entries: [], mode: 'recent', cwd: '', current: null }, sk: { skills: [], recs: [], cur: '' }, rt: { rows: [], runs: [], sel: null }, pl: { plugins: [], catalog: [], mcp: [] }, us: {}, al: [] };
+  const S = { commands: [], bots: [], groups: [], busy: {}, approvals: [], thread: null, threads: [], items: [], stream: {}, view: 'home', es: null, lastEvent: 0, screenBot: null, screenTimer: null, titleBase: document.title, attach: [], rec: null, providers: [], templates: [], loaded: new Set(), mk: [], ib: { pend: [], hist: [], handoffs: [] }, cp: { cards: [], term: [], headless: false }, fl: { entries: [], mode: 'recent', cwd: '', current: null }, sk: { skills: [], recs: [], cur: '' }, rt: { rows: [], runs: [], sel: null }, pl: { plugins: [], catalog: [], mcp: [] }, us: {}, al: [], showHidden: false, theme: null, reply: null, palette: false };
+
+  // ---------------------------------------------------------------- appearance
+  // System / Light / Dark, remembered on this phone (localStorage). "System"
+  // follows the OS setting, like Grok Bot's appearance control.
+  function themePref() { try { return localStorage.getItem('zt_theme') || 'system'; } catch (e) { return 'system'; } }
+  function applyTheme(pref) {
+    S.theme = pref || S.theme || themePref();
+    const dark = S.theme === 'dark' || (S.theme === 'system' && window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches);
+    document.documentElement.dataset.theme = dark ? 'dark' : 'light';
+    const m = $('#meta-theme'); if (m) m.setAttribute('content', dark ? '#0f1115' : '#f2f2f1');
+  }
+  function setTheme(pref) { S.theme = pref; try { localStorage.setItem('zt_theme', pref); } catch (e) { /* ignore */ } applyTheme(pref); }
+  if (window.matchMedia) window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => { if ((S.theme || themePref()) === 'system') applyTheme('system'); });
 
   // ------------------------------------------------------------------ api
   async function api(path, opts = {}) {
@@ -91,7 +104,7 @@
     document.querySelectorAll('#tabs button').forEach((b) => b.classList.toggle('active', b.dataset.view === v || (v === 'chat' && b.dataset.view === 'bots')));
     closeMenu();
     $('#back').hidden = v === 'bots';
-    $('#hdr-search').hidden = v !== 'bots';
+    $('#hdr-search').hidden = !(v === 'bots' || v === 'home');
     $('#hdr-new').hidden = v !== 'bots';
     $('#hdr-computer').hidden = v !== 'chat';
     $('#hdr-computer').dataset.botid = (S.thread && S.thread.botId) || '';
@@ -155,7 +168,9 @@
   function renderBots() {
     const el = $('#view-bots');
     const q = (S.botQuery || '').toLowerCase().trim();
-    const bots = S.bots.filter((b) => !q || (b.name + ' ' + (b.job || '')).toLowerCase().includes(q));
+    const matched = S.bots.filter((b) => !q || (b.name + ' ' + (b.job || '')).toLowerCase().includes(q));
+    const bots = matched.filter((b) => !b.hidden).sort((a, c) => (c.pinned ? 1 : 0) - (a.pinned ? 1 : 0));
+    const hidden = matched.filter((b) => b.hidden);
     const busy = bots.filter((b) => { const [k] = stateOf(b.id); return k === 'work' || k === 'wait'; });
     const favs = (busy.length ? busy : bots).slice(0, 6);
     const favHTML = favs.map((b, i) => {
@@ -168,9 +183,12 @@
       const p = (S.providers || []).find((x) => x.id === b.profile);
       const sub = b.job || (p ? (p.label || p.id) : 'No job yet');
       return '<div class="grow" data-bot="' + b.id + '">' + avEl(b, 44) +
-        '<div class="g-main"><div class="g-name">' + esc(b.name) + '</div><div class="g-sub">' + esc(sub) + '</div></div>' +
+        '<div class="g-main"><div class="g-name">' + (b.pinned ? '<span class="pin">📌</span>' : '') + esc(b.name) + '</div><div class="g-sub">' + esc(sub) + '</div></div>' +
         '<div class="g-right">' + (label ? '<span class="pill ' + cls + '">' + esc(label) + '</span>' : '') + '<span class="g-time">' + esc(humanTime(b.updated_at)) + '</span></div></div>';
     }).join('');
+    const hiddenRow = (b) => '<div class="grow" data-bot="' + b.id + '">' + avEl(b, 44) +
+      '<div class="g-main"><div class="g-name">' + esc(b.name) + '</div><div class="g-sub">Hidden from your team</div></div>' +
+      '<div class="g-right"><button type="button" class="ghost pill-btn" data-unhide="' + b.id + '">Unhide</button></div></div>';
     const groups = S.groups.map((g, i) => '<div class="grow" data-group="' + g.thread_id + '"><span class="av grp-av">' + '👥' + '</span>' +
       '<div class="g-main"><div class="g-name">' + esc(g.name) + '</div><div class="g-sub">' + esc(g.member_names.join(', ')) + '</div></div>' +
       '<div class="g-right"><button type="button" class="ghost circ gedit" data-gedit="' + i + '" aria-label="Edit group">⚙</button></div></div>').join('');
@@ -180,14 +198,17 @@
     el.innerHTML =
       '<div class="searchrow" id="bots-search"' + (S.botSearch ? '' : ' hidden') + '><input id="bot-q" type="search" placeholder="Search Bots" value="' + esc(S.botQuery || '') + '"><button type="button" id="bot-q-x" class="ghost circ" aria-label="Clear">✕</button></div>' +
       (q ? '' : (favs.length ? '<div class="favrow">' + favHTML + '</div>' : '')) +
-      (!bots.length && !q ? '<div class="empty"><div class="empty-h">Meet your first Bot</div><p class="muted">Bots you create show up here.</p><button id="empty-new" class="primary">Create a Bot</button></div>' : '') +
+      (!S.bots.length && !q ? '<div class="empty"><div class="empty-h">Meet your first Bot</div><p class="muted">Bots you create show up here.</p><button id="empty-new" class="primary">Create a Bot</button></div>' : '') +
       (rows ? '<div class="glist">' + rows + '</div>' : (q ? '<p class="muted pad">No Bots match “' + esc(S.botQuery) + '”.</p>' : '')) +
       (groups ? '<div class="sect-row"><span class="section">Group chats</span><button type="button" class="ghost pill-btn" id="new-group">＋ New group</button></div><div class="glist">' + groups + '</div>' : (!q ? '<div class="sect-row"><span class="section">Group chats</span><button type="button" class="ghost pill-btn" id="new-group">＋ New group</button></div>' : '')) +
-      (tpl && !q ? '<div class="section">Ready-made Bots</div><div class="glist">' + tpl + '</div>' : '');
+      (tpl && !q ? '<div class="section">Ready-made Bots</div><div class="glist">' + tpl + '</div>' : '') +
+      (hidden.length ? '<div class="sect-row"><span class="section">Hidden Bots (' + hidden.length + ')</span><button type="button" class="ghost pill-btn" id="toggle-hidden">' + (S.showHidden ? 'Hide' : 'Show') + '</button></div>' + (S.showHidden ? '<div class="glist">' + hidden.map(hiddenRow).join('') + '</div>' : '') : '');
     el.querySelectorAll('.fav[data-bot]').forEach((n) => n.onclick = () => openBot(n.dataset.bot));
     el.querySelectorAll('.grow[data-bot]').forEach((n) => n.onclick = () => openBot(n.dataset.bot));
     el.querySelectorAll('.grow[data-group]').forEach((n) => n.onclick = (e) => { if (e.target.closest('.gedit')) return; openThread(n.dataset.group, S.groups.find((g) => g.thread_id === n.dataset.group).name, null); });
     el.querySelectorAll('.gedit').forEach((b) => b.onclick = (e) => { e.stopPropagation(); grpEdit(S.groups[parseInt(b.dataset.gedit, 10)]); });
+    const thb = $('#toggle-hidden'); if (thb) thb.onclick = () => { S.showHidden = !S.showHidden; renderBots(); };
+    el.querySelectorAll('[data-unhide]').forEach((b) => b.onclick = async (e) => { e.stopPropagation(); try { await api('/api/bots/' + b.dataset.unhide, { method: 'PUT', body: { hidden: false } }); await loadBootstrap(); toast('Unhidden', ''); } catch (err) { toast('Could not unhide', err.message); } });
     const ng = $('#new-group'); if (ng) ng.onclick = () => grpEdit(null);
     el.querySelectorAll('[data-add]').forEach((b) => b.onclick = async (e) => {
       e.stopPropagation();
@@ -338,12 +359,31 @@
       body.querySelector('#be-mem-go').onclick = async () => { const t = body.querySelector('#be-mem-add').value.trim(); if (!t) return; try { await api('/api/bots/' + b.id + '/memory', { method: 'POST', body: { kind: 'fact', text: t, pinned: true } }); body.querySelector('#be-mem-add').value = ''; eb.mem = await api('/api/bots/' + b.id + '/memory'); renderMem(); } catch (e) { toast('Memory', e.message); } };
       renderMem();
     } else {
-      const paused = !!b.paused, archived = !!b.archived;
+      const paused = !!b.paused, archived = !!b.archived, pinned = !!b.pinned, hidden = !!b.hidden;
       body.innerHTML = '<div class="field"><label>State</label><div class="eb-state"><button id="be-pause" class="' + (paused ? 'primary' : '') + '">' + (paused ? 'Resume Bot' : 'Pause Bot') + '</button><button id="be-archive" class="' + (archived ? 'primary' : '') + '">' + (archived ? 'Unarchive' : 'Archive') + '</button></div></div>' +
+        '<div class="field"><label>On this phone</label><div class="eb-state"><button id="be-pin" class="' + (pinned ? 'primary' : '') + '">' + (pinned ? 'Unpin' : 'Pin to top') + '</button><button id="be-hide" class="' + (hidden ? 'primary' : '') + '">' + (hidden ? 'Unhide' : 'Hide from team') + '</button></div></div>' +
+        '<div class="field"><label>Auto-Review rules</label><p class="muted" style="font-size:11px;margin:2px 0 6px">Standing “allow automatically” rules for this Bot. Approve &amp; always adds one for you.</p><div id="be-rules"></div>' +
+        '<div class="row" style="display:flex;gap:6px;margin-top:6px"><input id="be-rule-cat" placeholder="category (e.g. shell)" style="flex:1;min-width:0"><input id="be-rule-pat" placeholder="pattern or *" style="flex:1;min-width:0"><button id="be-rule-add" class="small">Add</button></div></div>' +
         '<div class="field"><label>Export</label><div style="display:flex;gap:6px"><button id="be-export">Export (with memory)</button><button id="be-export-nm">Export (no memory)</button></div></div>' +
         '<div class="field"><label>Danger zone</label><button id="be-del" class="danger">Delete this Bot…</button></div>';
       body.querySelector('#be-pause').onclick = async () => { try { await api('/api/bots/' + b.id, { method: 'PUT', body: { paused: !paused } }); await loadBootstrap(); openBotEdit(b.id); } catch (e) { toast('Pause failed', e.message); } };
       body.querySelector('#be-archive').onclick = async () => { try { await api('/api/bots/' + b.id, { method: 'PUT', body: { archived: !archived } }); await loadBootstrap(); openBotEdit(b.id); } catch (e) { toast('Archive failed', e.message); } };
+      body.querySelector('#be-pin').onclick = async () => { try { await api('/api/bots/' + b.id, { method: 'PUT', body: { pinned: !pinned } }); await loadBootstrap(); openBotEdit(b.id); } catch (e) { toast('Could not pin', e.message); } };
+      body.querySelector('#be-hide').onclick = async () => { try { await api('/api/bots/' + b.id, { method: 'PUT', body: { hidden: !hidden } }); await loadBootstrap(); openBotEdit(b.id); toast(hidden ? 'Unhidden' : 'Hidden', ''); } catch (e) { toast('Could not hide', e.message); } };
+      const renderRules = () => {
+        const el = body.querySelector('#be-rules'); if (!el) return;
+        const rs = eb.rules || [];
+        el.innerHTML = rs.length ? rs.map((r) => '<div class="eb-mem-row"><span class="eb-rule">' + esc(r.category) + '</span><span class="eb-mem-text">' + esc(r.pattern) + '</span><button class="eb-mem-del" data-rid="' + r.id + '">✕</button></div>').join('') : '<p class="muted">No standing rules yet.</p>';
+        el.querySelectorAll('[data-rid]').forEach((btn) => btn.onclick = async () => { try { await api('/api/rules/' + btn.dataset.rid, { method: 'DELETE' }); eb.rules = (eb.rules || []).filter((x) => String(x.id) !== btn.dataset.rid); renderRules(); } catch (e) { toast('Could not delete rule', e.message); } });
+      };
+      renderRules();
+      const addRule = body.querySelector('#be-rule-add');
+      if (addRule) addRule.onclick = async () => {
+        const category = body.querySelector('#be-rule-cat').value.trim();
+        const pattern = body.querySelector('#be-rule-pat').value.trim() || '*';
+        if (!category) { toast('Rules', 'A category is required (e.g. shell, browser, files).'); return; }
+        try { const r = await api('/api/rules', { body: { bot_id: b.id, category, pattern } }); eb.rules = [...(eb.rules || []), r]; body.querySelector('#be-rule-cat').value = ''; body.querySelector('#be-rule-pat').value = ''; renderRules(); } catch (e) { toast('Could not add rule', e.message); }
+      };
       const doExport = async (mem) => { try { const d = await api('/api/bots/' + b.id + '/export', { params: { memory: mem ? 'true' : 'false' } }); const blob = new Blob([JSON.stringify(d, null, 2)], { type: 'application/json' }); const url = URL.createObjectURL(blob); const a = document.createElement('a'); a.href = url; a.download = (b.name || 'bot') + '.json'; document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(url), 4000); toast('Exported', b.name + '.json downloaded.'); } catch (e) { toast('Export failed', e.message); } };
       body.querySelector('#be-export').onclick = () => doExport(true);
       body.querySelector('#be-export-nm').onclick = () => doExport(false);
@@ -407,6 +447,7 @@
     S.items = d.items; S.approvals = [...S.approvals.filter((a) => a.thread_id !== tid), ...d.approvals];
     setView('chat');
     S.attach = []; renderAttach();
+    S.reply = null; renderReplyBar();
     renderMessages(true); renderThreadApprovals(); updateChatStatus();
     loadThreadList(botId, tid);
   }
@@ -422,9 +463,27 @@
     } catch (e) { bar.hidden = true; }
   }
 
+  const REACT_EMOJI = ['👍', '❤️', '🎉', '😄', '🚀', '👀'];
+  function rxChips(it) {
+    const rx = it.reactions || [];
+    if (!rx.length) return '';
+    return '<div class="rx-chips">' + rx.map((r) => '<button type="button" class="rx' + (r.mine ? ' mine' : '') + '" data-emoji="' + esc(r.emoji) + '">' + esc(r.emoji) + (r.count > 1 ? '<i>' + r.count + '</i>' : '') + '</button>').join('') + '</div>';
+  }
+  function msgShell(it, inner) {
+    if (!it.id) return inner;
+    const acts = '<div class="msg-acts">' + REACT_EMOJI.map((e) => '<button type="button" class="rxbtn" data-react="' + e + '">' + e + '</button>').join('') + '<button type="button" class="rxbtn" data-reply="1" aria-label="Reply">↩</button></div>';
+    return '<div class="msg-wrap" data-mid="' + it.id + '">' + inner + rxChips(it) + acts + '</div>';
+  }
+  function quoteHTML(it) {
+    if (!it.parent_id) return '';
+    const p = S.items.find((x) => x.id === it.parent_id);
+    const who = p ? (p.type === 'user' ? 'You' : (p.name || 'Bot')) : 'message';
+    const txt = p ? String(p.text || '').slice(0, 90) : '…';
+    return '<div class="quote" data-goto="' + it.parent_id + '"><b>' + esc(who) + '</b> ' + esc(txt) + '</div>';
+  }
   function itemHTML(it) {
-    if (it.type === 'user') return `<div class="msg user">${md(it.text)}${(it.images || []).map((i) => `<img src="/api/files/shots/${encodeURIComponent(i)}">`).join('')}</div>`;
-    if (it.type === 'assistant') return `<div class="msg assistant">${S.thread && !S.thread.botId ? `<div class="who">${esc(it.emoji || '')} ${esc(it.name || '')}</div>` : ''}${md(it.text)}</div>`;
+    if (it.type === 'user') return msgShell(it, `<div class="msg user">${quoteHTML(it)}${md(it.text)}${(it.images || []).map((i) => `<img src="/api/files/shots/${encodeURIComponent(i)}">`).join('')}</div>`);
+    if (it.type === 'assistant') return msgShell(it, `<div class="msg assistant">${S.thread && !S.thread.botId ? `<div class="who">${esc(it.emoji || '')} ${esc(it.name || '')}</div>` : ''}${quoteHTML(it)}${md(it.text)}</div>`);
     if (it.type === 'tool') {
       const ic = { running: '●', ok: '✓', error: '✕', denied: '⛔', blocked: '⛔' }[it.status] || '•';
       const label = esc(it.label || it.tool);
@@ -443,7 +502,85 @@
     let html = S.items.map(itemHTML).join('');
     for (const [sid, st] of Object.entries(S.stream)) if (st.thread === (S.thread && S.thread.id) && st.text) html += `<div class="msg assistant">${md(st.text)}</div>`;
     el.innerHTML = html;
+    wireMessages(el);
     if (scroll || atEnd) el.scrollTop = el.scrollHeight;
+  }
+
+  function wireMessages(el) {
+    el.querySelectorAll('.msg-wrap[data-mid]').forEach((w) => {
+      const mid = parseInt(w.dataset.mid, 10); if (!mid) return;
+      const bubble = w.querySelector('.msg');
+      if (bubble) bubble.addEventListener('click', (e) => { if (e.target.closest('a')) return; w.classList.toggle('open'); });
+      w.querySelectorAll('.rx[data-emoji]').forEach((b) => b.addEventListener('click', (e) => { e.stopPropagation(); reactTo(mid, b.dataset.emoji); }));
+      w.querySelectorAll('.rxbtn[data-react]').forEach((b) => b.addEventListener('click', (e) => { e.stopPropagation(); reactTo(mid, b.dataset.react); }));
+      const rp = w.querySelector('[data-reply]'); if (rp) rp.addEventListener('click', (e) => { e.stopPropagation(); startReply(mid); });
+      const q = w.querySelector('.quote[data-goto]'); if (q) q.addEventListener('click', (e) => { e.stopPropagation(); gotoMessage(parseInt(q.dataset.goto, 10)); });
+    });
+  }
+  async function reactTo(mid, emoji) {
+    try {
+      const d = await api('/api/messages/' + mid + '/reactions', { body: { emoji, author: 'user' } });
+      const it = S.items.find((x) => x.id === mid); if (it) it.reactions = d.reactions || [];
+      renderMessages();
+    } catch (e) { toast('Reaction', e.message); }
+  }
+  function gotoMessage(mid) {
+    const node = document.querySelector('#messages .msg-wrap[data-mid="' + mid + '"]');
+    if (node) { node.scrollIntoView({ behavior: 'smooth', block: 'center' }); node.classList.add('hl'); setTimeout(() => node.classList.remove('hl'), 1200); }
+  }
+  function startReply(mid) {
+    const it = S.items.find((x) => x.id === mid); if (!it) return;
+    const who = it.type === 'user' ? 'You' : (it.name || (S.thread && S.thread.title) || 'Bot');
+    S.reply = { id: mid, who, text: String(it.text || '').slice(0, 120) };
+    renderReplyBar();
+    const ta = $('#input'); if (ta) ta.focus();
+  }
+  function renderReplyBar() {
+    const bar = $('#replybar'); if (!bar) return;
+    if (!S.reply) { bar.hidden = true; bar.innerHTML = ''; return; }
+    bar.hidden = false;
+    bar.innerHTML = '<div class="reply-quote"><b>' + esc(S.reply.who) + '</b> ' + esc(S.reply.text) + '</div><button type="button" id="reply-x" aria-label="Cancel reply">✕</button>';
+    const x = $('#reply-x'); if (x) x.onclick = () => { S.reply = null; renderReplyBar(); };
+  }
+
+  // ---------------------------------------------------------------- search palette
+  function openPalette() {
+    let ov = document.getElementById('palette');
+    if (!ov) { ov = document.createElement('div'); ov.id = 'palette'; ov.className = 'palette-overlay'; document.body.appendChild(ov); }
+    ov.innerHTML = '<div class="palette"><div class="palette-head"><span aria-hidden="true" class="pal-glyph">⌕</span><input id="pal-q" placeholder="Search Bots, chats, files, routines…" autocomplete="off" autocapitalize="off"><button type="button" id="pal-x" aria-label="Close">✕</button></div><div class="palette-body" id="pal-body"><p class="muted pad">Type to search everything.</p></div></div>';
+    document.body.classList.add('pal-open');
+    const input = ov.querySelector('#pal-q');
+    ov.onclick = (e) => { if (e.target === ov) closePalette(); };
+    ov.querySelector('#pal-x').onclick = () => closePalette();
+    let timer = null;
+    input.oninput = () => { clearTimeout(timer); const q = input.value.trim(); timer = setTimeout(() => paletteRun(q), 180); };
+    input.onkeydown = (e) => { if (e.key === 'Escape') closePalette(); };
+    input.focus();
+  }
+  function closePalette() { const ov = document.getElementById('palette'); if (ov) ov.remove(); document.body.classList.remove('pal-open'); }
+  async function paletteRun(q) {
+    const body = document.getElementById('pal-body'); if (!body) return;
+    if (!q) { body.innerHTML = '<p class="muted pad">Type to search everything.</p>'; return; }
+    body.innerHTML = '<p class="muted pad">Searching…</p>';
+    let d; try { d = await api('/api/palette', { params: { q, limit: 8 } }); } catch (e) { body.innerHTML = '<p class="err pad">' + esc(e.message) + '</p>'; return; }
+    const sec = [];
+    if ((d.bots || []).length) sec.push('<div class="pal-sec">Bots</div>' + d.bots.map((b) => '<button type="button" class="pal-row" data-kind="bot" data-id="' + esc(b.id) + '">' + avEl(b, 34) + '<div class="pal-main"><div class="pal-name">' + esc(b.name) + '</div><div class="pal-sub">' + esc(b.job || '') + '</div></div></button>').join(''));
+    if ((d.groups || []).length) sec.push('<div class="pal-sec">Group chats</div>' + d.groups.map((g) => '<button type="button" class="pal-row" data-kind="group" data-id="' + esc(g.thread_id) + '" data-name="' + esc(g.name) + '"><span class="av grp-av">👥</span><div class="pal-main"><div class="pal-name">' + esc(g.name) + '</div></div></button>').join(''));
+    if ((d.messages || []).length) sec.push('<div class="pal-sec">Messages</div>' + d.messages.map((m) => '<button type="button" class="pal-row" data-kind="message" data-id="' + esc(m.thread_id) + '" data-name="' + esc(m.title || m.where || 'Chat') + '" data-bot="' + esc(m.bot_id || '') + '"><span class="av tpl-av">' + esc(m.emoji || '💬') + '</span><div class="pal-main"><div class="pal-name">' + esc(m.where || m.title || 'Chat') + '</div><div class="pal-sub">' + esc(m.snippet || '') + '</div></div></button>').join(''));
+    if ((d.files || []).length) sec.push('<div class="pal-sec">Files</div>' + d.files.map((f) => '<button type="button" class="pal-row" data-kind="file" data-id="' + esc(f.path) + '"><span class="av tpl-av">' + (f.dir ? '📁' : '📄') + '</span><div class="pal-main"><div class="pal-name">' + esc(f.name) + '</div><div class="pal-sub">' + (f.dir ? 'Folder' : humanSize(f.size) + ' · ' + agoTime(f.mtime)) + '</div></div></button>').join(''));
+    if ((d.routines || []).length) sec.push('<div class="pal-sec">Routines</div>' + d.routines.map((r) => '<button type="button" class="pal-row" data-kind="routine" data-id="' + esc(r.id) + '"><span class="av tpl-av">🔁</span><div class="pal-main"><div class="pal-name">' + esc(r.name) + '</div><div class="pal-sub">' + (r.enabled ? 'on' : 'off') + '</div></div></button>').join(''));
+    body.innerHTML = sec.length ? sec.join('') : '<p class="muted pad">Nothing matches “' + esc(q) + '”.</p>';
+    body.querySelectorAll('.pal-row').forEach((b) => b.onclick = () => paletteGo(b.dataset));
+  }
+  async function paletteGo(ds) {
+    closePalette();
+    try {
+      if (ds.kind === 'bot') await openBot(ds.id);
+      else if (ds.kind === 'group') await openThread(ds.id, ds.name || 'Group', null);
+      else if (ds.kind === 'message') await openThread(ds.id, ds.name || 'Chat', ds.bot || null);
+      else if (ds.kind === 'routine') setView('routines');
+      else if (ds.kind === 'file') { setView('files'); setTimeout(() => { if (window.flPick) window.flPick(ds.id); }, 300); }
+    } catch (e) { toast('Could not open', e.message); }
   }
 
   function mergeItems(items) {
@@ -471,6 +608,12 @@
       const opts = (d.options || []).map((o) => `<button data-ans="${esc(o)}">${esc(o)}</button>`).join('');
       return `<div class="card approval q" data-id="${a.id}"><h4>${esc(botName(a.bot_id))} asks</h4><div>${esc(a.summary)}</div><div class="row">${opts}</div>` +
         `<div class="row"><input placeholder="Type an answer" class="ans"><button class="primary send-ans">Send</button></div></div>`;
+    }
+    if (a.category === 'draft' || d.draft) {
+      const body = d.body || d.draft || d.text || '';
+      return `<div class="card approval draft" data-id="${a.id}"><h4>${esc(botName(a.bot_id))} drafted ${esc(d.kind || a.title || 'a message')}</h4><div>${esc(a.summary || '')}</div>` +
+        `<textarea class="draft-body" rows="5">${esc(body)}</textarea>` +
+        `<div class="row"><button class="primary draft-send">Send</button><button class="draft-discard deny">Discard</button></div></div>`;
     }
     if (a.category === 'login' && Array.isArray(d.fields) && d.fields.length) {
       return `<div class="card approval" data-id="${a.id}"><h4>${esc(botName(a.bot_id))} needs the login for ${esc(d.domain || 'this site')}</h4><div>${esc(a.summary)}</div>` +
@@ -511,6 +654,7 @@
         decide({ approve: true, answer: JSON.stringify({ username: (q('.cu').value || '').trim(), password: pw, remember: q('.cr').checked }) });
       };
       if (q('.open-screen')) q('.open-screen').onclick = () => openScreen(q('.open-screen').dataset.bot);
+      if (q('.draft-send')) q('.draft-send').onclick = () => decide({ approve: true, answer: (q('.draft-body') || {}).value || '' });
     });
   }
   function renderThreadApprovals() {
@@ -603,11 +747,19 @@
           ' · commands ' + (s.active ? 'are sandboxed' : 'run unsandboxed') + ' · network ' + (s.network === 'none' ? 'blocked' : 'allowed');
       }).catch(() => { const el = document.getElementById('set-sandbox-info'); if (el) el.textContent = 'Sandbox status: unknown (could not reach /api/computer).'; });
     } else if (setTab === 'App') {
-      b.innerHTML = '<div class="card"><b>App behaviour</b>' +
+      const cur = S.theme || themePref();
+      b.innerHTML = '<div class="card"><b>Appearance</b><p class="muted">Choose how the app looks on this phone.</p>' +
+        '<div class="field"><label>Theme</label><select id="set-theme">' +
+        [['system', 'System (match this phone)'], ['light', 'Light'], ['dark', 'Dark']].map(([v, l]) => '<option value="' + v + '"' + (cur === v ? ' selected' : '') + '>' + l + '</option>').join('') + '</select></div></div>' +
+        '<div class="card"><b>Language &amp; time zone</b>' +
+        skField('Language', 'locale.language', 'text') +
+        skField('Time zone (e.g. Africa/Harare)', 'locale.timezone', 'text') + save + '</div>' +
+        '<div class="card"><b>App behaviour</b>' +
         skField('Lazy tool loading (faster start)', 'context.lazy_tools', 'check') +
         skField('Auto-reflect memories', 'memory.auto_reflect', 'check') +
         skField('Proactive check-in interval (min)', 'proactive.interval_min', 'number') +
         skField('Context history tokens', 'context.max_history_tokens', 'number') + save + '</div>';
+      const st = $('#set-theme'); if (st) st.onchange = () => { setTheme(st.value); toast('Appearance', st.value === 'system' ? 'Following this phone.' : st.value + ' theme.'); };
     } else {
       b.innerHTML = '<div class="card"><b>Mobile access</b><p class="muted">This phone connects to your server over the network.</p>' +
         '<div class="field"><label>Host</label><input value="' + esc(getS('mobile.host') || '') + '" readonly></div>' +
@@ -615,8 +767,14 @@
         '<div class="card"><b>More screens</b><div class="row" style="display:flex;flex-wrap:wrap;gap:6px;margin-top:6px">' +
         ['marketplace', 'computer', 'files', 'skills', 'routines', 'plugins', 'usage', 'actionlog'].map((v) => '<button onclick="setView(\'' + v + '\')" class="small" style="flex:1 1 48%">' + v[0].toUpperCase() + v.slice(1) + '</button>').join('') + '</div></div>' +
         '<div class="card"><b>Install</b><p class="muted">Use your browser menu: “Add to Home screen” for the fullscreen app icon.</p></div>' +
-        '<div class="card"><button id="logout">Sign out of this phone</button></div>';
+        '<div class="card"><button id="logout">Sign out of this phone</button></div>' +
+        '<div class="card"><b>Delete account</b><p class="muted">Removes the sign-in for this server and returns it to first-run setup. Your Bots and files stay on the server until you clear them.</p><button id="acct-del" class="danger">Delete account…</button></div>';
       $('#logout').onclick = async () => { try { await api('/api/logout', { body: {} }); } catch (e) { /* ignore */ } document.cookie = 'zt_session=; Max-Age=0; path=/'; location.reload(); };
+      $('#acct-del').onclick = async () => {
+        const want = prompt('Type your email address to confirm deleting the account:');
+        if (want === null) return;
+        try { await api('/api/account/delete', { body: { confirm: want.trim() } }); document.cookie = 'zt_session=; Max-Age=0; path=/'; toast('Account deleted', 'The server is back to setup.'); setTimeout(() => location.reload(), 800); } catch (e) { toast('Could not delete account', e.message); }
+      };
     }
     const sb = document.getElementById('set-save'); if (sb) sb.onclick = () => setSave();
   }
@@ -694,7 +852,8 @@
     const images = S.attach.map((a) => ({ data: a.data }));
     S.attach = []; renderAttach();
     try {
-      const d = await api('/api/threads/' + S.thread.id + '/messages', { body: { text, images } });
+      const d = await api('/api/threads/' + S.thread.id + '/messages', { body: { text, images, parent_id: (S.reply && S.reply.id) || 0 } });
+      S.reply = null; renderReplyBar();
       if (d.switch_thread && S.thread && S.thread.botId) openThread(d.switch_thread, S.thread.title, S.thread.botId);   // /new
     } catch (e) { toast('Could not send', e.message); ta.value = text; }
   }
@@ -954,9 +1113,12 @@
   // ---------------------------------------------------------------- computer
   async function renderComputer() {
     const wrap = $('#view-computer');
-    wrap.innerHTML = '<div class="section">Bot screens</div><div class="cp-grid" id="cp-grid"></div>' +
+    wrap.innerHTML = '<div class="cp-bar"><button id="cp-recover" class="small">Recover browser</button><button id="cp-reset" class="small danger">Reset computer</button></div>' +
+      '<div class="section">Bot screens</div><div class="cp-grid" id="cp-grid"></div>' +
       '<div class="section">Workspace files</div><div id="cp-files"></div>' +
       '<div class="section">Terminal</div><div style="display:flex;gap:6px;padding:0 12px 8px"><input id="cp-term-in" placeholder="Run a command in the workspace…" style="flex:1;min-width:0;font-family:monospace" autocomplete="off"><button class="primary" id="cp-term-go">Run</button></div><div id="cp-term" style="padding:0 12px 8px"></div>';
+    const rec = $('#cp-recover'); if (rec) rec.onclick = async () => { rec.disabled = true; try { await api('/api/computer/restart', { body: {} }); toast('Recovered', 'The browser was restarted.'); renderComputer(); } catch (e) { toast('Recover failed', e.message); rec.disabled = false; } };
+    const rst = $('#cp-reset'); if (rst) rst.onclick = async () => { if (!confirm('Reset the shared computer? This restarts the browser and clears the terminal history.')) return; rst.disabled = true; try { await api('/api/computer/reset', { body: {} }); toast('Reset', 'Computer reset.'); renderComputer(); } catch (e) { toast('Reset failed', e.message); rst.disabled = false; } };
     const go = async () => {
       const cmd = ($('#cp-term-in').value || '').trim(); if (!cmd) return;
       $('#cp-term-go').disabled = true;
@@ -1344,7 +1506,7 @@
     const mo = $('#menu-signout'); if (mo) mo.onclick = async () => { closeMenu(); try { await api('/api/logout', { body: {} }); } catch (e) { /* ignore */ } location.reload(); };
     const sc = $('#scrim'); if (sc) sc.onclick = () => closeMenu();
     const av = $('#hdr-avatar'); if (av) av.onclick = () => { if ($('#tabs').hidden) openMenu(); else closeMenu(); };
-    const hs = $('#hdr-search'); if (hs) hs.onclick = () => { S.botSearch = !S.botSearch; if (!S.botSearch) S.botQuery = ''; renderBots(); const qi = $('#bot-q'); if (qi) qi.focus(); };
+    const hs = $('#hdr-search'); if (hs) hs.onclick = () => openPalette();
     const hn = $('#hdr-new'); if (hn) hn.onclick = () => openBotSheet();
     const hc = $('#hdr-computer'); if (hc) hc.onclick = () => { const bid = hc.dataset.botid; if (bid) openScreen(bid); };
     const ttl = $('#title'); if (ttl) ttl.onclick = () => { if (S.view === 'chat' && S.thread && S.thread.botId) openBotEdit(S.thread.botId); };
@@ -1381,14 +1543,31 @@
     });
   }
 
+  function sharedText() {
+    try {
+      const sp = new URLSearchParams(location.search);
+      let t = (sp.get('share') || sp.get('text') || sp.get('url') || '').trim();
+      if (!t && location.hash.startsWith('#share=')) t = decodeURIComponent(location.hash.slice(7)).trim();
+      return t;
+    } catch (e) { return ''; }
+  }
+  function handleShare(text) {
+    try { if (history.replaceState) history.replaceState(null, '', location.pathname); } catch (e) { /* ignore */ }
+    const b = (S.bots || []).filter((x) => !x.hidden && !x.archived)[0];
+    if (!b) { openBotSheet(); toast('Shared to ZerotheBot', 'Create a Bot to send this to.'); return; }
+    openBot(b.id).then(() => { const ta = $('#input'); if (ta) { ta.value = text; autoGrow(); ta.focus(); } toast('Shared to ' + b.name, 'Tap send to hand this over.'); }).catch(() => {});
+  }
+
   async function start() {
     wire();
+    applyTheme();
     if ('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js').catch(() => {});
+    const shared = sharedText();
     try {
       const st = await api('/api/auth_status');
       S.settings = st.settings || {};
       if (st.needs_setup) { setAuthMode(true); showLogin(); return; }
-      try { await loadBootstrap(); connect(); setAcct(st.email); setView('bots'); return; } catch (e) { /* fall through to sign-in */ }
+      try { await loadBootstrap(); connect(); setAcct(st.email); setView('bots'); if (shared) handleShare(shared); return; } catch (e) { /* fall through to sign-in */ }
       showLogin();
     } catch (e) { toast('Could not reach the server', 'Check your connection and reopen the app.'); }
     setInterval(() => { if (S.view === 'chat') updateChatStatus(); }, 1500);

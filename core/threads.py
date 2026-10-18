@@ -98,10 +98,11 @@ class Threads:
 
     # -- messages -------------------------------------------------------------
     def add(self, thread_id: str, author: str, role: str, content: list[dict] | str, kind: str = "llm",
-            anchor: int | None = None, turn_id: str = "", publish: bool = True, **extra: Any) -> int:
+            anchor: int | None = None, turn_id: str = "", publish: bool = True, parent_id: int = 0, **extra: Any) -> int:
         blocks = text_blocks(content) if isinstance(content, str) else content
         mid = self.db.insert("messages", {"thread_id": thread_id, "author": author, "role": role, "kind": kind,
-                                          "content": jdump(blocks), "anchor": anchor, "turn_id": turn_id, "created_at": now()})
+                                          "content": jdump(blocks), "anchor": anchor, "turn_id": turn_id,
+                                          "parent_id": int(parent_id or 0), "created_at": now()})
         self.db.update("threads", thread_id, {"updated_at": now()})
         th = self.get(thread_id)
         if th and th["title"] in ("New thread", "Main", "") and author == "user" and role == "user":
@@ -122,6 +123,43 @@ class Threads:
 
     def last_id(self, thread_id: str) -> int:
         return int(self.db.scalar("SELECT COALESCE(MAX(id),0) FROM messages WHERE thread_id=?", (thread_id,), 0))
+
+    # -- reactions ------------------------------------------------------------
+    def reactions_map(self, ids: list[int]) -> dict[int, list[dict]]:
+        if not ids:
+            return {}
+        marks = ",".join("?" for _ in ids)
+        rows = self.db.query(f"SELECT message_id, emoji, author FROM reactions WHERE message_id IN ({marks})", ids)
+        grouped: dict[int, dict[str, dict]] = {}
+        for r in rows:
+            bucket = grouped.setdefault(r["message_id"], {})
+            e = bucket.setdefault(r["emoji"], {"emoji": r["emoji"], "count": 0, "mine": False})
+            e["count"] += 1
+            if r["author"] == "user":
+                e["mine"] = True
+        return {k: list(v.values()) for k, v in grouped.items()}
+
+    def toggle_reaction(self, message_id: int, emoji: str, author: str = "user") -> dict:
+        emoji = (emoji or "").strip()[:16]
+        row = self.db.one("SELECT thread_id FROM messages WHERE id=?", (message_id,))
+        if not row or not emoji:
+            return {}
+        have = self.db.one("SELECT id FROM reactions WHERE message_id=? AND emoji=? AND author=?", (message_id, emoji, author))
+        if have:
+            self.db.execute("DELETE FROM reactions WHERE id=?", (have["id"],))
+            on = False
+        else:
+            self.db.insert("reactions", {"message_id": message_id, "author": author, "emoji": emoji, "created_at": now()})
+            on = True
+        self.events.publish("reactions", change="updated", thread_id=row["thread_id"], message_id=message_id)
+        return {"message_id": message_id, "emoji": emoji, "on": on, "reactions": self.reactions_map([message_id]).get(message_id, [])}
+
+    def remove_reaction(self, message_id: int, emoji: str, author: str = "user") -> dict:
+        self.db.execute("DELETE FROM reactions WHERE message_id=? AND emoji=? AND author=?", (message_id, (emoji or "")[:16], author))
+        row = self.db.one("SELECT thread_id FROM messages WHERE id=?", (message_id,))
+        if row:
+            self.events.publish("reactions", change="updated", thread_id=row["thread_id"], message_id=message_id)
+        return {"ok": True, "reactions": self.reactions_map([message_id]).get(message_id, [])}
 
     # -- LLM view -------------------------------------------------------------
     def _convert(self, rows: list[dict], viewer: str, group: bool, names: dict[str, dict]) -> tuple[list[dict], list[int]]:
@@ -178,13 +216,15 @@ class Threads:
     def display_items(self, rows: list[dict], names: dict[str, dict]) -> list[dict]:
         items: list[dict] = []
         tools: dict[str, dict] = {}
+        rx = self.reactions_map([r["id"] for r in rows if r])
         for r in rows:
             if not r:
                 continue
             blocks = jload(r["content"], [])
             author = r["author"]
             who = names.get(author, {})
-            base = {"id": r["id"], "ts": r["created_at"], "author": author, "turn_id": r.get("turn_id", "")}
+            base = {"id": r["id"], "ts": r["created_at"], "author": author, "turn_id": r.get("turn_id", ""),
+                    "parent_id": r.get("parent_id", 0), "reactions": rx.get(r["id"], [])}
             if r["kind"] == "notice":
                 items.append({**base, "type": "notice", "level": (blocks[0].get("level") if blocks else "info"),
                               "text": blocks_text(blocks)})

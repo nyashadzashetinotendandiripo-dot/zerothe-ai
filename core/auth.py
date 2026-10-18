@@ -67,6 +67,14 @@ def has_account() -> bool:
     return bool(_read_account().get("email"))
 
 
+def delete_account() -> None:
+    """Remove the account credentials so the app returns to first-run setup."""
+    try:
+        _account_path().unlink()
+    except OSError:
+        pass
+
+
 def email() -> str:
     return _read_account().get("email", "")
 
