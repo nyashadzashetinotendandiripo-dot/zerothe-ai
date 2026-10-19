@@ -14,6 +14,8 @@ export default function App() {
   const [bots, setBots] = useState([]);
   const [busy, setBusy] = useState({});                    // bot_id -> {status, thread_id}
   const [apps, setApps] = useState([]);                    // pending approvals, server-wide
+  const [noteBadge, setNoteBadge] = useState(0);           // unread notifications
+  const [noteOpen, setNoteOpen] = useState(false);
   const [chat, setChat] = useState(null);                  // {bot, threadId, threads}
   const lastRef = useRef(0);
   const evtRef = useRef(null);
@@ -77,7 +79,8 @@ export default function App() {
         return o;
       });
     }
-    if (ev.type === 'bots' || ev.type === 'groups' || ev.type === 'notification' || ev.type === 'approval') refresh();
+    if (ev.type === 'bots' || ev.type === 'groups' || ev.type === 'approval') refresh();
+    if (ev.type === 'notification') { setNoteBadge((b) => b + 1); refresh(); }
     if (['message', 'delta', 'delta_reset', 'turn', 'approval'].includes(ev.type)) chatHandler.current && chatHandler.current(ev);
   }, [refresh, chatHandler]);
 
@@ -85,6 +88,7 @@ export default function App() {
   useEffect(() => {
     if (!signed) return undefined;
     evtRef.current = connectEvents({ since: lastRef.current, onEvent, onConn: () => {}, onSince: () => {} });
+    api('/api/notifications?unread_only=1&limit=200').then((rows) => setNoteBadge(Array.isArray(rows) ? rows.length : 0)).catch(() => {});
     return evtRef.current;
   }, [signed, onEvent]);
 
@@ -156,9 +160,10 @@ export default function App() {
 
   return (
     <Shell upd={upd} onUpd={doUpdate} updState={updState}>
-      <Home bots={bots} busy={busy} apps={apps} onOpen={openBot} onPlug={() => setScreen('conn')} onNew={newBot} onDecide={decideApp} onBotLong={setBotModal} />
+      <Home bots={bots} busy={busy} apps={apps} noteBadge={noteBadge} onOpen={openBot} onPlug={() => setScreen('conn')} onBell={() => setNoteOpen(true)} onNew={newBot} onDecide={decideApp} onBotLong={setBotModal} />
       <TabBar tab="home" onTab={setScreen} onChat={openChatTab} />
       {!!botModal && <BotModal bot={botModal} onClose={() => setBotModal(null)} onCloseSaved={() => { setBotModal(null); refresh(); }} />}
+      {noteOpen && <NotifSheet onClose={() => setNoteOpen(false)} onReadAll={() => setNoteBadge(0)} />}
     </Shell>
   );
 }
@@ -216,7 +221,7 @@ function Login({ onDone }) {
 }
 
 // ----------------------------------------------------------------- home
-function Home({ bots, busy, apps, onOpen, onPlug, onNew, onDecide, onBotLong }) {
+function Home({ bots, busy, apps, noteBadge, onOpen, onPlug, onBell, onNew, onDecide, onBotLong }) {
   const [modal, setModal] = useState(null);
   const working = Object.keys(busy).length;
   return (
@@ -230,6 +235,12 @@ function Home({ bots, busy, apps, onOpen, onPlug, onNew, onDecide, onBotLong }) 
               : bots.length + (bots.length === 1 ? ' Bot' : ' Bots') + (working ? '  ·  ' + working + ' working' : '  ·  all idle')}
           </Text>
         </View>
+        <Pressable onPress={onBell} hitSlop={8}>
+          <View style={n.hbtn}>
+            <Text style={{ fontSize: 15 }}>🔔</Text>
+            {badge > 0 && <View style={n.badgeDot} collapsable={false} />}
+          </View>
+        </Pressable>
         <Pressable onPress={onPlug} hitSlop={8}><View style={n.hbtn}><Text style={{ fontSize: 15 }}>🧩</Text></View></Pressable>
       </View>
       <FlatList
@@ -490,6 +501,7 @@ const n = StyleSheet.create({
   brand: { color: C.text, fontSize: 24, fontWeight: '900', letterSpacing: -.5 },
   sub: { color: C.muted, fontSize: 12.5, marginTop: 2 },
   hbtn: { width: 40, height: 40, borderRadius: 20, backgroundColor: C.panel2, borderWidth: 1, borderColor: C.line, alignItems: 'center', justifyContent: 'center' },
+  badgeDot: { position: 'absolute', top: 5, right: 6, width: 9, height: 9, borderRadius: 4.5, backgroundColor: C.bad, borderWidth: 1.5, borderColor: C.panel2 },
   card: { flexDirection: 'row', alignItems: 'center', gap: 12, backgroundColor: C.panel, borderWidth: 1, borderColor: C.line, borderRadius: 18, padding: 14 },
   av: { width: 46, height: 46, borderRadius: 23, backgroundColor: C.panel2, borderWidth: 1, borderColor: C.line, alignItems: 'center', justifyContent: 'center' },
   name: { color: C.text, fontSize: 15.5, fontWeight: '800' },
@@ -529,3 +541,53 @@ const m = StyleSheet.create({
   memRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
 });
 const st3 = { gap: { flex: 1 } };
+
+// ----------------------------------------------------------------- notification inbox
+const KIND_ICON = { approval: '🛂', question: '❓', finished: '✅', error: '⚠️', routine: '🗓', digest: '📰', test: '🔔', takeover: '🖥', login: '🔐' };
+
+function NotifSheet({ onClose, onReadAll }) {
+  const [rows, setRows] = useState(null);
+  const load = useCallback(async () => {
+    try { const d = await api('/api/notifications?limit=60'); setRows(Array.isArray(d) ? d : (d.items || [])); }
+    catch (e) { setRows([]); }
+  }, []);
+  useEffect(() => { load(); }, [load]);
+  const readAll = async () => {
+    try { await api('/api/notifications/read', { method: 'POST', body: '{}' }); } catch (e) { /* ignore */ }
+    onReadAll(); load();
+  };
+  return (
+    <View style={m.scrim}>
+      <View style={[m.modal, { gap: 6 }]}>
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+          <Text style={l.h2}>Notifications</Text>
+          <View style={st3.gap} />
+          <Pressable onPress={readAll}><Text style={[l.cap, { color: C.ok, fontSize: 13 }]}>Mark all read</Text></Pressable>
+          <Pressable onPress={onClose} hitSlop={8}><Text style={l.cap}>✕</Text></Pressable>
+        </View>
+        <View style={{ maxHeight: 380 }}>
+          {rows === null ? <Text style={l.cap}>Loading…</Text> : (rows.length ? rows.map((r) => (
+            <View key={r.id} style={[m.memRow, { alignItems: 'flex-start', opacity: r.read ? .65 : 1 }]}>
+              <Text style={{ fontSize: 16, width: 22 }}>{KIND_ICON[r.kind] || '🤖'}</Text>
+              <View style={{ flex: 1 }}>
+                <Text style={[n.rowL, { fontSize: 13.5 }]} numberOfLines={1}>{r.title}</Text>
+                {!!r.body && <Text style={n.rowS} numberOfLines={3}>{r.body}</Text>}
+                <Text style={[n.rowS, { fontSize: 10.5, marginTop: 2 }]}>{r.bot_name || ''}{r.bot_name ? ' · ' : ''}{timeAgo(r.ts)}</Text>
+              </View>
+            </View>
+          )) : <Text style={l.cap}>Nothing yet. Bots will tap you here when they finish jobs, need approval, or hit an error.</Text>)}
+        </View>
+      </View>
+    </View>
+  );
+}
+
+function timeAgo(ts) {
+  const n = Number(ts);
+  if (!isFinite(n) || n <= 0) return '';
+  const d = Math.max(0, (Date.now() - n * 1000) / 1000);
+  if (d < 60) return 'just now';
+  if (d < 3600) return Math.round(d / 60) + 'm ago';
+  if (d < 86400) return Math.round(d / 3600) + 'h ago';
+  return Math.round(d / 86400) + 'd ago';
+}

@@ -8,6 +8,7 @@ import base64
 import hashlib
 import hmac
 import json
+import os
 import queue
 import re
 import socket
@@ -31,6 +32,8 @@ from core.routines import PRESETS
 from core.secrets import SecretStoreError
 from core.settings import PROVIDER_PRESETS
 from core.templates import TEMPLATES
+
+from .system_router import register as register_system_routes
 
 SECRET_PREFIXES = ("provider:", "plugin:", "mcp:", "ntfy:")
 
@@ -59,16 +62,23 @@ def lan_addresses() -> list[str]:
 
 
 def create_app(engine: Engine, token: str) -> FastAPI:
-    app = FastAPI(title="OpenGrokBot service", version=VERSION, docs_url=None, redoc_url=None, openapi_url=None)
+    app = FastAPI(title=f"{APP_NAME} service", version=VERSION, docs_url=None, redoc_url=None, openapi_url=None)
     eng = engine
     fails: dict[str, list[float]] = {}
+
+    # Sessions are signed with their own secret (kept in settings) so that rotating the
+    # service token does not log everyone out and a leaked token cannot forge sessions.
+    sess_sec = str(eng.settings.get("auth.session_secret") or "")
+    if not sess_sec or len(sess_sec) < 32:
+        sess_sec = os.urandom(32).hex()
+        eng.settings.set("auth.session_secret", sess_sec)
 
     # ----------------------------------------------------------------- auth
     def presented(request: Request) -> str:
         h = request.headers.get("authorization", "")
         if h.lower().startswith("bearer "):
             return h[7:].strip()
-        return request.query_params.get("token") or request.cookies.get("gb_token") or ""
+        return request.query_params.get("token") or request.cookies.get("zt_token") or ""
 
     def check_token(tok: str, ip: str) -> bool:
         now = time.time()
@@ -96,7 +106,7 @@ def create_app(engine: Engine, token: str) -> FastAPI:
         if not raw or "." not in raw:
             return None
         payload, sig = raw.split(".", 1)
-        want = hmac.new(token.encode(), payload.encode(), hashlib.sha256).hexdigest()
+        want = hmac.new(sess_sec.encode(), payload.encode(), hashlib.sha256).hexdigest()
         if not hmac.compare_digest(sig, want):
             return None
         try:
@@ -110,7 +120,7 @@ def create_app(engine: Engine, token: str) -> FastAPI:
     def issue_session(response: Response, addr: str) -> None:
         payload = base64.urlsafe_b64encode(
             json.dumps({"email": addr, "exp": time.time() + 86400 * 30}).encode()).decode().rstrip("=")
-        sig = hmac.new(token.encode(), payload.encode(), hashlib.sha256).hexdigest()
+        sig = hmac.new(sess_sec.encode(), payload.encode(), hashlib.sha256).hexdigest()
         response.set_cookie("zt_session", payload + "." + sig, httponly=True, samesite="strict", max_age=86400 * 30)
 
     api = Depends(auth)
@@ -344,11 +354,6 @@ def create_app(engine: Engine, token: str) -> FastAPI:
             paths_.append(str(p))
         return eng.send_user_message(tid, body.get("text", ""), paths_)
 
-    @app.get("/api/digest", dependencies=[api])
-    def digest(spec: str = "today") -> dict:
-        d = eng.digest.build(spec)
-        return {**d, "headline": eng.digest.headline(d), "markdown": eng.digest.markdown(d)}
-
     @app.post("/api/bots/pause_all", dependencies=[api])
     def bots_pause_all(body: dict = Body(default={})) -> dict:
         paused = bool(body.get("paused", True))
@@ -362,101 +367,10 @@ def create_app(engine: Engine, token: str) -> FastAPI:
     def bots_duplicate(bot_id: str, body: dict = Body(default={})) -> dict:
         return eng.bots.duplicate(bot_id, body.get("name"))
 
-    @app.get("/api/updates", dependencies=[api])
-    def updates(refresh: bool = False) -> dict:
-        return eng.updates.check(force=True) if refresh else eng.updates.state()
-
     @app.put("/api/pricing", dependencies=[api])
     def pricing_put(body: dict = Body(...)) -> dict:
         eng.usage.pricing.set_prices(body.get("models", {}), body.get("currency"))
         return eng.usage.cost_summary()
-
-    @app.get("/api/backup", dependencies=[api])
-    def backup_get(workspace: bool = False) -> Response:
-        try:
-            data = backup_mod.create(eng, include_workspace=workspace)
-        except backup_mod.BackupError as e:
-            raise HTTPException(400, str(e))
-        name = "opengrokbot-backup-" + time.strftime("%Y%m%d-%H%M") + ".zip"
-        return Response(data, media_type="application/zip", headers={"Content-Disposition": f'attachment; filename="{name}"'})
-
-    @app.post("/api/backup/restore", dependencies=[api])
-    async def backup_restore(request: Request) -> dict:
-        data = await request.body()
-        try:
-            info = await asyncio.to_thread(backup_mod.stage_restore, data)
-        except backup_mod.BackupError as e:
-            raise HTTPException(400, str(e))
-        return {"ok": True, "restart_required": True, **info}
-
-    @app.get("/api/ws/list", dependencies=[api])
-    def ws_list(path: str = "") -> dict:
-        try:
-            return eng.files.list(path)
-        except FileError as e:
-            raise HTTPException(400, str(e))
-
-    @app.get("/api/ws/recent", dependencies=[api])
-    def ws_recent(limit: int = 30) -> dict:
-        return {"entries": eng.files.recent(max(1, min(200, limit))), "stats": eng.files.stats()}
-
-    @app.get("/api/ws/search", dependencies=[api])
-    def ws_search(q: str = "") -> dict:
-        return {"entries": eng.files.search(q)}
-
-    @app.get("/api/ws/preview", dependencies=[api])
-    def ws_preview(path: str) -> dict:
-        try:
-            return eng.files.preview(path)
-        except FileError as e:
-            raise HTTPException(400, str(e))
-
-    @app.get("/api/ws/raw", dependencies=[api])
-    def ws_raw(path: str) -> Response:
-        try:
-            p, mime = eng.files.raw(path)
-        except FileError as e:
-            raise HTTPException(400, str(e))
-        return Response(p.read_bytes(), media_type=mime, headers={"Content-Disposition": f'attachment; filename="{p.name}"'})
-
-    @app.delete("/api/ws/file", dependencies=[api])
-    def ws_delete(path: str) -> dict:
-        try:
-            eng.files.delete(path)
-        except FileError as e:
-            raise HTTPException(400, str(e))
-        return {"ok": True}
-
-    @app.get("/api/search", dependencies=[api])
-    def search(q: str = "", limit: int = 30) -> dict:
-        return eng.search.run(q, max(1, min(100, limit)))
-
-    @app.get("/api/palette", dependencies=[api])
-    def palette(q: str = "", limit: int = 8) -> dict:
-        """One search across Bots, group chats, messages, files and routines (the mobile search field)."""
-        q = (q or "").strip()
-        n = max(1, min(20, limit))
-        out: dict[str, Any] = {"query": q, "bots": [], "groups": [], "messages": [], "files": [], "routines": [], "total": 0}
-        if not q:
-            return out
-        low = q.lower()
-        out["bots"] = [{"id": b["id"], "name": b["name"], "emoji": b["emoji"], "avatar": b.get("avatar", ""), "job": b.get("job", "")}
-                       for b in eng.bots.list() if low in b["name"].lower() or low in (b.get("job") or "").lower()][:n]
-        out["groups"] = [{"id": g["id"], "name": g.get("name") or "", "thread_id": g.get("thread_id") or ""}
-                         for g in eng.messaging.list_groups() if low in (g.get("name") or "").lower()][:n]
-        out["routines"] = [{"id": r["id"], "name": r.get("name") or "", "bot_id": r.get("bot_id") or "", "enabled": r.get("enabled")}
-                           for r in eng.routines.list()
-                           if low in ((r.get("name") or "") + " " + (r.get("prompt") or "") + " " + (r.get("skill") or "")).lower()][:n]
-        try:
-            out["files"] = (eng.files.search(q, n) or [])[:n]
-        except Exception:  # noqa: BLE001 - search must never fail the palette
-            out["files"] = []
-        try:
-            out["messages"] = (eng.search.run(q, n).get("messages") or [])[:n]
-        except Exception:  # noqa: BLE001
-            out["messages"] = []
-        out["total"] = sum(len(out[k]) for k in ("bots", "groups", "messages", "files", "routines"))
-        return out
 
     @app.get("/api/threads/{tid}/export", dependencies=[api])
     def thread_export(tid: str) -> Response:
@@ -466,10 +380,6 @@ def create_app(engine: Engine, token: str) -> FastAPI:
         name = re.sub(r"[^\w\-]+", "_", th.get("title") or "chat").strip("_")[:40] or "chat"
         return Response(eng.threads.export_markdown(tid).encode("utf-8"), media_type="text/markdown; charset=utf-8",
                         headers={"Content-Disposition": f'attachment; filename="{name}.md"'})
-
-    @app.get("/api/commands", dependencies=[api])
-    def commands_list() -> list[dict]:
-        return commands.listing()
 
     @app.post("/api/threads/{tid}/stop", dependencies=[api])
     def thread_stop(tid: str) -> dict:
@@ -889,7 +799,7 @@ def create_app(engine: Engine, token: str) -> FastAPI:
         try:
             pid = eng.plugins.finish_oauth(state, code)
             eng.events.publish("plugins", change="connected", plugin_id=pid)
-            return "<body style='font-family:sans-serif;background:#111;color:#eee;padding:40px'><h2>Connected ✔</h2><p>You can close this tab and return to OpenGrokBot.</p></body>"
+            return f"<body style='font-family:sans-serif;background:#111;color:#eee;padding:40px'><h2>Connected ✔</h2><p>You can close this tab and return to {APP_NAME}.</p></body>"
         except Exception as e:  # noqa: BLE001
             return f"<h3>Sign-in failed</h3><p>{e}</p>"
 
@@ -1047,17 +957,38 @@ def create_app(engine: Engine, token: str) -> FastAPI:
 
     # --------------------------------------------------------- notifications
     @app.get("/api/notifications", dependencies=[api])
-    def notifications(limit: int = 50, after: int = 0) -> list[dict]:
-        return eng.db.query("SELECT n.*, COALESCE(b.name,'') AS bot_name FROM notifications n LEFT JOIN bots b ON b.id=n.bot_id WHERE n.id>? ORDER BY n.id DESC LIMIT ?", (after, limit))
+    def notifications(limit: int = 50, after: int = 0, unread_only: bool = False) -> list[dict]:
+        lim = max(1, min(200, limit))
+        sql = "SELECT n.*, COALESCE(b.name,'') AS bot_name FROM notifications n LEFT JOIN bots b ON b.id=n.bot_id"
+        conds, args = [], []
+        if after:
+            conds.append("n.id>?")
+            args.append(int(after))
+        if unread_only:
+            conds.append("n.read=0")
+        if conds:
+            sql += " WHERE " + " AND ".join(conds)
+        sql += " ORDER BY n.id DESC LIMIT ?"
+        args.append(lim)
+        return eng.db.query(sql, tuple(args))
 
     @app.post("/api/notifications/test", dependencies=[api])
     def notifications_test() -> dict:
-        eng.notify("test", None, None, "OpenGrokBot test", "Notifications are working.", urgent=True)
+        eng.notify("test", None, None, f"{APP_NAME} test", "Notifications are working.", urgent=True)
         return {"ok": True}
 
     @app.post("/api/notifications/read", dependencies=[api])
-    def notifications_read() -> dict:
-        eng.db.execute("UPDATE notifications SET read=1")
+    def notifications_read(body: dict = Body(default={})) -> dict:
+        before = body.get("before_id")
+        if before:
+            eng.db.execute("UPDATE notifications SET read=1 WHERE read=0 AND id<=?", (int(before),))
+        else:
+            eng.db.execute("UPDATE notifications SET read=1 WHERE read=0")
+        return {"ok": True}
+
+    @app.post("/api/notifications/{nid}/read", dependencies=[api])
+    def notification_read(nid: int) -> dict:
+        eng.db.execute("UPDATE notifications SET read=1 WHERE id=?", (nid,))
         return {"ok": True}
 
     # -------------------------------------------------------------- mobile
@@ -1114,7 +1045,7 @@ def create_app(engine: Engine, token: str) -> FastAPI:
             ip = request.client.host if request.client else "?"
             if check_token(t, ip):
                 r = RedirectResponse("/", status_code=303)
-                r.set_cookie("gb_token", token, httponly=True, samesite="strict", max_age=86400 * 365)
+                r.set_cookie("zt_token", token, httponly=True, samesite="strict", max_age=86400 * 365)
                 return r
         return FileResponse(web / "index.html", headers={"Cache-Control": "no-cache"})
 

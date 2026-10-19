@@ -36,7 +36,7 @@ from .usage import Usage
 
 
 def setup_logging() -> logging.Logger:
-    log = logging.getLogger("opengrokbot")
+    log = logging.getLogger("zerothebot")
     if not log.handlers:
         log.setLevel(logging.INFO)
         h = logging.handlers.RotatingFileHandler(paths.logs_dir() / "service.log", maxBytes=2_000_000, backupCount=3, encoding="utf-8")
@@ -95,6 +95,7 @@ class Engine:
         s.add_job(self.messaging.proactive_tick, "interval", minutes=10, id="_proactive", replace_existing=True)
         s.add_job(self.approvals.check_escalations, "interval", minutes=30, id="_appr_escalate", replace_existing=True)
         s.add_job(self._digest_tick, "interval", minutes=1, id="_digest", replace_existing=True)
+        s.add_job(self._housekeeping, "cron", hour=3, minute=17, id="_housekeeping", replace_existing=True)
         self.log.info("Engine started (v%s). Data dir: %s", VERSION, paths.data_dir())
 
     def start_background_checks(self) -> None:
@@ -113,6 +114,22 @@ class Engine:
         self.settings.set("digest.last_sent", today)
         d = self.digest.build("today")
         self.notify("digest", None, None, "Your daily digest", self.digest.headline(d))
+
+    def _housekeeping(self) -> None:
+        """Nightly at 03:17: a local backup zip (kept: last 7) and pruning of stale data."""
+        try:
+            bdir = paths.data_dir() / "backups"
+            bdir.mkdir(parents=True, exist_ok=True)
+            name = "auto-backup-" + time.strftime("%Y%m%d") + ".zip"
+            data = backup.create(self, include_workspace=False)
+            (bdir / name).write_bytes(data)
+            keep = sorted(bdir.glob("auto-backup-*.zip"))[:-7]
+            for old in keep:
+                old.unlink(missing_ok=True)
+            self.db.execute("DELETE FROM notifications WHERE ts < ?", (time.time() - 30 * 86400,))
+            self.log.info("housekeeping: auto-backup %s (%.1f MB), pruned stale notifications", name, len(data) / 1e6)
+        except Exception:   # never break the scheduler
+            self.log.exception("housekeeping failed")
 
     def stop(self) -> None:
         self.turns.stop_all()

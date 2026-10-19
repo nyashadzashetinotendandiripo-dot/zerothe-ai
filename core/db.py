@@ -109,6 +109,7 @@ CREATE TABLE IF NOT EXISTS notifications(
   id INTEGER PRIMARY KEY AUTOINCREMENT, ts REAL, kind TEXT, bot_id TEXT, thread_id TEXT, title TEXT, body TEXT,
   read INTEGER DEFAULT 0
 );
+CREATE INDEX IF NOT EXISTS idx_notif_ts ON notifications(ts);
 CREATE TABLE IF NOT EXISTS known_logins(domain TEXT PRIMARY KEY, added_at REAL);
 """
 
