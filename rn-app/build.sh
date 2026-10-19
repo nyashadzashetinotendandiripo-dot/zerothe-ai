@@ -35,6 +35,17 @@ sed -i "s|storeFile file('debug.keystore')|storeFile file(System.getProperty(\"u
 sed -i 's/signingConfig signingConfigs.release/signingConfig signingConfigs.debug/' android/app/build.gradle || true
 grep -c signingConfig android/app/build.gradle || true
 
+# 4b. Memory guard: the build daemon was OOM-killed once reanimated/worklets landed.
+# Keep gradle and kotlin compile workers inside the box's RAM budget.
+cat >> android/gradle.properties <<'EOF'
+
+# OOM guard for small build boxes
+org.gradle.workers.max=2
+org.gradle.jvmargs=-Xmx2048m -XX:MaxMetaspaceSize=512m
+kotlin.daemon.jvmargs=-Xmx1024m
+kotlin.compiler.execution.strategy=in-process
+EOF
+
 # 5. Build
 log "gradle assembleRelease (first run downloads a lot, be patient)"
 ( cd android && ./gradlew assembleRelease --no-daemon --console=plain ) > gradle.log 2>&1 || { tail -n 40 gradle.log; exit 1; }
