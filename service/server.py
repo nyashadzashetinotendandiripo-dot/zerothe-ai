@@ -816,18 +816,18 @@ def create_app(engine: Engine, token: str) -> FastAPI:
         except Exception as e:  # noqa: BLE001
             return f"<h3>Sign-in failed</h3><p>{e}</p>"
 
-    _GOOGLE_PAGE_CSS = ("body{font-family:-apple-system,sans-serif;background:#111;color:#eee;"
-                        "display:flex;align-items:center;justify-content:center;min-height:92vh;margin:0}")
+    _GOOGLE_BODY_CSS = ("font-family:-apple-system,sans-serif;background:#111;color:#eee;"
+                        "display:flex;align-items:center;justify-content:center;min-height:92vh;margin:0")
 
     @app.get("/auth/google-login", response_class=HTMLResponse)
     def google_login_page() -> str:
         cid = eng.settings.get("auth.google_client_id") or ""
         head = "<!doctype html><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'>"
         if not cid:
-            return (f"{head}<body style='{_GOOGLE_PAGE_CSS}'><p style='max-width:22em;text-align:center'>"
+            return (f"{head}<body style='{_GOOGLE_BODY_CSS}'><p style='max-width:22em;text-align:center'>"
                     "Google sign-in is not set up on this server yet. Ask the owner to add a Google Client ID.</p></body>")
         return f"""{head}
-<style>{_GOOGLE_PAGE_CSS} .box{{text-align:center}}</style>
+<style>body{{{_GOOGLE_BODY_CSS}}} .box{{text-align:center}}</style>
 <script src="https://accounts.google.com/gsi/client" async defer></script>
 <body><div class='box'>
 <div id="gbtn"></div>
@@ -841,7 +841,7 @@ google.accounts.id.renderButton(document.getElementById('gbtn'),
 
     @app.get("/auth/google-done", response_class=HTMLResponse)
     def google_done() -> str:
-        return (f"<!doctype html><meta charset='utf-8'><body style='{_GOOGLE_PAGE_CSS}'><p>"
+        return (f"<!doctype html><meta charset='utf-8'><body style='{_GOOGLE_BODY_CSS}'><p>"
                 f"Signed in. Return to the {APP_NAME} app.</p></body>")
 
     @app.get("/api/mcp", dependencies=[api])
