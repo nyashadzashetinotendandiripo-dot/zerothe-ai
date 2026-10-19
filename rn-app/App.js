@@ -13,6 +13,7 @@ export default function App() {
   const [screen, setScreen] = useState('home');            // home | chat | conn | set
   const [bots, setBots] = useState([]);
   const [busy, setBusy] = useState({});                    // bot_id -> {status, thread_id}
+  const [apps, setApps] = useState([]);                    // pending approvals, server-wide
   const [chat, setChat] = useState(null);                  // {bot, threadId, threads}
   const lastRef = useRef(0);
   const evtRef = useRef(null);
@@ -58,6 +59,7 @@ export default function App() {
     try {
       const d = await api('/api/bootstrap');
       setBots(d.bots || []);
+      setApps(d.approvals || []);
       if (d.last_event > lastRef.current) lastRef.current = d.last_event;
       const b = {};
       for (const [id, st] of Object.entries(d.status || {})) if (st && st.status && st.status !== 'idle') b[id] = st;
@@ -75,7 +77,7 @@ export default function App() {
         return o;
       });
     }
-    if (ev.type === 'bots' || ev.type === 'groups' || ev.type === 'notification') refresh();
+    if (ev.type === 'bots' || ev.type === 'groups' || ev.type === 'notification' || ev.type === 'approval') refresh();
     if (['message', 'delta', 'delta_reset', 'turn', 'approval'].includes(ev.type)) chatHandler.current && chatHandler.current(ev);
   }, [refresh, chatHandler]);
 
@@ -96,10 +98,17 @@ export default function App() {
     } catch (e) { /* ignore */ }
   };
 
-  const newBot = async (name, job) => {
-    try { await api('/api/bots', { method: 'POST', body: JSON.stringify({ name, job }) }); await refresh(); }
+  const newBot = async (name, job, emoji) => {
+    try { await api('/api/bots', { method: 'POST', body: JSON.stringify({ name, job, emoji }) }); await refresh(); }
     catch (e) { /* ignore */ }
   };
+
+  const decideApp = async (a, approve, remember) => {
+    setApps((cur) => cur.filter((x) => x.id !== a.id));
+    try { await api('/api/approvals/' + a.id + '/decide', { method: 'POST', body: JSON.stringify({ approve, remember }) }); } catch (e) { /* ignore */ }
+    refresh();
+  };
+  const [botModal, setBotModal] = useState(null);          // bot open in settings sheet
 
   // Chats tab: most recent chat, else the first Bot's main thread
   const openChatTab = useCallback(() => {
@@ -147,8 +156,9 @@ export default function App() {
 
   return (
     <Shell upd={upd} onUpd={doUpdate} updState={updState}>
-      <Home bots={bots} busy={busy} onOpen={openBot} onPlug={() => setScreen('conn')} onNew={newBot} />
+      <Home bots={bots} busy={busy} apps={apps} onOpen={openBot} onPlug={() => setScreen('conn')} onNew={newBot} onDecide={decideApp} onBotLong={setBotModal} />
       <TabBar tab="home" onTab={setScreen} onChat={openChatTab} />
+      {!!botModal && <BotModal bot={botModal} onClose={() => setBotModal(null)} onCloseSaved={() => { setBotModal(null); refresh(); }} />}
     </Shell>
   );
 }
@@ -171,67 +181,42 @@ function Shell({ children, upd, onUpd, updState }) {
 // ----------------------------------------------------------------- login
 function Login({ onDone }) {
   const [base, setBase] = useState('https://8765-agquljzsz7k42vgoenj7qr6fim.instabox.tech');
-  const [mode, setMode] = useState('advance');             // advance (email+password) | token
   const [mail, setMail] = useState('');
   const [pass, setPass] = useState('');
-  const [token, setToken] = useState('');
   const [err, setErr] = useState('');
   const [go, setGo] = useState(false);
   const save = async () => {
     setErr(''); setGo(true);
     try {
-      if (mode === 'advance') {
-        await loginEmail(base, mail, pass);               // cookie session
-        await saveConf(base, '', mail, pass);              // remember for silent re-login
-      } else {
-        await tryConf(base, token);
-        await saveConf(base, token);                      // clears stale creds? keep old email if any
-      }
+      await loginEmail(base, mail, pass);                // cookie session
+      await saveConf(base, '', mail, pass);              // remember for silent re-login
       onDone();
     }
     catch (e) { setErr(e.message || 'Could not connect.'); }
     setGo(false);
   };
-  const ready = mode === 'advance' ? (!!mail.trim() && !!pass) : !!token.trim();
+  const ready = !!mail.trim() && !!pass;
   return (
     <View style={[l.box, { justifyContent: 'flex-start', paddingTop: 80 }]}>
       <Text style={l.h1}>ZerotheBot</Text>
-      <Text style={l.cap}>Point the app at your server and sign in.</Text>
-      <View style={l.seg}>
-        <Pressable onPress={() => setMode('advance')} style={[l.segB, l.segOn]}><Text style={[l.segT, { color: C.onSolid }]}>Email &amp; password</Text></Pressable>
-      </View>
+      <Text style={l.cap}>Sign in with the same email and password as the web app.</Text>
       <Text style={l.lbl}>Server</Text>
       <TextInput style={l.inl} value={base} autoCapitalize="none" autoCorrect={false} keyboardType="url" onChangeText={setBase} />
-      {mode === 'advance' ? (
-        <>
-          <Text style={l.lbl}>Email (the one you use on the web app)</Text>
-          <TextInput style={l.inl} value={mail} autoCapitalize="none" autoCorrect={false} keyboardType="email-address" onChangeText={setMail} />
-          <Text style={l.lbl}>Password</Text>
-          <TextInput style={l.inl} value={pass} secureTextEntry onChangeText={setPass} />
-        </>
-      ) : (
-        <>
-          <Text style={l.lbl}>Service token</Text>
-          <TextInput style={l.inl} value={token} autoCapitalize="none" autoCorrect={false} secureTextEntry onChangeText={setToken} />
-        </>
-      )}
+      <Text style={l.lbl}>Email</Text>
+      <TextInput style={l.inl} value={mail} autoCapitalize="none" autoCorrect={false} keyboardType="email-address" onChangeText={setMail} />
+      <Text style={l.lbl}>Password</Text>
+      <TextInput style={l.inl} value={pass} secureTextEntry onChangeText={setPass} />
       {!!err && <Text style={l.err}>{err}</Text>}
       <Pressable onPress={save} disabled={!ready || go} style={({ pressed }) => [l.btn, !ready && { opacity: .5 }, pressed && { opacity: .9 }]}>
         <Text style={l.btnT}>{go ? 'Checking…' : 'Sign in'}</Text>
       </Pressable>
-      <Text style={l.cap}>
-        Same sign-in as the web app — one time per install. Your phone stays signed in across app
-        updates from here on. Google sign-in is coming next.
-      </Text>
-      {mode === 'advance'
-        ? <Pressable onPress={() => setMode('token')} hitSlop={8}><Text style={l.tiny}>Sign in with a service token instead</Text></Pressable>
-        : <Pressable onPress={() => setMode('advance')} hitSlop={8}><Text style={l.tiny}>Sign in with email & password instead</Text></Pressable>}
+      <Text style={l.cap}>One time per install — from then on the app keeps you signed in across updates. Google sign-in is coming next.</Text>
     </View>
   );
 }
 
 // ----------------------------------------------------------------- home
-function Home({ bots, busy, onOpen, onPlug, onNew }) {
+function Home({ bots, busy, apps, onOpen, onPlug, onNew, onDecide, onBotLong }) {
   const [modal, setModal] = useState(null);
   const working = Object.keys(busy).length;
   return (
@@ -258,11 +243,35 @@ function Home({ bots, busy, onOpen, onPlug, onNew }) {
           </View>
         }
         contentContainerStyle={{ padding: 16, gap: 10, paddingBottom: 100 }}
+        ListHeaderComponent={
+          apps.length ? (
+            <View style={{ gap: 8, marginBottom: 4 }}>
+              {apps.slice(0, 5).map((a) => {
+                const b2 = bots.find((x) => x.id === a.bot_id) || {};
+                return (
+                  <View key={a.id} style={n.appCard}>
+                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                      <Text style={{ fontSize: 18 }}>{b2.emoji || '🤖'}</Text>
+                      <Text style={[n.rowL, { flex: 1, fontSize: 13.5 }]} numberOfLines={1}>{b2.name || 'Bot'} needs your OK</Text>
+                    </View>
+                    <Text style={n.job} numberOfLines={3}>{(a.category || '').toUpperCase()}{a.tool ? ' · ' + a.tool : ''}{a.summary ? ' — ' + a.summary : ''}</Text>
+                    <View style={{ flexDirection: 'row', gap: 8, marginTop: 2 }}>
+                      <Pressable onPress={() => onDecide(a, true, true)} style={n.appB}><Text style={n.appOk}>✅ Always</Text></Pressable>
+                      <Pressable onPress={() => onDecide(a, true, false)} style={n.appB}><Text style={n.appOk}>Approve</Text></Pressable>
+                      <Pressable onPress={() => onDecide(a, false, false)} style={n.appB}><Text style={n.appNo}>Deny</Text></Pressable>
+                    </View>
+                  </View>
+                );
+              })}
+              {apps.length > 5 ? <Text style={n.job}>{apps.length - 5} more waiting — open the Bot to see all.</Text> : null}
+            </View>
+          ) : null
+        }
         renderItem={({ item }) => {
           const s = busy[item.id];
           const pill = s ? (s.status === 'waiting_approval' ? ['needs you', C.warn] : ['working', C.ok]) : null;
           return (
-            <Pressable onPress={() => onOpen(item)} style={({ pressed }) => [n.card, pressed && { opacity: .92 }]}>
+            <Pressable onPress={() => onOpen(item)} onLongPress={() => onBotLong(item)} delayLongPress={400} style={({ pressed }) => [n.card, pressed && { opacity: .92 }]}>
               <View style={n.av}><Text style={{ fontSize: 22 }}>{item.emoji || '🤖'}</Text></View>
               <View style={{ flex: 1, gap: 2 }}>
                 <Text style={n.name} numberOfLines={1}>{item.name}</Text>
@@ -278,7 +287,7 @@ function Home({ bots, busy, onOpen, onPlug, onNew }) {
       <Pressable onPress={() => setModal({})} style={({ pressed }) => [n.fab, pressed && { opacity: .9 }]}>
         <Text style={n.fabT}>＋  New Bot</Text>
       </Pressable>
-      {!!modal && <NewBotModal onDone={(nm, j) => { setModal(null); nm && onNew(nm, j); }} />}
+      {!!modal && <NewBotModal onDone={(nm, j, em) => { setModal(null); nm && onNew(nm, j, em); }} />}
     </View>
   );
 }
@@ -302,6 +311,8 @@ function TabBar({ tab, onTab, onChat }) {
 function NewBotModal({ onDone }) {
   const [name, setName] = useState('');
   const [job, setJob] = useState('');
+  const [em, setEm] = useState('🤖');
+  const EMOJIS = ['🤖', '🧠', '📬', '🛍', '📊', '🧾', '🔍', '✍️', '📅', '🌐', '💼', '🧹'];
   return (
     <View style={m.scrim}>
       <View style={m.modal}>
@@ -310,9 +321,82 @@ function NewBotModal({ onDone }) {
         <TextInput style={l.inl} value={name} onChangeText={setName} placeholder="Inbox" placeholderTextColor={C.muted} />
         <Text style={l.lbl}>What it does</Text>
         <TextInput style={[l.inl, { minHeight: 60 }]} value={job} multiline onChangeText={setJob} placeholder="Triage email every morning" placeholderTextColor={C.muted} />
+        <Text style={[l.lbl, { marginTop: 4 }]}>Avatar</Text>
+        <View style={m.emojiRow}>
+          {EMOJIS.map((e) => (
+            <Pressable key={e} onPress={() => setEm(e)} style={[m.emojiB, e === em && m.emojiOn]}><Text style={{ fontSize: 20 }}>{e}</Text></Pressable>
+          ))}
+        </View>
         <View style={{ flexDirection: 'row', gap: 10, marginTop: 6 }}>
           <Pressable onPress={() => onDone(null)} style={[l.btn, { flex: 1, backgroundColor: C.panel2, borderWidth: 1, borderColor: C.line }]}><Text style={[l.btnT, { color: C.text }]}>Cancel</Text></Pressable>
-          <Pressable onPress={() => onDone(name.trim(), job.trim())} disabled={!name.trim()} style={[l.btn, { flex: 1, opacity: name.trim() ? 1 : .5 }]}><Text style={l.btnT}>Create</Text></Pressable>
+          <Pressable onPress={() => onDone(name.trim(), job.trim(), em)} disabled={!name.trim()} style={[l.btn, { flex: 1, opacity: name.trim() ? 1 : .5 }]}><Text style={l.btnT}>Create</Text></Pressable>
+        </View>
+      </View>
+    </View>
+  );
+}
+
+// ----------------------------------------------------------------- bot settings
+function BotModal({ bot, onClose, onCloseSaved }) {
+  const [em, setEm] = useState(bot.emoji || '🤖');
+  const [mems, setMems] = useState(null);
+  const [memAdd, setMemAdd] = useState('');
+  const [saving, setSaving] = useState(false);
+  const loadMem = useCallback(async () => {
+    try { const d = await api('/api/bots/' + bot.id + '/memory'); setMems(Array.isArray(d) ? d : (d.items || [])); }
+    catch (e) { setMems([]); }
+  }, [bot.id]);
+  useEffect(() => { loadMem(); }, [loadMem]);
+  const EMOJIS = ['🤖', '🧠', '📬', '🛍', '📊', '🧾', '🔍', '✍️', '📅', '🌐', '💼', '🧹'];
+  const save = async () => {
+    setSaving(true);
+    try { await api('/api/bots/' + bot.id, { method: 'PUT', body: JSON.stringify({ emoji: em }) }); onCloseSaved(); }
+    catch (e) { /* ignore */ }
+    setSaving(false);
+  };
+  const addMem = async () => {
+    const t2 = memAdd.trim();
+    if (!t2) return;
+    setMemAdd('');
+    try { await api('/api/bots/' + bot.id + '/memory', { method: 'POST', body: JSON.stringify({ kind: 'preference', text: t2 }) }); refreshMems(); }
+    catch (e) { /* ignore */ }
+  };
+  const delMem = async (mid) => {
+    try { await api('/api/bots/' + bot.id + '/memory/' + mid, { method: 'DELETE' }); refreshMems(); }
+    catch (e) { /* ignore */ }
+  };
+  const refreshMems = () => { setMems(null); loadMem(); };
+  return (
+    <View style={m.scrim}>
+      <View style={m.modal}>
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
+          <View style={[n.av, { width: 40, height: 40, borderRadius: 20 }]}><Text style={{ fontSize: 19 }}>{em}</Text></View>
+          <Text style={l.h2} numberOfLines={1}>{bot.name}</Text>
+          <View style={st3.gap} />
+          <Pressable onPress={onClose} hitSlop={8}><Text style={l.cap}>✕</Text></Pressable>
+        </View>
+        <Text style={[l.lbl, { marginTop: 4 }]}>Avatar</Text>
+        <View style={m.emojiRow}>
+          {EMOJIS.map((e) => (
+            <Pressable key={e} onPress={() => setEm(e)} style={[m.emojiB, e === em && m.emojiOn]}><Text style={{ fontSize: 20 }}>{e}</Text></Pressable>
+          ))}
+        </View>
+        <Pressable onPress={save} disabled={saving} style={[l.btn, { opacity: saving ? .5 : 1 }]}><Text style={l.btnT}>Save avatar</Text></Pressable>
+        <Text style={[l.lbl, { marginTop: 6 }]}>Memory — what it knows about you</Text>
+        <View style={m.memList}>
+          {mems === null ? <Text style={l.cap}>Loading…</Text> : (mems.length
+            ? mems.slice(0, 30).map((mm) => (
+              <View key={mm.id} style={m.memRow}>
+                <Text style={[l.cap, { flex: 1, marginBottom: 0 }]} numberOfLines={2}>{mm.kind ? '[' + mm.kind + '] ' : ''}{mm.text}</Text>
+                <Pressable onPress={() => delMem(mm.id)} hitSlop={6}><Text style={{ color: C.bad, fontSize: 14 }}>✕</Text></Pressable>
+              </View>
+            ))
+            : <Text style={l.cap}>Nothing yet — it will remember as you work with it.</Text>)}
+        </View>
+        <View style={{ flexDirection: 'row', gap: 8 }}>
+          <TextInput style={[l.inl, { flex: 1 }]} value={memAdd} onChangeText={setMemAdd} placeholder="Teach it something…"
+            placeholderTextColor={C.muted} onSubmitEditing={addMem} />
+          <Pressable onPress={addMem} style={[n.hbtn, { backgroundColor: C.solid }]}><Text style={{ fontSize: 18, color: C.onSolid }}>＋</Text></Pressable>
         </View>
       </View>
     </View>
@@ -421,6 +505,10 @@ const n = StyleSheet.create({
   tabItem: { flex: 1, alignItems: 'center', gap: 1, paddingVertical: 3, borderRadius: 12 },
   tabIc: { fontSize: 19, opacity: .55 },
   tabL: { color: C.muted, fontSize: 10.5, fontWeight: '700' },
+  appCard: { backgroundColor: C.panel, borderWidth: 1, borderColor: C.warn, borderRadius: 16, padding: 12, gap: 4 },
+  appB: { backgroundColor: C.panel2, borderWidth: 1, borderColor: C.line, borderRadius: 999, paddingHorizontal: 11, paddingVertical: 6 },
+  appOk: { color: C.ok, fontSize: 12.5, fontWeight: '800' },
+  appNo: { color: C.bad, fontSize: 12.5, fontWeight: '800' },
   row: { flexDirection: 'row', alignItems: 'center', gap: 12, backgroundColor: C.panel, borderWidth: 1, borderColor: C.line, borderRadius: 16, padding: 13 },
   rowIc: { width: 38, height: 38, borderRadius: 12, backgroundColor: C.panel2, borderWidth: 1, borderColor: C.line, alignItems: 'center', justifyContent: 'center' },
   rowL: { color: C.text, fontSize: 15, fontWeight: '700' },
@@ -433,5 +521,11 @@ const sh = StyleSheet.create({
 });
 const m = StyleSheet.create({
   scrim: { position: 'absolute', inset: 0, backgroundColor: 'rgba(0,0,0,.65)', alignItems: 'center', justifyContent: 'center', padding: 20 },
-  modal: { width: '100%', backgroundColor: C.panel, borderWidth: 1, borderColor: C.line, borderRadius: 18, padding: 16, gap: 8 },
+  modal: { width: '100%', backgroundColor: C.panel, borderWidth: 1, borderColor: C.line, borderRadius: 18, padding: 16, gap: 8, maxHeight: '88%' },
+  emojiRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginTop: 4 },
+  emojiB: { width: 40, height: 40, borderRadius: 12, borderWidth: 1, borderColor: C.line, backgroundColor: C.panel2, alignItems: 'center', justifyContent: 'center' },
+  emojiOn: { borderColor: C.solid, backgroundColor: C.solid, opacity: .95 },
+  memList: { gap: 4, maxWidth: '100%' },
+  memRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
 });
+const st3 = { gap: { flex: 1 } };
