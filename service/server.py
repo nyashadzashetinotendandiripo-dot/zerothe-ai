@@ -1056,4 +1056,6 @@ def create_app(engine: Engine, token: str) -> FastAPI:
             raise HTTPException(404)
         return FileResponse(f, headers={"Cache-Control": "no-cache"})
 
+    register_system_routes(app, eng, api)
+
     return app
