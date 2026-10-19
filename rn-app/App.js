@@ -7,6 +7,33 @@ import { checkUpdate, installUpdate, APP_VERSION } from './src/updates';
 import Connect from './src/Connect';
 import Chat from './src/Chat';
 
+function AnsRow({ onSend, placeholder }) {
+  const [v, setV] = useState('');
+  return (
+    <View style={{ flexDirection: 'row', gap: 8, marginTop: 4 }}>
+      <TextInput
+        value={v}
+        onChangeText={setV}
+        placeholder={placeholder}
+        placeholderTextColor={C.muted}
+        style={{ flex: 1, color: C.text, fontSize: 13, borderWidth: 1, borderColor: C.warn, borderRadius: 10, paddingHorizontal: 10, paddingVertical: 7 }}
+        autoCapitalize="none"
+        autoCorrect={false}
+        returnKeyType="send"
+        onSubmitEditing={() => { const t = v.trim(); if (t) { onSend(t); setV(''); } }}
+      />
+      <Pressable onPress={() => { const t = v.trim(); if (t) { onSend(t); setV(''); } }}
+        style={({ pressed }) => [n.appB, pressed && { opacity: 0.85 }]}>
+        <Text style={n.appOk}>Send</Text>
+      </Pressable>
+    </View>
+  );
+}
+
+function asky(a) {
+  return a.category === 'question' || a.tool === 'ask_code';
+}
+
 export default function App() {
   const [ready, setReady] = useState(false);
   const [signed, setSigned] = useState(false);
@@ -107,9 +134,11 @@ export default function App() {
     catch (e) { /* ignore */ }
   };
 
-  const decideApp = async (a, approve, remember) => {
+  const decideApp = async (a, approve, remember, answer) => {
     setApps((cur) => cur.filter((x) => x.id !== a.id));
-    try { await api('/api/approvals/' + a.id + '/decide', { method: 'POST', body: JSON.stringify({ approve, remember }) }); } catch (e) { /* ignore */ }
+    const body = { approve, remember };
+    if (answer) body.answer = answer;
+    try { await api('/api/approvals/' + a.id + '/decide', { method: 'POST', body: JSON.stringify(body) }); } catch (e) { /* ignore */ }
     refresh();
   };
   const [botModal, setBotModal] = useState(null);          // bot open in settings sheet
@@ -259,17 +288,25 @@ function Home({ bots, busy, apps, noteBadge, onOpen, onPlug, onBell, onNew, onDe
             <View style={{ gap: 8, marginBottom: 4 }}>
               {apps.slice(0, 5).map((a) => {
                 const b2 = bots.find((x) => x.id === a.bot_id) || {};
+                const isAsk = asky(a);
                 return (
                   <View key={a.id} style={n.appCard}>
                     <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
                       <Text style={{ fontSize: 18 }}>{b2.emoji || '🤖'}</Text>
-                      <Text style={[n.rowL, { flex: 1, fontSize: 13.5 }]} numberOfLines={1}>{b2.name || 'Bot'} needs your OK</Text>
+                      <Text style={[n.rowL, { flex: 1, fontSize: 13.5 }]} numberOfLines={1}>{b2.name || 'Bot'} {isAsk ? 'needs your answer' : 'needs your OK'}</Text>
                     </View>
                     <Text style={n.job} numberOfLines={3}>{(a.category || '').toUpperCase()}{a.tool ? ' · ' + a.tool : ''}{a.summary ? ' — ' + a.summary : ''}</Text>
+                    {isAsk ? (
+                      <AnsRow onSend={(t) => onDecide(a, true, false, t)} placeholder={a.tool === 'ask_code' ? 'Paste the code' : 'Type an answer'} />
+                    ) : null}
                     <View style={{ flexDirection: 'row', gap: 8, marginTop: 2 }}>
-                      <Pressable onPress={() => onDecide(a, true, true)} style={n.appB}><Text style={n.appOk}>✅ Always</Text></Pressable>
-                      <Pressable onPress={() => onDecide(a, true, false)} style={n.appB}><Text style={n.appOk}>Approve</Text></Pressable>
-                      <Pressable onPress={() => onDecide(a, false, false)} style={n.appB}><Text style={n.appNo}>Deny</Text></Pressable>
+                      {!isAsk && (
+                        <>
+                          <Pressable onPress={() => onDecide(a, true, true)} style={n.appB}><Text style={n.appOk}>✅ Always</Text></Pressable>
+                          <Pressable onPress={() => onDecide(a, true, false)} style={n.appB}><Text style={n.appOk}>Approve</Text></Pressable>
+                        </>
+                      )}
+                      <Pressable onPress={() => onDecide(a, false, false)} style={n.appB}><Text style={n.appNo}>{isAsk ? "Can't do it" : 'Deny'}</Text></Pressable>
                     </View>
                   </View>
                 );

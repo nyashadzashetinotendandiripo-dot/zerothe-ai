@@ -259,13 +259,15 @@
     for (const c of cards) {
       const img = (typeof c.image === 'string' && /^https:\/\//i.test(c.image))
         ? `<img class="ui-card-img" src="${esc(c.image)}" alt="" referrerpolicy="no-referrer" loading="lazy" onerror="this.remove()">` : '';
-      out.push('<div class="ui-card">' + img
-        + '<div class="ui-card-body">'
+      const body = '<div class="ui-card-body">'
         + `<div class="ui-card-t">${esc(c.title)}</div>`
         + (c.price ? `<div class="ui-card-p">${esc(String(c.price))}</div>` : '')
         + (c.why ? `<div class="ui-card-why">${esc(String(c.why))}</div>` : '')
         + (c.specs ? `<div class="ui-card-specs">${esc(String(c.specs))}</div>` : '')
-        + '</div></div>');
+        + '</div>';
+      out.push((typeof c.url === 'string' && /^https:\/\//i.test(c.url))
+        ? `<a class="ui-card" href="${esc(c.url)}" target="_blank" rel="noopener noreferrer">${img + body}</a>`
+        : '<div class="ui-card">' + img + body + '</div>');
     }
     if (!cards.length) out.push('<div class="ui-cap">No cards.</div>');
     const acts = (d.actions || []).slice(0, 4).filter((it) => it && typeof it === 'object' && it.label);
@@ -845,6 +847,12 @@
       const opts = (d.options || []).map((o) => `<button data-ans="${esc(o)}">${esc(o)}</button>`).join('');
       return `<div class="card approval q" data-id="${a.id}"><h4>${esc(botName(a.bot_id))} asks</h4><div>${esc(a.summary)}</div><div class="row">${opts}</div>` +
         `<div class="row"><input placeholder="Type an answer" class="ans"><button class="primary send-ans">Send</button></div></div>`;
+    }
+    if (a.category === 'login' && a.tool === 'ask_code') {
+      return `<div class="card approval" data-id="${a.id}"><h4>${esc(botName(a.bot_id))} needs a verification code</h4><div>${esc(a.summary)}</div>` +
+        `<p class="muted">The code goes straight into its browser and is never shown to the Bot or stored anywhere.</p>` +
+        `<div class="row"><input class="ans" inputmode="numeric" autocomplete="one-time-code" placeholder="Paste the code"><button class="primary send-ans">Send code</button></div>` +
+        `<div class="row"><button class="open-screen" data-bot="${a.bot_id}">Open browser</button><button class="deny">Can't do it</button></div></div>`;
     }
     if (a.category === 'draft' || d.draft) {
       const body = d.body || d.draft || d.text || '';

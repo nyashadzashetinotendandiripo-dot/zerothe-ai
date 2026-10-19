@@ -177,6 +177,52 @@ def builtin_tools(eng: "Engine") -> list[ToolSpec]:
          "username_hint": s("Username/email you saw, if any")},
         [], login_fill, screen=True, label=lambda a: f"Fill login: {short(a.get('domain') or a.get('purpose') or '', 50)}")
 
+    def ask_code(ctx: ToolContext, a: dict) -> ToolResult:
+        """User provides a one-time login code; we type it into the page ourselves.
+        The code never enters the model context and is never stored."""
+        try:
+            url = br.call(comp._current_url, ctx.bot["id"], timeout=20)
+        except Exception:
+            url = ""
+        host = host_of(url)
+        if a.get("url"):
+            scr0 = br.screen(ctx.bot["id"])
+            try:
+                br.call(scr0.goto, a["url"], timeout=60)
+            except Exception:
+                pass
+        summary = short(a.get("question") or "The website is asking for a one-time verification code", 300)
+        d = eng.approvals._ask_user(ctx, "login", "ask_code", summary,
+                                    {"host": host, "kind": "one_time_code"}, {})
+        code = str(d.answer or "").strip()
+        if not d.approved and not code:
+            low = (d.reason or "").lower()
+            if "declined" in low or "stopped" in low or "denied" in low:
+                return ToolResult(f"The user could not provide the code ({d.reason[:120]}). Report that this step is blocked and continue with anything else you can.")
+            return ToolResult("No code was provided. Never guess or invent codes; report that this step is blocked and continue.", is_error=True)
+        if not code:
+            return ToolResult("The card was approved without a code. Ask once more with a clearer question, or use request_takeover.", is_error=True)
+        scr = br.screen(ctx.bot["id"])
+        try:
+            res = br.call(scr.otp_fill, code, bool(a.get("press_enter", True)), timeout=45) or {}
+        except Exception as e:
+            return ToolResult(f"Got the code but could not type it into the page ({short(str(e), 120)}). Take a fresh browser_snapshot; "
+                              "if the box is inside an iframe or a popup, use request_takeover.", is_error=True)
+        if not res.get("filled"):
+            return ToolResult("Got the code, but no visible code box was found on the page. Take a fresh browser_snapshot and read the form again; "
+                              "if the box is unusual (iframe, popup, widget), use request_takeover.", is_error=True)
+        return ToolResult("I typed the verification code you sent straight into the page"
+                          + (" and pressed Enter." if res.get("pressed") else ".") +
+                          " Take a browser_snapshot to confirm the site accepted it, then continue.")
+
+    add("ask_code", "Get a one-time login code (2FA code, email/SMS token, one-time password) from the user and type it into the page yourself. "
+        "Use ONLY when the current page asks for a short one-time code. The code goes straight into the browser; you never see it. "
+        "Never for passwords, card numbers or anything else — use login_fill or request_takeover for those.",
+        {"question": s("Short summary of what the site is asking for, e.g. 'Enter the 6-digit code we texted to +1 234'"),
+         "press_enter": b("Press Enter after typing (default true)"),
+         "url": s("Optional page to open first")},
+        ["question"], ask_code, screen=True, label=lambda a: f"Ask for code: {short(a.get('question', ''), 55)}")
+
     def request_access(ctx: ToolContext, a: dict) -> ToolResult:
         res = a["resource"].strip()
         key = res if res.startswith(("plugin:", "mcp:")) else (f"mcp:{res[4:]}" if res.startswith("mcp_") else f"plugin:{res}")

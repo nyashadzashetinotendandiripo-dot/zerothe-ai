@@ -10,6 +10,29 @@ const OUT_BG = '#005c4b';    // outgoing bubble (WhatsApp dark green)
 const WALL = '#0b141a';      // wallpaper
 const FAINT = 'rgba(233,237,238,.55)';
 
+function AnsRow({ onSend, placeholder }) {
+  const [v, setV] = useState('');
+  const go = () => { const t = v.trim(); if (t) { onSend(t); setV(''); } };
+  return (
+    <View style={{ flexDirection: 'row', gap: 8, marginTop: 6 }}>
+      <TextInput
+        value={v}
+        onChangeText={setV}
+        placeholder={placeholder}
+        placeholderTextColor="#8696a0"
+        style={{ flex: 1, color: '#e9edef', fontSize: 13, borderWidth: 1, borderColor: '#4d4122', borderRadius: 10, paddingHorizontal: 10, paddingVertical: 7 }}
+        autoCapitalize="none"
+        autoCorrect={false}
+        returnKeyType="send"
+        onSubmitEditing={go}
+      />
+      <Pressable onPress={go} style={({ pressed }) => [st.appBtn, pressed && { opacity: 0.85 }]}>
+        <Text style={st.appOk}>Send</Text>
+      </Pressable>
+    </View>
+  );
+}
+
 function fmtT(it) {
   const d2 = parseDate(it);
   return d2 ? d2.toTimeString().slice(0, 5) : '';
@@ -90,9 +113,11 @@ export default function Chat({ thread, threads, onSwitch, onBack, onEvent }) {
   };
   const stop = async () => { try { await api('/api/threads/' + thread.id + '/stop', { method: 'POST', body: '{}' }); } catch (e) { /* already done */ } };
   const react = async (mid, emoji) => { try { await api('/api/messages/' + mid + '/reactions', { method: 'POST', body: JSON.stringify({ emoji, author: 'user' }) }); load(); } catch (e) { /* ignore */ } };
-  const decide = async (a, approve, remember) => {
+  const decide = async (a, approve, remember, answer) => {
     setApps((cur) => cur.filter((x) => x.id !== a.id));
-    try { await api('/api/approvals/' + a.id + '/decide', { method: 'POST', body: JSON.stringify({ approve, remember }) }); } catch (e) { /* ignore */ }
+    const body = { approve, remember };
+    if (answer) body.answer = answer;
+    try { await api('/api/approvals/' + a.id + '/decide', { method: 'POST', body: JSON.stringify(body) }); } catch (e) { /* ignore */ }
     load();
   };
 
@@ -205,16 +230,24 @@ export default function Chat({ thread, threads, onSwitch, onBack, onEvent }) {
       )}
       {!!apps.length && (
         <View style={st.appCard}>
-          {apps.map((a, i) => (
+          {apps.map((a, i) => {
+            const isAsk = a.category === 'question' || a.tool === 'ask_code';
+            return (
             <View key={a.id || i} style={st.appRow}>
               <Text style={st.appT}>{(a.category || '').toUpperCase()}{a.tool ? ' · ' + a.tool : ''}{a.summary ? '\n' + a.summary : ''}</Text>
+              {isAsk ? <AnsRow onSend={(t) => decide(a, true, false, t)} placeholder={a.tool === 'ask_code' ? 'Paste the code' : 'Type an answer'} /> : null}
               <View style={st.appBtns}>
-                <Pressable onPress={() => decide(a, true, true)} style={st.appBtn}><Text style={st.appOk}>✅ Always</Text></Pressable>
-                <Pressable onPress={() => decide(a, true, false)} style={st.appBtn}><Text style={st.appOk}>Approve</Text></Pressable>
-                <Pressable onPress={() => decide(a, false, false)} style={st.appBtn}><Text style={st.appNo}>Deny</Text></Pressable>
+                {!isAsk && (
+                  <>
+                    <Pressable onPress={() => decide(a, true, true)} style={st.appBtn}><Text style={st.appOk}>✅ Always</Text></Pressable>
+                    <Pressable onPress={() => decide(a, true, false)} style={st.appBtn}><Text style={st.appOk}>Approve</Text></Pressable>
+                  </>
+                )}
+                <Pressable onPress={() => decide(a, false, false)} style={st.appBtn}><Text style={st.appNo}>{isAsk ? "Can't do it" : 'Deny'}</Text></Pressable>
               </View>
             </View>
-          ))}
+            );
+          })}
         </View>
       )}
       {!!replyTo && (

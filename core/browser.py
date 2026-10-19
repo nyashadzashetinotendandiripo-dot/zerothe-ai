@@ -432,6 +432,58 @@ class Screen:
         await self._settle(0.2)
         return {"filled": ok_pass, "username_filled": ok_user}
 
+    async def otp_fill(self, code: str, press_enter: bool = True) -> dict:
+        """Type a one-time code the user sent in chat. The value goes straight into the page,
+        is never logged, and is never returned to the model."""
+        page = await self.ensure_page()
+        code = (code or "").strip()
+        if not code:
+            return {"filled": False, "field": "", "pressed": False}
+        # Most structured shape first, most generic last. One-time-code boxes are
+        # often split into per-digit inputs, so fill() falls back to keyboard typing.
+        sels = [
+            'input[autocomplete="one-time-code"]:visible',
+            'input[name*="code" i]:visible', 'input[id*="code" i]:visible',
+            'input[name*="otp" i]:visible', 'input[id*="otp" i]:visible',
+            'input[name*="verif" i]:visible, input[name*="pin" i]:visible',
+            'input[id*="verif" i]:visible, input[id*="pin" i]:visible',
+            'input[type=tel]:visible',
+        ]
+        field = ""
+        for sel in sels:
+            try:
+                loc = page.locator(sel).first
+                try:
+                    await loc.fill(code, timeout=2500)
+                except Exception:  # noqa: BLE001 - per-digit boxes: click + type
+                    await loc.click(timeout=2500)
+                    await page.keyboard.type(code, delay=50)
+                field = sel
+                break
+            except Exception:  # noqa: BLE001 - wrong shape: try the next
+                continue
+        if not field:   # some portals keep the code box password-typed
+            try:
+                await page.locator("input[type=password]:visible").first.fill(code, timeout=2000)
+                field = "input[type=password]"
+            except Exception:  # noqa: BLE001
+                pass
+        if not field:   # last resort: the first plain text/number box on the page
+            try:
+                await page.locator("input[type=text]:visible, input[type=number]:visible").first.fill(code, timeout=2000)
+                field = "first visible text input"
+            except Exception:  # noqa: BLE001
+                pass
+        pressed = False
+        if field and press_enter:
+            try:
+                await page.keyboard.press("Enter")
+                pressed = True
+            except Exception:  # noqa: BLE001
+                pass
+        await self._settle(0.5)
+        return {"filled": bool(field), "field": field, "pressed": pressed}
+
     async def select_option(self, element: int, value: str) -> dict:
         page = await self.ensure_page()
         loc = page.locator(f'[data-gb-id="{int(element)}"]').first

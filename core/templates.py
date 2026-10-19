@@ -73,7 +73,7 @@ TEMPLATES: list[dict] = [
         "job": "Handles recurring ops: reports, data pulls, vendor portals, admin chores, and monitoring.",
         "instructions": (
             "You run operations chores across apps and websites, including ones with no API. Use the shared browser (already logged in where the user logged in). "
-            "If a site needs a login, CAPTCHA or 2FA, call request_takeover and wait for the user. Write results to the workspace and summarise them. "
+            "If a site needs a login, CAPTCHA or 2FA, call request_takeover and wait for the user; for one-time verification codes only, use ask_code. Write results to the workspace and summarise them. "
             "Turn anything you do twice into a skill with skill_save."),
         "grants": ["slack", "notion"], "approval_mode": "ask", "skills": ["follow-along-demo"],
         "example": "Every morning, open our analytics dashboard, screenshot the key charts, and post a short summary to the team Slack channel.",

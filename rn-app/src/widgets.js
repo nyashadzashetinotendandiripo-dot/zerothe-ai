@@ -229,19 +229,37 @@ function Cards({ d, reply }) {
   return (
     <View style={st.col}>
       {!!d.title && <Text style={st.h2}>{d.title}</Text>}
-      {cards.map((c, i) => (
-        <View key={i} style={st.cardRow}>
-          {(typeof c.image === 'string' && /^https?:/i.test(c.image)) ? (
-            <Image source={{ uri: c.image }} style={st.cardImg} resizeMode="cover" />
-          ) : null}
-          <View style={{ flex: 1, minWidth: 0 }}>
-            <Text style={st.cardT}>{String(c.title)}</Text>
-            {!!c.price && <Text style={st.cardP}>{String(c.price)}</Text>}
-            {!!c.why && <Text style={st.cardWhy}>{String(c.why)}</Text>}
-            {!!c.specs && <Text style={st.cardSpecs}>{String(c.specs)}</Text>}
+      {cards.map((c, i) => {
+        const row = (
+          <View style={st.cardRow}>
+            {(typeof c.image === 'string' && /^https?:/i.test(c.image)) ? (
+              <Image source={{ uri: c.image }} style={st.cardImg} resizeMode="cover" />
+            ) : null}
+            <View style={{ flex: 1, minWidth: 0 }}>
+              <Text style={st.cardT}>{String(c.title)}</Text>
+              {!!c.price && <Text style={st.cardP}>{String(c.price)}</Text>}
+              {!!c.why && <Text style={st.cardWhy}>{String(c.why)}</Text>}
+              {!!c.specs && <Text style={st.cardSpecs}>{String(c.specs)}</Text>}
+            </View>
           </View>
-        </View>
-      ))}
+        );
+        const url = typeof c.url === 'string' && /^https:\/\//i.test(c.url) ? c.url : '';
+        return (
+          <Pressable
+            key={i}
+            onPress={() => { if (url) Linking.openURL(url); }}
+            disabled={!url}
+            style={({ pressed }) => [st.cardRowWrap, url && pressed && { opacity: 0.8 }]}
+          >
+            {row}
+            {!!url && (
+              <View style={st.cardLinkRow}>
+                <Text style={st.cardLink}>Product page ↗</Text>
+              </View>
+            )}
+          </Pressable>
+        );
+      })}
       {!cards.length && <Text style={st.cap}>No cards.</Text>}
       {acts.length ? <View style={st.col}>{acts.map((it, idx) => (
         <Btn key={idx} label={it.label} primary={idx === 0} onPress={() => {
@@ -295,6 +313,9 @@ const st = StyleSheet.create({
   txt: { color: C.text, fontSize: 14.5, flex: 1 },
   dot: { width: 10, height: 10, borderRadius: 3 },
   cardRow: { flexDirection: 'row', gap: 10, backgroundColor: C.panel, borderWidth: 1, borderColor: C.line, borderRadius: 12, padding: 10, alignItems: 'flex-start' },
+  cardRowWrap: { marginBottom: 8, borderRadius: 12 },
+  cardLinkRow: { alignItems: 'flex-end', marginTop: 2 },
+  cardLink: { color: C.ok, fontSize: 12, fontWeight: '800', opacity: 0.9 },
   cardImg: { width: 72, height: 72, borderRadius: 10, backgroundColor: C.panel2 },
   cardT: { color: C.text, fontSize: 14.5, fontWeight: '800' },
   cardP: { color: C.ok, fontSize: 14, fontWeight: '800', marginTop: 1 },
