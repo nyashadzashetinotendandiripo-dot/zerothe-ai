@@ -1,11 +1,12 @@
 import React, { useEffect, useRef, useState, useCallback } from 'react';
-import { View, Text, TextInput, Pressable, FlatList, StyleSheet } from 'react-native';
+import { Animated, Modal, View, Text, TextInput, Pressable, FlatList, StyleSheet } from 'react-native';
 import { StatusBar as ExpoStatus } from 'expo-status-bar';
 import { api, connectEvents, loadKey, saveConf, tryConf, clearConf, conf, cfgGet, K_SERVER, K_TOKEN, K_EMAIL, K_PASS, loginEmail, loginGoogle } from './src/session';
 import { C } from './src/theme';
 import { checkUpdate, installUpdate, APP_VERSION } from './src/updates';
 import Connect, { AuthModal } from './src/Connect';
 import Chat from './src/Chat';
+import { TopBar, DashboardScreen, MarketplaceScreen, ApprovalsScreen, McpScreen, RoutinesScreen, FilesScreen, WalletScreen } from './src/Screens';
 
 function AnsRow({ onSend, placeholder }) {
   const [v, setV] = useState('');
@@ -37,7 +38,8 @@ function asky(a) {
 export default function App() {
   const [ready, setReady] = useState(false);
   const [signed, setSigned] = useState(false);
-  const [screen, setScreen] = useState('home');            // home | chat | conn | set
+  const [screen, setScreen] = useState('home');            // dash home chat market approvals plugins mcp routines files wallet set
+  const [menuOpen, setMenuOpen] = useState(false);         // side drawer
   const [bots, setBots] = useState([]);
   const [busy, setBusy] = useState({});                    // bot_id -> {status, thread_id}
   const [apps, setApps] = useState([]);                    // pending approvals, server-wide
@@ -149,6 +151,18 @@ export default function App() {
     else if (bots.length) openBot(bots[0]);
     else setScreen('home');
   }, [chat, bots, openBot]);
+  const openChatTabRef = useRef(null);
+  useEffect(() => { openChatTabRef.current = openChatTab; }, [openChatTab]);
+  const go = useCallback((k) => { setMenuOpen(false); if (k === 'chat') openChatTabRef.current && openChatTabRef.current(); else setScreen(k); }, []);
+
+  const menuProps = {
+    working: Object.keys(busy).length,
+    approvals: apps.length,
+    notes: noteBadge,
+    tab: screen,
+    onGo: go,
+    onClose: () => setMenuOpen(false),
+  };
 
   if (!ready) return null;
   if (!signed) return (
@@ -165,37 +179,189 @@ export default function App() {
         onSwitch={(tid) => setChat(c => ({ ...c, threadId: tid }))}
         onBack={() => setScreen('home')}
         onEvent={chatHandler}
+        onMenu={() => setMenuOpen(true)}
       />
+      <Drawer {...menuProps} />
     </Shell>
   );
 
-  if (screen === 'set') return (
+  if (screen === 'plugins') return (
     <Shell upd={upd} onUpd={doUpdate} updState={updState}>
-      <Settings
-        onOut={async () => { await clearConf(); setSigned(false); }}
-        onCheck={runCheck}
-        onPlug={() => setScreen('conn')}
-      />
-      <TabBar tab="set" onTab={setScreen} onChat={openChatTab} />
+      <Connect onBack={() => setScreen('home')} onMenu={() => setMenuOpen(true)} />
+      <Drawer {...menuProps} />
     </Shell>
   );
 
-  if (screen === 'connect') return (
-    <Shell upd={upd} onUpd={doUpdate} updState={updState}>
-      <Connect onBack={() => setScreen('home')} />
-      <TabBar tab="conn" onTab={setScreen} onChat={openChatTab} />
-    </Shell>
-  );
+  const menuBlock = <Drawer {...menuProps} />;
+
+  switch (screen) {
+    case 'dash': return (
+      <Shell upd={upd} onUpd={doUpdate} updState={updState}>
+        <DashboardScreen onMenu={() => setMenuOpen(true)} bots={bots} approvals={apps} working={Object.keys(busy).length} />
+        {menuBlock}
+      </Shell>
+    );
+    case 'market': return (
+      <Shell upd={upd} onUpd={doUpdate} updState={updState}>
+        <MarketplaceScreen onMenu={() => setMenuOpen(true)} onRefresh={refresh} />
+        {menuBlock}
+      </Shell>
+    );
+    case 'approvals': return (
+      <Shell upd={upd} onUpd={doUpdate} updState={updState}>
+        <ApprovalsScreen onMenu={() => setMenuOpen(true)} apps={apps} bots={bots} decide={decideApp} />
+        {menuBlock}
+      </Shell>
+    );
+    case 'mcp': return (
+      <Shell upd={upd} onUpd={doUpdate} updState={updState}>
+        <McpScreen onMenu={() => setMenuOpen(true)} />
+        {menuBlock}
+      </Shell>
+    );
+    case 'routines': return (
+      <Shell upd={upd} onUpd={doUpdate} updState={updState}>
+        <RoutinesScreen onMenu={() => setMenuOpen(true)} />
+        {menuBlock}
+      </Shell>
+    );
+    case 'files': return (
+      <Shell upd={upd} onUpd={doUpdate} updState={updState}>
+        <FilesScreen onMenu={() => setMenuOpen(true)} />
+        {menuBlock}
+      </Shell>
+    );
+    case 'wallet': return (
+      <Shell upd={upd} onUpd={doUpdate} updState={updState}>
+        <WalletScreen onMenu={() => setMenuOpen(true)} bots={bots} />
+        {menuBlock}
+      </Shell>
+    );
+    case 'set': return (
+      <Shell upd={upd} onUpd={doUpdate} updState={updState}>
+        <Settings onOut={async () => { await clearConf(); setSigned(false); }} onCheck={runCheck} onPlug={() => setScreen('plugins')} />
+        <DragMenu onMenu={() => setMenuOpen(true)} />
+        {menuBlock}
+      </Shell>
+    );
+    default: break;
+  }
 
   return (
     <Shell upd={upd} onUpd={doUpdate} updState={updState}>
-      <Home bots={bots} busy={busy} apps={apps} noteBadge={noteBadge} onOpen={openBot} onPlug={() => setScreen('conn')} onBell={() => setNoteOpen(true)} onNew={newBot} onDecide={decideApp} onBotLong={setBotModal} />
-      <TabBar tab="home" onTab={setScreen} onChat={openChatTab} />
+      <Home bots={bots} busy={busy} apps={apps} noteBadge={noteBadge} onOpen={openBot} onPlug={() => setScreen('plugins')} onBell={() => setNoteOpen(true)} onNew={newBot} onDecide={decideApp} onBotLong={setBotModal} onMenu={() => setMenuOpen(true)} />
+      <DragMenu onMenu={() => setMenuOpen(true)} />
       {!!botModal && <BotModal bot={botModal} onClose={() => setBotModal(null)} onCloseSaved={() => { setBotModal(null); refresh(); }} />}
       {noteOpen && <NotifSheet onClose={() => setNoteOpen(false)} onReadAll={() => setNoteBadge(0)} />}
+      {menuBlock}
     </Shell>
   );
 }
+
+// floating handle that opens the side menu from every screen
+function DragMenu({ onMenu }) {
+  return (
+    <Pressable onPress={onMenu} hitSlop={12}
+      style={{ position: 'absolute', left: 0, top: '50%', marginTop: -34, width: 30, height: 68, borderTopRightRadius: 20, borderBottomRightRadius: 20, backgroundColor: C.panel2, borderWidth: 1, borderLeftWidth: 0, borderColor: C.line, alignItems: 'center', justifyContent: 'center', elevation: 8 }}>
+      <Text style={{ color: C.muted, fontSize: 16 }}>»</Text>
+    </Pressable>
+  );
+}
+
+// ------------------------------------------------------------ 11-tab side drawer
+const DR = StyleSheet.create({
+  scrim: { opacity: 0 },
+  panel: { position: 'absolute', left: 0, top: 0, bottom: 0, backgroundColor: C.bg, borderRightWidth: 1, borderColor: C.line, elevation: 16, paddingHorizontal: 10, paddingTop: 54 },
+  brand: { color: C.text, fontSize: 19, fontWeight: '900', letterSpacing: -.4 },
+  vs: { color: C.muted, fontSize: 11 },
+  grp: { color: C.muted, fontSize: 10.5, fontWeight: '800', letterSpacing: 1.4, marginTop: 14, marginBottom: 4, paddingHorizontal: 8 },
+  item: { flexDirection: 'row', alignItems: 'center', gap: 10, borderRadius: 12, paddingVertical: 10, paddingHorizontal: 10 },
+  itemOn: { backgroundColor: C.panel2 },
+  ic: { fontSize: 17, width: 22, textAlign: 'center' },
+  lbl: { color: C.muted, fontSize: 14.5, fontWeight: '600', flex: 1 },
+  lblOn: { color: C.text, fontWeight: '800' },
+  cnt: { minWidth: 22, textAlign: 'center', color: C.onSolid, backgroundColor: C.bad, borderRadius: 999, overflow: 'hidden', fontSize: 11.5, fontWeight: '800', paddingHorizontal: 5, paddingVertical: 2 },
+});
+
+const TAB_GROUPS = [
+  ['OVERVIEW', [
+    ['dash', '📈', 'Dashboard'],
+    ['home', '🤖', 'Team Status'],
+  ]],
+  ['COMMUNICATIONS', [
+    ['chat', '💬', 'Chats Room'],
+  ]],
+  ['HIRE & EXTEND', [
+    ['market', '🛍', 'Bot Marketplace'],
+    ['approvals', '🛂', 'Approvals'],
+    ['plugins', '🧩', 'Plugins Hub'],
+    ['mcp', '🔌', 'MCP Tools'],
+  ]],
+  ['AUTOMATION', [
+    ['routines', '⏱', 'Routines'],
+    ['files', '🗄', 'File Vault'],
+  ]],
+  ['ADMIN', [
+    ['wallet', '💳', 'Wallet'],
+    ['set', '⚙️', 'Settings'],
+  ]],
+];
+
+function Drawer({ open, tab, onGo, onClose, approvals, working, notes }) {
+  const [shown, setShown] = useState(false);
+  const dx = useRef(new Animated.Value(0)).current;
+  useEffect(() => {
+    if (open) {
+      setShown(true);
+      Animated.timing(dx, { toValue: 1, duration: 200, useNativeDriver: true }).start();
+    } else if (shown) {
+      Animated.timing(dx, { toValue: 0, duration: 180, useNativeDriver: true }).start(() => setShown(false));
+    }
+  }, [open]);
+  if (!shown) return null;
+  const W = 268;
+  const tx = dx.interpolate({ inputRange: [0, 1], outputRange: [-W, 0] });
+  const sc = dx.interpolate({ inputRange: [0, 1], outputRange: [0, 0.55] });
+  const counts = { approvals, work: working, notes };
+  return (
+    <Modal transparent visible onRequestClose={onClose}>
+      <View style={{ flex: 1, backgroundColor: 'transparent' }}>
+        <Animated.View style={[{ flex: 1, backgroundColor: '#000' }, { opacity: sc }]}>
+          <Pressable style={{ flex: 1 }} onPress={onClose} />
+        </Animated.View>
+        <Animated.View style={[DR.panel, { width: W, transform: [{ translateX: tx }] }]}>
+          <View style={{ paddingHorizontal: 8 }}>
+            <Text style={DR.brand}>🤖 ZerotheBot</Text>
+            <Text style={DR.vs}>v{APP_VERSION}{working ? ' · ' + working + ' working' : ''}</Text>
+          </View>
+          <FlatList
+            data={TAB_GROUPS}
+            keyExtractor={([g]) => g}
+            showsVerticalScrollIndicator={false}
+            renderItem={({ item: [g, rows] }) => (
+              <View>
+                <Text style={DR.grp}>{g}</Text>
+                {rows.map(([k, ic, lbl]) => {
+                  const on = tab === k || (k === 'home' && !tabSPECIAL.includes(tab));
+                  const badge = k === 'approvals' ? approvals : k === 'chat' ? notes : 0;
+                  return (
+                    <Pressable key={k} onPress={() => onGo(k)}
+                      style={({ pressed }) => [DR.item, on && DR.itemOn, pressed && { opacity: .88 }]}>
+                      <Text style={DR.ic}>{ic}</Text>
+                      <Text style={[DR.lbl, on && DR.lblOn]} numberOfLines={1}>{lbl}</Text>
+                      {badge > 0 && <Text style={DR.cnt}>{badge > 99 ? '99+' : badge}</Text>}
+                    </Pressable>
+                  );
+                })}
+              </View>
+            )}
+          />
+        </Animated.View>
+      </View>
+    </Modal>
+  );
+}
+const tabSPECIAL = ['chat', 'dash', 'market', 'approvals', 'plugins', 'mcp', 'routines', 'files', 'wallet', 'set'];
 
 function Shell({ children, upd, onUpd, updState }) {
   return (
@@ -283,12 +449,13 @@ function Login({ onDone }) {
 }
 
 // ----------------------------------------------------------------- home
-function Home({ bots, busy, apps, noteBadge, onOpen, onPlug, onBell, onNew, onDecide, onBotLong }) {
+function Home({ bots, busy, apps, noteBadge, onOpen, onPlug, onBell, onNew, onDecide, onBotLong, onMenu }) {
   const [modal, setModal] = useState(null);
   const working = Object.keys(busy).length;
   return (
     <View style={n.screen}>
       <View style={n.hdr}>
+        <Pressable onPress={onMenu} hitSlop={8}><View style={n.hbtn}><Text style={{ fontSize: 16, color: C.text }}>☰</Text></View></Pressable>
         <View style={{ flex: 1 }}>
           <Text style={n.brand}>ZerotheBot</Text>
           <Text style={n.sub}>
@@ -300,10 +467,9 @@ function Home({ bots, busy, apps, noteBadge, onOpen, onPlug, onBell, onNew, onDe
         <Pressable onPress={onBell} hitSlop={8}>
           <View style={n.hbtn}>
             <Text style={{ fontSize: 15 }}>🔔</Text>
-            {badge > 0 && <View style={n.badgeDot} collapsable={false} />}
+            {noteBadge > 0 && <View style={n.badgeDot} collapsable={false} />}
           </View>
         </Pressable>
-        <Pressable onPress={onPlug} hitSlop={8}><View style={n.hbtn}><Text style={{ fontSize: 15 }}>🧩</Text></View></Pressable>
       </View>
       <FlatList
         data={bots}
@@ -369,22 +535,6 @@ function Home({ bots, busy, apps, noteBadge, onOpen, onPlug, onBell, onNew, onDe
         <Text style={n.fabT}>＋  New Bot</Text>
       </Pressable>
       {!!modal && <NewBotModal onDone={(nm, j, em) => { setModal(null); nm && onNew(nm, j, em); }} />}
-    </View>
-  );
-}
-
-function TabBar({ tab, onTab, onChat }) {
-  const tabs = [['home', '🏠', 'Home'], ['chat', '💬', 'Chats'], ['conn', '🧩', 'Connect'], ['set', '⚙️', 'You']];
-  return (
-    <View style={n.bar}>
-      {tabs.map(([k, ic, lbl]) => (
-        <Pressable key={k} style={{ flex: 1 }} onPress={() => (k === 'chat' ? onChat() : onTab(k))} hitSlop={4}>
-          <View style={n.tabItem} collapsable={false}>
-            <Text style={[n.tabIc, tab === k && st2.on]}>{ic}</Text>
-            <Text style={[n.tabL, tab === k && st2.on]}>{lbl}</Text>
-          </View>
-        </Pressable>
-      ))}
     </View>
   );
 }

@@ -21,12 +21,12 @@ const MCP_PRESETS_TOKEN = [
   { name: 'stripe', label: 'Stripe', url: 'https://mcp.stripe.com' },
 ];
 
-export default function Connect({ onBack }) {
+export default function Connect({ onBack, onMenu }) {
   const [tab, setTab] = useState('conn');
   return (
     <View style={st.box}>
       <View style={st.hdr}>
-        <Pressable onPress={onBack} hitSlop={10}><Text style={st.back}>‹</Text></Pressable>
+        <Pressable onPress={onMenu || onBack} hitSlop={10}><Text style={st.back}>{onMenu ? '☰' : '‹'}</Text></Pressable>
         <Text style={st.h1}>Connections</Text>
         <View style={{ width: 30 }} />
       </View>

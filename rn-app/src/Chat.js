@@ -55,7 +55,7 @@ const REACTS = ['👍', '❤️', '🎉', '😄', '🚀', '👀'];
 
 const TOOL_GLYPH = { running: '●', ok: '✓', error: '✕', denied: '⛔', blocked: '⛔' };
 
-export default function Chat({ thread, threads, onSwitch, onBack, onEvent }) {
+export default function Chat({ thread, threads, onSwitch, onBack, onEvent, onMenu }) {
   const [items, setItems] = useState([]);
   const [apps, setApps] = useState([]);              // pending approvals on this thread
   const [streams, setStreams] = useState({});        // stream_id -> accumulated text
@@ -183,7 +183,7 @@ export default function Chat({ thread, threads, onSwitch, onBack, onEvent }) {
   return (
     <KeyboardAvoidingView style={{ flex: 1, backgroundColor: WALL }} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
       <View style={st.header}>
-        <Pressable onPress={onBack} hitSlop={10}><Text style={st.back}>‹</Text></Pressable>
+        <Pressable onPress={onMenu || onBack} hitSlop={10}><Text style={st.back}>{onMenu ? '☰' : '‹'}</Text></Pressable>
         <View style={st.av}><Text style={{ fontSize: 16 }}>🤖</Text></View>
         {HEADER}
         <Pressable onPress={() => setReasonOpen(!reasonOpen)} hitSlop={8}>
