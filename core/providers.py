@@ -23,12 +23,15 @@ from .settings import Settings
 
 
 class ProviderError(Exception):
-    """kind: auth | rate_limit | network | bad_request | server | unknown"""
+    """kind: auth | billing | rate_limit | network | bad_request | size | vision | server | unknown"""
 
-    def __init__(self, kind: str, message: str, retry_after: float | None = None):
+    def __init__(self, kind: str, message: str, retry_after: float | None = None,
+                 limit: int | None = None, requested: int | None = None):
         super().__init__(message)
         self.kind = kind
         self.retry_after = retry_after
+        self.limit = limit            # per-request token ceiling, when the provider told us (size errors)
+        self.requested = requested    # what the provider measured for that rejected request
 
 
 class StopRequested(Exception):
@@ -81,6 +84,47 @@ def estimate_tokens(messages: list[dict], system: str = "") -> int:
     return n // 4
 
 
+def estimate_with_tools(messages: list[dict], system: str = "", schemas: list[dict] | None = None) -> int:
+    """estimate_tokens plus the tool schemas that ride along with every request."""
+    n = estimate_tokens(messages, system)
+    if schemas:
+        n += len(json.dumps(schemas)) // 4 + 20
+    return n
+
+
+def _size_numbers(msg: str) -> tuple[int | None, int | None]:
+    """Pull (limit, requested) token numbers out of a request-too-large message."""
+    limit = requested = None
+    m = re.search(r"Limit\s*[:=]?\s*([\d,]+)", msg)
+    if m:
+        limit = int(m.group(1).replace(",", ""))
+    m = re.search(r"Requested\s*[:=]?\s*([\d,]+)", msg)
+    if m:
+        requested = int(m.group(1).replace(",", ""))
+    if limit is None:
+        m = re.search(r"maximum context length is\s*([\d,]+)", msg, re.I)
+        if m:
+            limit = int(m.group(1).replace(",", ""))
+    if requested is None:
+        m = re.search(r"you requested\s+([\d,]+)", msg, re.I)
+        if m:
+            requested = int(m.group(1).replace(",", ""))
+    return limit, requested
+
+
+def _is_size_msg(msg: str) -> bool:
+    low = msg.lower()
+    return any(k in low for k in ("too large", "input token count exceeds", "context_length_exceeded",
+                                  "maximum context length", "exceeds the maximum allowed", "request size exceeds",
+                                  "exceeds the max tokens", "prompt is too long"))
+
+
+def _is_image_msg(msg: str) -> bool:
+    low = msg.lower()
+    return ("content must be a string" in low or "invalid image" in low
+            or ("image_url" in low and ("invalid" in low or "not support" in low or "unsupported" in low)))
+
+
 def model_warnings(model: str, models: list[str]) -> list[str]:
     """Warnings for a chosen model that is not in the provider's detected list."""
     if not model or not models or model in models:
@@ -88,6 +132,20 @@ def model_warnings(model: str, models: list[str]) -> list[str]:
     near = difflib.get_close_matches(model, models, n=3, cutoff=0.6)
     hint = f" Did you mean: {', '.join(near)}?" if near else " Pick one from the detected list."
     return [f"Model '{model}' isn't on this provider.{hint}"]
+
+
+def learned_limit(settings: Settings, profile_id: str, model: str) -> int | None:
+    """Per-request token ceiling learned from a previous 'request too large' error, if any."""
+    v = settings.get("model_limits", {}) or {}
+    x = v.get(f"{profile_id}:{model}")
+    return int(x) if x else None
+
+
+def learn_limit(settings: Settings, profile_id: str, model: str, limit: int) -> None:
+    v = dict(settings.get("model_limits", {}) or {})
+    v[f"{profile_id}:{model}"] = int(limit)
+    settings.set("model_limits", v)
+
 
 def _load_image(block: dict) -> tuple[str, str] | None:
     if block.get("data"):
@@ -171,6 +229,7 @@ class Provider:
         self.model = model
         self.api_key = api_key
         self.vision = bool(profile.get("vision", True))
+        self.vision_stripped = False   # set when the endpoint rejected images and we retried without them
         self.label = profile.get("label", profile.get("id", ""))
 
     def stream(self, system: str, messages: list[dict], tools: list[dict], on_text: Callable[[str], None],
@@ -263,26 +322,15 @@ class AnthropicProvider(Provider):
         except Exception as e:
             raise ProviderError("unknown", f"{type(e).__name__}: {e}") from e
 
-    @staticmethod
-    def _map_status(e) -> ProviderError:
+    def _map_status(self, e) -> ProviderError:
         code = getattr(e, "status_code", 0)
         msg = getattr(e, "message", str(e))
-        if code in (401, 403):
-            return ProviderError("auth", f"Authentication failed (HTTP {code}). Check the API key in Settings > Providers. {msg}")
-        if code == 429:
-            ra = None
-            try:
-                ra = float(e.response.headers.get("retry-after"))
-            except Exception:
-                pass
-            return ProviderError("rate_limit", f"Rate limited by the provider. {msg}", ra)
-        if code == 404:
-            return ProviderError("bad_request", f"Model or endpoint not found. Check the model name. {msg}")
-        if code in (400, 413, 422):
-            return ProviderError("bad_request", f"The provider rejected the request: {msg}")
-        if code >= 500 or code == 529:
-            return ProviderError("server", f"The provider is having trouble (HTTP {code}). {msg}")
-        return ProviderError("unknown", f"HTTP {code}: {msg}")
+        ra = None
+        try:
+            ra = float(e.response.headers.get("retry-after"))
+        except Exception:
+            pass
+        return _map_http_status(code, msg, self.model, ra)
 
     def list_models(self) -> list[str]:
         import anthropic
@@ -293,6 +341,38 @@ class AnthropicProvider(Provider):
             raise self._map_status(e) from e
         except Exception as e:
             raise ProviderError("network", f"Could not reach Anthropic: {e}") from e
+
+
+def _map_http_status(code: int, msg: str, model: str = "", retry_after: float | None = None) -> ProviderError:
+    """Normalise an HTTP error from any provider into an actionable ProviderError."""
+    if code in (401, 403):
+        return ProviderError("auth", f"Authentication failed (HTTP {code}). Check the API key in Settings > Providers. {msg}")
+    if code == 402:
+        return ProviderError("billing", f"Out of credit (HTTP 402). Add credit at your provider's billing page, "
+                                        f"or switch to another provider in Settings > Providers. {msg}")
+    if code == 413 or (code in (400, 422, 429) and _is_size_msg(msg)):
+        limit, requested = _size_numbers(msg)
+        return ProviderError("size", f"The provider says this request is too big: {msg}", limit=limit, requested=requested)
+    if code == 400 and _is_image_msg(msg):
+        return ProviderError("vision", f"This model can't receive images or screenshots: {msg}")
+    if code == 429:
+        low = msg.lower()
+        if "free-models-per-day" in msg or "per-day" in low or "daily limit" in low or "per day" in low and "limit" in low:
+            return ProviderError("quota", f"Daily free-model allowance used up: {msg}")
+        ra = retry_after
+        if ra is None:
+            m = re.search(r"try again in\s+([\d.]+)", msg, re.I)
+            if m:
+                ra = float(m.group(1))
+        return ProviderError("rate_limit", f"Rate limited by the provider. {msg}", ra)
+    if code == 404:
+        where = f"Model '{model}' or endpoint" if model else "Model or endpoint"
+        return ProviderError("bad_request", f"{where} not found. Check the model name in Settings > Providers. {msg}")
+    if code in (400, 422):
+        return ProviderError("bad_request", f"The provider rejected the request: {msg}")
+    if code >= 500 or code == 529:
+        return ProviderError("server", f"The provider is having trouble (HTTP {code}). {msg}")
+    return ProviderError("unknown", f"HTTP {code}: {msg}")
 
 
 # ---------------------------------------------------------------- OpenAI-compatible
@@ -355,7 +435,8 @@ class OpenAICompatProvider(Provider):
                                                                 "parameters": t["input_schema"]}} for t in tools]
         res = LLMResult()
         acc: dict[int, dict] = {}
-        for attempt in (0, 1):
+        retried_stream, retried_vision = False, False
+        while True:
             try:
                 with client.chat.completions.create(**kwargs) as stream:
                     for chunk in stream:
@@ -386,8 +467,18 @@ class OpenAICompatProvider(Provider):
             except StopRequested:
                 raise
             except openai.BadRequestError as e:
-                if attempt == 0 and "stream_options" in str(e):
+                msg = str(e)
+                if not retried_stream and "stream_options" in msg:
+                    retried_stream = True
                     kwargs.pop("stream_options", None)
+                    res, acc = LLMResult(), {}
+                    continue
+                if self.vision and not retried_vision and _is_image_msg(msg):
+                    # text-only model rejected the screenshots: strip images, retry once, remember it
+                    retried_vision = True
+                    self.vision = False
+                    self.vision_stripped = True
+                    kwargs["messages"] = self._convert(system, messages)
                     res, acc = LLMResult(), {}
                     continue
                 raise self._map_status(e) from e
@@ -415,26 +506,15 @@ class OpenAICompatProvider(Provider):
             res.output_tokens = max(1, len(res.text) // 4)
         return res
 
-    @staticmethod
-    def _map_status(e) -> ProviderError:
+    def _map_status(self, e) -> ProviderError:
         code = getattr(e, "status_code", 0)
         msg = getattr(e, "message", str(e))
-        if code in (401, 403):
-            return ProviderError("auth", f"Authentication failed (HTTP {code}). Check the API key in Settings > Providers. {msg}")
-        if code == 429:
-            ra = None
-            try:
-                ra = float(e.response.headers.get("retry-after"))
-            except Exception:
-                pass
-            return ProviderError("rate_limit", f"Rate limited by the provider. {msg}", ra)
-        if code == 404:
-            return ProviderError("bad_request", f"Model or endpoint not found. Check the model name and base URL. {msg}")
-        if code in (400, 413, 422):
-            return ProviderError("bad_request", f"The provider rejected the request: {msg}")
-        if code >= 500:
-            return ProviderError("server", f"The provider is having trouble (HTTP {code}). {msg}")
-        return ProviderError("unknown", f"HTTP {code}: {msg}")
+        ra = None
+        try:
+            ra = float(e.response.headers.get("retry-after"))
+        except Exception:
+            pass
+        return _map_http_status(code, msg, self.model, ra)
 
     def list_models(self) -> list[str]:
         import openai
@@ -457,8 +537,9 @@ def make_provider(settings: Settings, profile_id: str | None, model: str | None)
 
 
 def friendly_error(err: ProviderError) -> str:
-    prefix = {"auth": "API key problem", "rate_limit": "Rate limit", "network": "Network problem",
-              "bad_request": "Request rejected", "server": "Provider outage", "budget": "Daily budget"}.get(err.kind, "Model error")
+    prefix = {"auth": "API key problem", "billing": "Out of credit", "rate_limit": "Rate limit", "network": "Network problem",
+              "bad_request": "Request rejected", "size": "Prompt too big", "vision": "Images not supported",
+              "server": "Provider outage", "budget": "Daily budget", "quota": "Daily limit"}.get(err.kind, "Model error")
     return f"{prefix}: {err}"
 
 
