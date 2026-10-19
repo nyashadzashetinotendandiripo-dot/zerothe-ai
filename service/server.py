@@ -992,6 +992,9 @@ def create_app(engine: Engine, token: str) -> FastAPI:
         return {"ok": True}
 
     # -------------------------------------------------------------- mobile
+    # System routes must be mounted BEFORE the catch-all static handler below.
+    register_system_routes(app, eng, api)
+
     @app.get("/api/mobile", dependencies=[api])
     def mobile(request: Request) -> dict:
         port = int(eng.settings.get("mobile.port", 8765))
@@ -1055,7 +1058,5 @@ def create_app(engine: Engine, token: str) -> FastAPI:
         if not name or not f.is_file() or not f.is_relative_to(web.resolve()):
             raise HTTPException(404)
         return FileResponse(f, headers={"Cache-Control": "no-cache"})
-
-    register_system_routes(app, eng, api)
 
     return app
