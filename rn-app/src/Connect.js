@@ -1,7 +1,10 @@
 // Connectors & MCP servers: grant apps to your Bots from the phone.
+// Authorization and setup pages open in an in-app overlay (WebView), closing
+// automatically when the platform hands control back to the ZerotheBot server.
 import React, { useCallback, useState } from 'react';
-import { View, Text, TextInput, Pressable, ScrollView, Linking, StyleSheet } from 'react-native';
-import { api } from './session';
+import { View, Text, TextInput, Pressable, ScrollView, Modal, StyleSheet, ActivityIndicator } from 'react-native';
+import { WebView } from 'react-native-webview';
+import { api, API_BASE } from './session';
 import { C } from './theme';
 
 const MCP_PRESETS_PUBLIC = [
@@ -41,36 +44,94 @@ function Connectors() {
   const [rows, setRows] = useState(null);
   const [msg, setMsg] = useState('');
   const [busyId, setBusyId] = useState('');
+  const [overlay, setOverlay] = useState(null);   // {url, ptit, auto}
   const load = useCallback(async () => {
     try { const d = await api('/api/plugins'); setRows(d.plugins || []); } catch (e) { setMsg(String(e.message || e)); }
   }, []);
   useState(() => { load(); }, []);
-  const act = async (id, what) => {
-    setBusyId(id + what); setMsg('');
+  const done = async (id) => {
+    setOverlay(null); setMsg('');
+    await load();
+    if (id) setMsg((rows || []).find((r) => r.id === id)?.name + ' connected ✓');
+  };
+  const act = async (p, what) => {
+    setBusyId(p.id + what); setMsg('');
     try {
       if (what === 'connect') {
-        const d = await api('/api/plugins/' + id + '/connect', { method: 'POST', body: '{}' });
-        setMsg('Opened the sign-in page for ' + id + '. Finish it in the browser, then tap refresh.');
-        if (/^https?:/.test(d.url || '')) Linking.openURL(d.url);
+        const d = await api('/api/plugins/' + p.id + '/connect', { method: 'POST', body: '{}' });
+        if (/^https?:/.test(d.url || '')) setOverlay({ url: d.url, name: p.name, auto: true, pid: p.id });
+        else setMsg(p.id + ': could not start the sign-in.');
+      } else if (what === 'setup' && p.setup_url) {
+        setOverlay({ url: p.setup_url, name: p.name, auto: false, pid: '' });
       } else if (what === 'test') {
-        const d = await api('/api/plugins/' + id + '/test', { method: 'POST', body: '{}' });
-        setMsg(id + ': ' + (d.message || 'ok'));
+        const d = await api('/api/plugins/' + p.id + '/test', { method: 'POST', body: '{}' });
+        setMsg(p.id + ': ' + (d.message || 'ok'));
       }
       await load();
-    } catch (e) { setMsg(id + ': ' + (e.message || 'failed')); }
+    } catch (e) { setMsg(p.id + ': ' + (e.message || 'failed')); }
     setBusyId('');
   };
   if (!rows) return <Text style={l.cap}>Loading connectors…</Text>;
   return (
-    <ScrollView style={{ flex: 1 }} contentContainerStyle={st.list}>
-      {rows.map((p) => <Row key={p.id} p={p} act={act} busyId={busyId} />)}
-      <Pressable onPress={load} style={[l.btn, { backgroundColor: C.panel2, borderWidth: 1, borderColor: C.line }]}><Text style={[l.btnT, { color: C.text }]}>↻ Refresh</Text></Pressable>
-      {!!msg && <Text style={l.msg}>{msg}</Text>}
-      <Text style={st.foot}>
-        Connect = sign in with your account (secure browser). Open setup = where you generate the
-        access key and paste it below the row. Bots see a connector's tools only after it's granted in the Bot's settings.
-      </Text>
-    </ScrollView>
+    <View style={{ flex: 1 }}>
+      <ScrollView style={{ flex: 1 }} contentContainerStyle={st.list}>
+        {rows.map((p) => <Row key={p.id} p={p} act={act} busyId={busyId} />)}
+        <Pressable onPress={load} style={[l.btn, { backgroundColor: C.panel2, borderWidth: 1, borderColor: C.line }]}><Text style={[l.btnT, { color: C.text }]}>↻ Refresh</Text></Pressable>
+        {!!msg && <Text style={l.msg}>{msg}</Text>}
+        <Text style={st.foot}>
+          Sign-in and setup pages open right here in the app. When you approve, it closes by
+          itself and the light turns green. Bots see a connector's tools only after you grant it in the Bot's settings.
+        </Text>
+      </ScrollView>
+      {!!overlay && <AuthModal o={overlay} onClose={() => done(overlay.auto ? overlay.pid : '')} />}
+    </View>
+  );
+}
+
+// ------------------------------------------------------------ in-app auth overlay
+const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/153.0.0.0 Safari/537.36';
+
+function AuthModal({ o, onClose }) {
+  const [loaded, setLoaded] = useState(false);
+  const nav = (s) => {
+    const u = String(s && s.url || '');
+    if (o.auto && u.includes('/oauth/callback')) { setTimeout(onClose, 900); return true; }
+    return false;
+  };
+  return (
+    <Modal animationType="slide" transparent={false} visible onRequestClose={onClose}>
+      <View style={{ flex: 1, backgroundColor: C.bg }}>
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10, padding: 12, paddingTop: 40, backgroundColor: C.panel, borderBottomWidth: 1, borderBottomColor: C.line }}>
+          <Pressable onPress={onClose} hitSlop={8}><Text style={st.back}>✕</Text></Pressable>
+          <Text style={{ color: C.text, fontSize: 15, fontWeight: '800', flex: 1 }} numberOfLines={1}>{o.auto ? 'Sign in to ' + o.name : o.name + ' setup'}</Text>
+          <Pressable onPress={onClose} hitSlop={8}>
+            <Text style={{ color: o.auto ? C.ok : C.text, fontWeight: '800', fontSize: 14 }}>{o.auto ? 'Done' : 'Close'}</Text>
+          </Pressable>
+        </View>
+        {!loaded && (
+          <View style={{ padding: 8 }}><ActivityIndicator color={C.ok} /></View>
+        )}
+        <WebView
+          source={{ uri: o.url }}
+          userAgent={UA}
+          style={{ flex: 1, backgroundColor: '#fff' }}
+          onLoadEnd={() => setLoaded(true)}
+          onNavigationStateChange={(s) => { nav(s); }}
+          onShouldStartLoadWithRequest={(r) => {
+            if (r.isTopFrame !== false && o.auto && String(r.url || '').includes('/oauth/callback')) { setTimeout(onClose, 900); return false; }
+            return true;
+          }}
+          sharedCookiesEnabled
+          thirdPartyCookiesEnabled
+          setSupportMultipleWindows={false}
+        />
+        {o.auto && (
+          <Text style={{ color: C.muted, fontSize: 11.5, textAlign: 'center', padding: 8 }}>
+            When you approve, this closes itself. If a site refuses sign-in here, open it outside the app.
+          </Text>
+        )}
+      </View>
+    </Modal>
   );
 }
 
@@ -98,9 +159,9 @@ function Row({ p, act, busyId }) {
       <Text style={l.cap} numberOfLines={2}>{p.description}</Text>
       <View style={{ flexDirection: 'row', gap: 8, marginTop: 6, flexWrap: 'wrap' }}>
         {p.oauth ? (
-          <PBtn label={busyId === p.id + 'connect' ? 'opening…' : 'Connect'} onPress={() => act(p.id, 'connect')} />
+          <PBtn label={busyId === p.id + 'connect' ? 'opening…' : 'Connect'} onPress={() => act(p, 'connect')} />
         ) : null}
-        {!!p.setup_url && <PBtn label={p.setup_label || 'Open setup'} ghost onPress={() => Linking.openURL(p.setup_url)} />}
+        {!!p.setup_url && <PBtn label={p.setup_label || 'Open setup'} ghost onPress={() => act(p, 'setup')} />}
         <PBtn label={busyId === p.id + 'test' ? 'testing…' : 'Test'} ghost onPress={() => act(p.id, 'test')} />
         {hasFields ? <PBtn label={open ? 'Hide setup' : 'Key / details'} ghost onPress={() => setOpen(!open)} /> : null}
       </View>
