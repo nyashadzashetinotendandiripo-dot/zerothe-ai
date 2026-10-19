@@ -3,8 +3,12 @@ from __future__ import annotations
 
 import logging
 import logging.handlers
+import os
+import signal
+import sys
 import threading
 import time
+from pathlib import Path
 from typing import Any
 
 from . import VERSION, backup, commands, notify as notifier, paths, quiet
@@ -96,6 +100,7 @@ class Engine:
         s.add_job(self.approvals.check_escalations, "interval", minutes=30, id="_appr_escalate", replace_existing=True)
         s.add_job(self._digest_tick, "interval", minutes=1, id="_digest", replace_existing=True)
         s.add_job(self._housekeeping, "cron", hour=3, minute=17, id="_housekeeping", replace_existing=True)
+        s.add_job(self._browser_janitor, "interval", minutes=60, id="_browser_janitor", replace_existing=True)
         self.log.info("Engine started (v%s). Data dir: %s", VERSION, paths.data_dir())
 
     def start_background_checks(self) -> None:
@@ -130,6 +135,45 @@ class Engine:
             self.log.info("housekeeping: auto-backup %s (%.1f MB), pruned stale notifications", name, len(data) / 1e6)
         except Exception:   # never break the scheduler
             self.log.exception("housekeeping failed")
+
+    def _browser_janitor(self) -> None:
+        """Hourly: reap Chromium processes orphaned by crashed turns or service restarts.
+
+        Orphan = parented to init (ppid==1) and tied to our browser profile/playwright dir.
+        Healthy browsers hang off our own process tree, so they are never touched.
+        """
+        if not sys.platform.startswith("linux") and not os.path.isdir("/proc"):
+            return
+        try:
+            procs: dict[int, tuple[int, str]] = {}
+            for s in os.listdir("/proc"):
+                if not s.isdigit():
+                    continue
+                try:
+                    raw = (Path(f"/proc/{s}/cmdline").read_bytes() or b"").split(b"\0")
+                    exe = (raw[0].decode("utf-8", "ignore") if raw else "").lower()
+                    if "chrom" not in exe:
+                        continue
+                    ppid = -1
+                    for line in Path(f"/proc/{s}/status").read_text("utf-8", "ignore").splitlines():
+                        if line.startswith("PPid:"):
+                            ppid = int(line.split()[-1])
+                            break
+                    procs[int(s)] = (ppid, " ".join(x.decode("utf-8", "ignore") for x in raw))
+                except (OSError, ValueError, IndexError):
+                    continue
+            profile = str(paths.browser_profile_dir())
+            orphans = [p for p, (ppid, cmd) in procs.items()
+                       if ppid == 1 and (profile in cmd or "ms-playwright" in cmd)]
+            for p in orphans:
+                try:
+                    os.kill(p, signal.SIGTERM)
+                except OSError:
+                    pass
+            if orphans:
+                self.log.info("browser-janitor: reaped %d orphaned Chromium process(es)", len(orphans))
+        except Exception:   # never break the scheduler
+            self.log.exception("browser-janitor failed")
 
     def stop(self) -> None:
         self.turns.stop_all()

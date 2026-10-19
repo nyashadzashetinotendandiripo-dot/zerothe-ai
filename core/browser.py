@@ -103,6 +103,20 @@ RECORDER_JS = r"""
 })();
 """
 
+# Un-flag the Playwright automation basics. Runs before any page script.
+# Keep it minimal and honest-per-domain (no fake fingerprints): Cloudflare/imperva
+# score obvious lies harsher than the defaults they patch.
+STEALTH_JS = r"""
+(() => {
+  try { Object.defineProperty(navigator, 'webdriver', {get: () => undefined}); } catch (e) {}
+  try { if (!window.chrome) window.chrome = {runtime: {}}; } catch (e) {}
+  try {
+    Object.defineProperty(navigator, 'languages', {get: () => ['en-US', 'en']});
+    Object.defineProperty(navigator, 'plugins', {get: () => [{name: 'PDF Viewer'}, {name: 'Chrome PDF Viewer'}]});
+  } catch (e) {}
+})();
+"""
+
 BLOCK_MARKERS = [
     ("captcha", "a CAPTCHA"), ("verify you are human", "a human-verification check"), ("are you a robot", "a bot check"),
     ("unusual traffic", "a bot/unusual-traffic check"), ("just a moment", "a browser check page"),
@@ -551,18 +565,43 @@ class BrowserHost:
             if self._pw is None:
                 self._pw = await async_playwright().start()
             comp = self.settings.get("computer", {})
+            which = str(comp.get("browser", "chromium") or "chromium").lower()
+            if which not in ("chromium", "chrome"):
+                which = "chromium"
+            # channel="chromium" = the full bundled build (NOT the stripped headless-shell that
+            # renders some modern pages blank); channel="chrome" = the PC's installed Google Chrome,
+            # same version sites expect, sharing the same persistent profile (logins carry over).
+            launch_kw: dict[str, Any] = dict(
+                headless=bool(comp.get("headless", True)),
+                viewport={"width": int(comp.get("viewport_w", 1280)), "height": int(comp.get("viewport_h", 800))},
+                # Sites nag headless user-agents to "update Chrome" (the bundled build is current):
+                # identify as ordinary desktop Chrome so pages render and behave normally.
+                user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/153.0.0.0 Safari/537.36",
+                accept_downloads=True, locale="en-US", channel="chrome" if which == "chrome" else "chromium")
+            # Optional egress route for hostile ecosystems (residential gateway when the
+            # host IP is a datacenter pool): settings -> computer.proxy = "http://host:port".
+            proxy_url = str(comp.get("proxy") or "").strip()
+            if proxy_url:
+                launch_kw["proxy"] = {"server": proxy_url}
             try:
-                self._ctx = await self._pw.chromium.launch_persistent_context(
-                    str(paths.browser_profile_dir()), headless=bool(comp.get("headless", True)),
-                    viewport={"width": int(comp.get("viewport_w", 1280)), "height": int(comp.get("viewport_h", 800))},
-                    user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/153.0.0.0 Safari/537.36",
-                    accept_downloads=True, locale="en-US")
+                self._ctx = await self._pw.chromium.launch_persistent_context(str(paths.browser_profile_dir()), **launch_kw)
             except Exception as e:  # noqa: BLE001
                 msg = str(e)
+                if which == "chrome" and ("Executable doesn't exist" in msg or "Channel" in msg or "chrome" in msg.lower()):
+                    try:  # installed Chrome unusable: fall back to the bundled build and say so
+                        launch_kw.pop("channel", None)
+                        self._ctx = await self._pw.chromium.launch_persistent_context(str(paths.browser_profile_dir()), **launch_kw)
+                        self.last_error = "Google Chrome could not be started, using the bundled Chromium instead."
+                    except Exception as e2:  # noqa: BLE001
+                        msg = str(e2)
+                    else:
+                        await self._finish_context()
+                        self.last_error = "Google Chrome could not be started, using the bundled Chromium instead."
+                        return self._ctx
                 if "Executable doesn't exist" in msg or "playwright install" in msg:
                     self.last_error = "The browser engine is not installed. Run:  python -m playwright install chromium"
                 elif "ProcessSingleton" in msg or "user data directory is already in use" in msg:
-                    self.last_error = "The shared browser profile is locked by another process. Close other OpenGrokBot services."
+                    self.last_error = "The shared browser profile is locked by another process. Close other ZerotheBot services."
                 else:
                     if ("shared librar" in msg or ".so" in msg) and "playwright install" not in msg:
                         # Rootless Linux host (Docker, hosted runners): fetch the missing
@@ -573,26 +612,21 @@ class BrowserHost:
                         if libdir:
                             os.environ["LD_LIBRARY_PATH"] = libdir + (":" + os.environ["LD_LIBRARY_PATH"] if os.environ.get("LD_LIBRARY_PATH") else "")
                             try:
-                                self._ctx = await self._pw.chromium.launch_persistent_context(
-                                    str(paths.browser_profile_dir()), headless=bool(comp.get("headless", True)),
-                                    viewport={"width": int(comp.get("viewport_w", 1280)), "height": int(comp.get("viewport_h", 800))},
-                                    user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/153.0.0.0 Safari/537.36",
-                                    accept_downloads=True, locale="en-US")
+                                self._ctx = await self._pw.chromium.launch_persistent_context(str(paths.browser_profile_dir()), **launch_kw)
+                                return await self._finish_context()
                             except Exception as e2:  # noqa: BLE001
                                 msg = str(e2)
-                            else:
-                                self.last_error = ""
-                                self._ctx.on("close", lambda *_: setattr(self._ctx, "_gb_dead", True) if self._ctx else None)
-                                await self._ctx.expose_binding("__gbRecord", self._on_record)
-                                await self._ctx.add_init_script(RECORDER_JS)
-                                return self._ctx
                     self.last_error = "Could not start the browser: " + msg.splitlines()[0]
                 raise BrowserError(self.last_error) from e
-            self.last_error = ""
-            self._ctx.on("close", lambda *_: setattr(self._ctx, "_gb_dead", True) if self._ctx else None)
-            await self._ctx.expose_binding("__gbRecord", self._on_record)
-            await self._ctx.add_init_script(RECORDER_JS)
-            return self._ctx
+            return await self._finish_context()
+
+    async def _finish_context(self) -> Any:
+        self.last_error = ""
+        self._ctx.on("close", lambda *_: setattr(self._ctx, "_gb_dead", True) if self._ctx else None)
+        await self._ctx.expose_binding("__gbRecord", self._on_record)
+        await self._ctx.add_init_script(STEALTH_JS)   # un-flag the automation basics before any page script runs
+        await self._ctx.add_init_script(RECORDER_JS)
+        return self._ctx
 
     async def _on_record(self, source, data) -> None:
         page = source.get("page") if isinstance(source, dict) else getattr(source, "page", None)

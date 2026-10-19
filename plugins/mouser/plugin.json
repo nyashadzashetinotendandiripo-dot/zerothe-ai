@@ -1,0 +1,78 @@
+{
+  "id": "mouser",
+  "name": "Mouser Electronics",
+  "version": "1.0.0",
+  "description": "Search live component stock, pricing and datasheets on Mouser.",
+  "help": "Get a free Search API key at mouser.com/api-registration and paste it in the field below. Search tools only; ordering is never done without your approval.",
+  "setup_label": "Get a free API key",
+  "setup_url": "https://www.mouser.com/api-registration/",
+  "fields": [
+    {"key": "api_key", "label": "Mouser API key", "secret": true, "required": true, "placeholder": "paste your Search API key"}
+  ],
+  "tools": [
+    {
+      "name": "search_keyword",
+      "description": "Search Mouser for electronic components by keyword or manufacturer part number. Returns stock, unit pricing, datasheet and product URLs.",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "keyword": {
+            "type": "string",
+            "description": "Keyword or manufacturer part number, e.g. LM7805, 100uF 50V, STM32F103"
+          },
+          "records": {
+            "type": "integer",
+            "description": "How many results to return (max 50)"
+          }
+        },
+        "required": ["keyword", "records"]
+      },
+      "request": {
+        "method": "POST",
+        "url": "https://api.mouser.com/api/v1/search/keywordwithmfrnumber",
+        "query": {"apiKey": "{{secret.api_key}}"},
+        "body": {
+          "SearchByKeywordRequest": {
+            "keyword": "{keyword}",
+            "records": "{records}"
+          }
+        }
+      },
+      "response_path": "SearchResults.Parts",
+      "risk": "safe"
+    },
+    {
+      "name": "search_part_number",
+      "description": "Exact/partial manufacturer-part-number lookup on Mouser (pricing and stock for a specific part).",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "part_number": {
+            "type": "string",
+            "description": "Manufacturer part number, e.g. LM7805 or SG2524SIM"
+          },
+          "records": {
+            "type": "integer",
+            "description": "How many results to return (max 50)"
+          }
+        },
+        "required": ["part_number", "records"]
+      },
+      "request": {
+        "method": "POST",
+        "url": "https://api.mouser.com/api/v1/search/partnumber",
+        "query": {"apiKey": "{{secret.api_key}}"},
+        "body": {
+          "SearchByPartMfrRequest": {
+            "partSearchRequestList": [
+              {"mfrNumber": "{part_number}"}
+            ],
+            "records": "{records}"
+          }
+        }
+      },
+      "response_path": "SearchResults.Parts",
+      "risk": "safe"
+    }
+  ]
+}

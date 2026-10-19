@@ -1,0 +1,14 @@
+{
+  "id": "digikey",
+  "name": "DigiKey Electronics",
+  "version": "1.0.0",
+  "description": "Search live component stock, pricing and datasheets on DigiKey.",
+  "help": "Create a free app at developer.digikey.com (choose the Product Search API, client-credentials grant) and paste the client id and secret below. Search tools only; ordering is never done without your approval.",
+  "setup_label": "Create a free DigiKey app",
+  "setup_url": "https://developer.digikey.com",
+  "entry": "plugin.py",
+  "fields": [
+    {"key": "client_id", "label": "OAuth2 client ID", "secret": true, "required": true, "placeholder": "your DigiKey app client id"},
+    {"key": "client_secret", "label": "OAuth2 client secret", "secret": true, "required": true, "placeholder": "your DigiKey app client secret"}
+  ]
+}
