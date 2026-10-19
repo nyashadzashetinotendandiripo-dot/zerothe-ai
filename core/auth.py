@@ -84,6 +84,15 @@ def google_email() -> str:
     return _read_account().get("google_email", "")
 
 
+def set_google_email(addr: str) -> None:
+    """Bind the owner's Google address so only that account can sign in."""
+    acc = _read_account()
+    if not acc.get("email"):
+        raise ValueError("Create an account first.")
+    acc["google_email"] = (addr or "").strip().lower()
+    _write_account(acc)
+
+
 def create_account(addr: str, password: str) -> None:
     addr = (addr or "").strip().lower()
     if "@" not in addr or "." not in addr.split("@")[-1]:

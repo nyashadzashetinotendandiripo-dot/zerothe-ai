@@ -77,6 +77,17 @@ export async function loginEmail(base, email, pass) {
   return { ok: true, email: d.email || email };
 }
 
+// Sign in with Google: the reader app hands the verified Google ID token here
+// and the server returns { ok, email, session } usable as the Bearer token.
+export async function loginGoogle(base, idToken) {
+  const b = String(base || '').replace(/\/+$/, '');
+  const r = await fetch(b + '/api/google', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ id_token: String(idToken || '') }) });
+  const d = await r.json().catch(() => ({}));
+  if (r.status !== 200) throw new Error(d.error || d.detail || 'Google sign-in was not accepted.');
+  return { ok: true, email: d.email || '', session: d.session || '' };
+}
+
 // ------------------------------------------------------------ live events (SSE)
 export function connectEvents({ since, onEvent, onConn, onSince }) {
   let es = null, last = since || 0, stop = false, timer = null;

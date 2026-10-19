@@ -91,10 +91,11 @@ function Connectors() {
 // ------------------------------------------------------------ in-app auth overlay
 const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/153.0.0.0 Safari/537.36';
 
-function AuthModal({ o, onClose }) {
+export function AuthModal({ o, onClose, onUrl }) {
   const [loaded, setLoaded] = useState(false);
   const nav = (s) => {
     const u = String(s && s.url || '');
+    if (onUrl) onUrl(u);
     if (o.auto && u.includes('/oauth/callback')) { setTimeout(onClose, 900); return true; }
     return false;
   };
@@ -103,7 +104,7 @@ function AuthModal({ o, onClose }) {
       <View style={{ flex: 1, backgroundColor: C.bg }}>
         <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10, padding: 12, paddingTop: 40, backgroundColor: C.panel, borderBottomWidth: 1, borderBottomColor: C.line }}>
           <Pressable onPress={onClose} hitSlop={8}><Text style={st.back}>✕</Text></Pressable>
-          <Text style={{ color: C.text, fontSize: 15, fontWeight: '800', flex: 1 }} numberOfLines={1}>{o.auto ? 'Sign in to ' + o.name : o.name + ' setup'}</Text>
+          <Text style={{ color: C.text, fontSize: 15, fontWeight: '800', flex: 1 }} numberOfLines={1}>{o.title || (o.auto ? 'Sign in to ' + o.name : o.name + ' setup')}</Text>
           <Pressable onPress={onClose} hitSlop={8}>
             <Text style={{ color: o.auto ? C.ok : C.text, fontWeight: '800', fontSize: 14 }}>{o.auto ? 'Done' : 'Close'}</Text>
           </Pressable>
@@ -118,7 +119,9 @@ function AuthModal({ o, onClose }) {
           onLoadEnd={() => setLoaded(true)}
           onNavigationStateChange={(s) => { nav(s); }}
           onShouldStartLoadWithRequest={(r) => {
-            if (r.isTopFrame !== false && o.auto && String(r.url || '').includes('/oauth/callback')) { setTimeout(onClose, 900); return false; }
+            const u = String(r.url || '');
+            if (r.isTopFrame !== false && onUrl && u.includes('/auth/google-done?tok=')) { onUrl(u); return false; }
+            if (r.isTopFrame !== false && o.auto && u.includes('/oauth/callback')) { setTimeout(onClose, 900); return false; }
             return true;
           }}
           sharedCookiesEnabled

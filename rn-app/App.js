@@ -1,10 +1,10 @@
 import React, { useEffect, useRef, useState, useCallback } from 'react';
 import { View, Text, TextInput, Pressable, FlatList, StyleSheet } from 'react-native';
 import { StatusBar as ExpoStatus } from 'expo-status-bar';
-import { api, connectEvents, loadKey, saveConf, tryConf, clearConf, conf, cfgGet, K_SERVER, K_TOKEN, K_EMAIL, K_PASS, loginEmail } from './src/session';
+import { api, connectEvents, loadKey, saveConf, tryConf, clearConf, conf, cfgGet, K_SERVER, K_TOKEN, K_EMAIL, K_PASS, loginEmail, loginGoogle } from './src/session';
 import { C } from './src/theme';
 import { checkUpdate, installUpdate, APP_VERSION } from './src/updates';
-import Connect from './src/Connect';
+import Connect, { AuthModal } from './src/Connect';
 import Chat from './src/Chat';
 
 function AnsRow({ onSend, placeholder }) {
@@ -219,6 +219,8 @@ function Login({ onDone }) {
   const [pass, setPass] = useState('');
   const [err, setErr] = useState('');
   const [go, setGo] = useState(false);
+  const [ov, setOv] = useState(null);         // Google sign-in overlay
+  const gDone = useRef(false);
   const save = async () => {
     setErr(''); setGo(true);
     try {
@@ -228,6 +230,27 @@ function Login({ onDone }) {
     }
     catch (e) { setErr(e.message || 'Could not connect.'); }
     setGo(false);
+  };
+  const google = () => {
+    setErr('');
+    const b = String(base || '').replace(/\/+$/, '');
+    if (!/^https?:\/\/.+/.test(b)) { setErr('Enter the server address first.'); return; }
+    gDone.current = false;
+    setOv(b + '/auth/google-login');
+  };
+  const finishGoogle = async (tok) => {
+    setOv(null);
+    const b = String(base || '').replace(/\/+$/, '');
+    try {
+      const d = await loginGoogle(b, tok);
+      await saveConf(b, d.session, d.email, '');         // session token, no password
+      onDone();
+    } catch (e) { setErr(e.message || 'Google sign-in failed.'); }
+  };
+  const onGUrl = (u) => {
+    if (!u || gDone.current) return;
+    const m = String(u).match(/\/auth\/google-done\?tok=([^&]+)/);
+    if (m) { gDone.current = true; finishGoogle(decodeURIComponent(m[1])); }
   };
   const ready = !!mail.trim() && !!pass;
   return (
@@ -244,7 +267,17 @@ function Login({ onDone }) {
       <Pressable onPress={save} disabled={!ready || go} style={({ pressed }) => [l.btn, !ready && { opacity: .5 }, pressed && { opacity: .9 }]}>
         <Text style={l.btnT}>{go ? 'Checking…' : 'Sign in'}</Text>
       </Pressable>
-      <Text style={l.cap}>One time per install — from then on the app keeps you signed in across updates. Google sign-in is coming next.</Text>
+      <Pressable onPress={google} disabled={go} style={({ pressed }) => [l.btnG, pressed && { opacity: .9 }]}>
+        <Text style={l.btnGT}>Continue with Google</Text>
+      </Pressable>
+      <Text style={l.cap}>One time per install — from then on the app keeps you signed in across updates.</Text>
+      {ov && (
+        <AuthModal
+          o={{ url: ov, auto: false, name: 'Google', title: 'Sign in with Google' }}
+          onClose={() => setOv(null)}
+          onUrl={onGUrl}
+        />
+      )}
     </View>
   );
 }
@@ -529,6 +562,8 @@ const l = StyleSheet.create({
   inl: { backgroundColor: C.panel, borderWidth: 1, borderColor: C.line, borderRadius: 12, color: C.text, padding: 11, fontSize: 15 },
   btn: { backgroundColor: C.solid, borderRadius: 12, padding: 13, alignItems: 'center', marginTop: 6 },
   btnT: { color: C.onSolid, fontWeight: '800', fontSize: 15 },
+  btnG: { backgroundColor: '#fff', borderRadius: 12, borderWidth: 1, borderColor: C.line, padding: 13, alignItems: 'center', marginTop: 6 },
+  btnGT: { color: '#1f1f1f', fontWeight: '800', fontSize: 15 },
   err: { color: C.bad, fontSize: 13 },
 });
 

@@ -96,13 +96,15 @@ def create_app(engine: Engine, token: str) -> FastAPI:
         if read_session(request.cookies):
             return
         tok = presented(request)
-        if tok and hmac.compare_digest(tok.encode(), token.encode()):
-            return
+        if tok:
+            if hmac.compare_digest(tok.encode(), token.encode()):
+                return
+            if session_email(tok):   # app may present its signed session as Bearer
+                return
         raise HTTPException(401, "Sign in required.")
 
-    def read_session(cookies) -> str | None:
-        """Email from a valid signed session cookie, else None."""
-        raw = cookies.get("zt_session") or ""
+    def session_email(raw: str) -> str | None:
+        """Email from a valid signed session string, else None."""
         if not raw or "." not in raw:
             return None
         payload, sig = raw.split(".", 1)
@@ -117,11 +119,19 @@ def create_app(engine: Engine, token: str) -> FastAPI:
             return None
         return d.get("email")
 
-    def issue_session(response: Response, addr: str) -> None:
+    def read_session(cookies) -> str | None:
+        """Email from a valid signed session cookie, else None."""
+        return session_email(cookies.get("zt_session") or "")
+
+    def session_string(addr: str) -> str:
+        """Build the signed session string (also stored as the zt_session cookie)."""
         payload = base64.urlsafe_b64encode(
             json.dumps({"email": addr, "exp": time.time() + 86400 * 30}).encode()).decode().rstrip("=")
         sig = hmac.new(sess_sec.encode(), payload.encode(), hashlib.sha256).hexdigest()
-        response.set_cookie("zt_session", payload + "." + sig, httponly=True, samesite="strict", max_age=86400 * 30)
+        return payload + "." + sig
+
+    def issue_session(response: Response, addr: str) -> None:
+        response.set_cookie("zt_session", session_string(addr), httponly=True, samesite="strict", max_age=86400 * 30)
 
     api = Depends(auth)
 
@@ -175,8 +185,11 @@ def create_app(engine: Engine, token: str) -> FastAPI:
             addr = auth_mod.verify_google(str(body.get("id_token", "")))
         except ValueError as e:
             raise HTTPException(401, str(e))
+        if not auth_mod.google_email():
+            # First Google sign-in binds that address as the owner's.
+            auth_mod.set_google_email(addr)
         issue_session(response, addr)
-        return {"ok": True, "email": addr}
+        return {"ok": True, "email": addr, "session": session_string(addr)}
 
     @app.post("/api/logout")
     def logout(response: Response) -> dict:
@@ -802,6 +815,34 @@ def create_app(engine: Engine, token: str) -> FastAPI:
             return f"<body style='font-family:sans-serif;background:#111;color:#eee;padding:40px'><h2>Connected ✔</h2><p>You can close this tab and return to {APP_NAME}.</p></body>"
         except Exception as e:  # noqa: BLE001
             return f"<h3>Sign-in failed</h3><p>{e}</p>"
+
+    _GOOGLE_PAGE_CSS = ("body{font-family:-apple-system,sans-serif;background:#111;color:#eee;"
+                        "display:flex;align-items:center;justify-content:center;min-height:92vh;margin:0}")
+
+    @app.get("/auth/google-login", response_class=HTMLResponse)
+    def google_login_page() -> str:
+        cid = eng.settings.get("auth.google_client_id") or ""
+        head = "<!doctype html><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'>"
+        if not cid:
+            return (f"{head}<body style='{_GOOGLE_PAGE_CSS}'><p style='max-width:22em;text-align:center'>"
+                    "Google sign-in is not set up on this server yet. Ask the owner to add a Google Client ID.</p></body>")
+        return f"""{head}
+<style>{_GOOGLE_PAGE_CSS} .box{{text-align:center}}</style>
+<script src="https://accounts.google.com/gsi/client" async defer></script>
+<body><div class='box'>
+<div id="gbtn"></div>
+<script>
+google.accounts.id.initialize({{ client_id: '{cid}',
+  callback: function(r) {{ location.replace('/auth/google-done?tok=' + encodeURIComponent(r.credential)); }} }});
+google.accounts.id.renderButton(document.getElementById('gbtn'),
+  {{ theme: 'filled_blue', size: 'large', shape: 'pill', text: 'continue_with', width: 260 }});
+</script>
+</div></body>"""
+
+    @app.get("/auth/google-done", response_class=HTMLResponse)
+    def google_done() -> str:
+        return (f"<!doctype html><meta charset='utf-8'><body style='{_GOOGLE_PAGE_CSS}'><p>"
+                f"Signed in. Return to the {APP_NAME} app.</p></body>")
 
     @app.get("/api/mcp", dependencies=[api])
     def mcp_list() -> list[dict]:
