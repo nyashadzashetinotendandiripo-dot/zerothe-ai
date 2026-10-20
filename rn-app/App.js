@@ -1,4 +1,5 @@
 import 'react-native-gesture-handler';
+import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import React, { useEffect, useRef, useState, useCallback } from 'react';
 import { View, Text, TextInput, Pressable, FlatList, StyleSheet } from 'react-native';
 import { StatusBar as ExpoStatus } from 'expo-status-bar';
@@ -281,7 +282,8 @@ function SideMenu({ working, approvalsN, notes, navigation, state }) {
 
 function Shell({ children, upd, onUpd, updState }) {
   return (
-    <View style={{ flex: 1, backgroundColor: C.bg }}>{children}
+    <GestureHandlerRootView style={{ flex: 1, backgroundColor: C.bg }}>
+      {children}
       {!!upd && (
         <Pressable onPress={onUpd} style={sh.banner} disabled={updState === 'installing'}>
           <Text style={sh.bannerT}>
@@ -290,7 +292,7 @@ function Shell({ children, upd, onUpd, updState }) {
         </Pressable>
       )}
       <ExpoStatus style="light" />
-    </View>
+    </GestureHandlerRootView>
   );
 }
 
@@ -324,6 +326,12 @@ function Login({ onDone }) {
     setOv(null);
     const b = String(base || '').replace(/\/+$/, '');
     try {
+      if (String(tok).includes('.')) {
+        // redirect mode: the server verified + bound the owner; tok IS the session
+        await saveConf(b, tok, '', '');
+        onDone();
+        return;
+      }
       const d = await loginGoogle(b, tok);
       await saveConf(b, d.session, d.email, '');         // session token, no password
       onDone();

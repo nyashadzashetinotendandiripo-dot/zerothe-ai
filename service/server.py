@@ -833,11 +833,32 @@ def create_app(engine: Engine, token: str) -> FastAPI:
 <div id="gbtn"></div>
 <script>
 google.accounts.id.initialize({{ client_id: '{cid}',
-  callback: function(r) {{ location.replace('/auth/google-done?tok=' + encodeURIComponent(r.credential)); }} }});
+  ux_mode: 'redirect',
+  login_uri: '/auth/google-callback' }});
 google.accounts.id.renderButton(document.getElementById('gbtn'),
   {{ theme: 'filled_blue', size: 'large', shape: 'pill', text: 'continue_with', width: 260 }});
 </script>
 </div></body>"""
+
+    @app.post("/auth/google-callback", response_class=HTMLResponse)
+    async def google_callback(request: Request) -> str:
+        """GIS redirect mode posts the credential here (popup-free, works in embedded webviews)."""
+        try:
+            form = await request.form()
+            cred = str(form.get("credential") or "")
+        except Exception:  # noqa: BLE001
+            cred = ""
+        if not auth_mod.has_account():
+            return "<h3>Create your account first (email + password), then sign in with Google.</h3>"
+        try:
+            addr = auth_mod.verify_google(cred)
+        except ValueError as e:
+            return f"<h3>Sign-in failed</h3><p>{e}</p>"
+        if not auth_mod.google_email():
+            auth_mod.set_google_email(addr)
+        tok = session_string(addr)
+        return (f"<!doctype html><meta charset='utf-8'><body style='{_GOOGLE_BODY_CSS}'><p>Signing you in…</p>"
+                f"<script>location.replace('/auth/google-done?tok=' + encodeURIComponent('{tok}'));</script></body>")
 
     @app.get("/auth/google-done", response_class=HTMLResponse)
     def google_done() -> str:
