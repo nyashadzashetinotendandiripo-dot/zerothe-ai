@@ -50,8 +50,15 @@ class GoogleLoginTests(unittest.TestCase):
         r = self.c.get("/auth/google-login")
         self.assertEqual(r.status_code, 200)
         self.assertIn("1234.apps.googleusercontent.com", r.text)
-        self.assertIn("/auth/google-done?tok=", r.text)
+        self.assertIn("ux_mode: 'redirect'", r.text)
+        self.assertIn("/auth/google-callback", r.text)
         self.assertEqual(self.c.get("/auth/google-done").status_code, 200)
+
+    def test_google_callback_rejects_bad_credential(self):
+        self.c.post("/api/signup", json={"email": "owner@test.dev", "password": "test pass 123"})
+        cb = self.c.post("/auth/google-callback", data={"credential": "not-a-token"})
+        self.assertEqual(cb.status_code, 200)
+        self.assertIn("failed", cb.text.lower())
 
     def test_api_google_gates(self):
         # No account yet -> 403
