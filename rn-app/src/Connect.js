@@ -3,6 +3,7 @@
 // automatically when the platform hands control back to the ZerotheBot server.
 import React, { useCallback, useState } from 'react';
 import { View, Text, TextInput, Pressable, ScrollView, Modal, StyleSheet, ActivityIndicator } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { WebView } from 'react-native-webview';
 import { api, API_BASE } from './session';
 import { C } from './theme';
@@ -23,9 +24,10 @@ const MCP_PRESETS_TOKEN = [
 
 export default function Connect({ onBack, onMenu }) {
   const [tab, setTab] = useState('conn');
+  const ins = useSafeAreaInsets();
   return (
     <View style={st.box}>
-      <View style={st.hdr}>
+      <View style={[st.hdr, { paddingTop: 14 + ins.top }]}>
         <Pressable onPress={onMenu || onBack} hitSlop={10}><Text style={st.back}>{onMenu ? '☰' : '‹'}</Text></Pressable>
         <Text style={st.h1}>Connections</Text>
         <View style={{ width: 30 }} />

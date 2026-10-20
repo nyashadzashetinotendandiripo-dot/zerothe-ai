@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { ActivityIndicator, FlatList, Pressable, Text, TextInput, View, Share } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { api, conf } from './session';
 import { C } from './theme';
 
@@ -31,8 +32,9 @@ const s0 = {
 };
 
 export function TopBar({ title, subtitle, onMenu, right }) {
+  const ins = useSafeAreaInsets();
   return (
-    <View style={s0.hdr}>
+    <View style={[s0.hdr, { paddingTop: 14 + ins.top }]}>
       <Pressable onPress={onMenu} hitSlop={8}>
         <View style={s0.hbtn}><Text style={{ fontSize: 16, color: C.text }}>☰</Text></View>
       </Pressable>

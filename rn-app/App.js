@@ -4,6 +4,7 @@ import React, { useEffect, useRef, useState, useCallback } from 'react';
 import { View, Text, TextInput, Pressable, FlatList, StyleSheet } from 'react-native';
 import { StatusBar as ExpoStatus } from 'expo-status-bar';
 import { NavigationContainer } from '@react-navigation/native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { DrawerContentScrollView, createDrawerNavigator } from '@react-navigation/drawer';
 import { api, connectEvents, loadKey, saveConf, tryConf, clearConf, conf, cfgGet, K_SERVER, K_TOKEN, K_EMAIL, K_PASS, loginEmail, loginGoogle } from './src/session';
 import { C } from './src/theme';
@@ -244,10 +245,11 @@ const DR = StyleSheet.create({
 });
 
 function SideMenu({ working, approvalsN, notes, navigation, state }) {
+  const ins = useSafeAreaInsets();
   const active = state && state.routes ? state.routes[state.index].name : 'Team';
   return (
     <DrawerContentScrollView
-      contentContainerStyle={{ paddingHorizontal: 12, paddingTop: 46 }}
+      contentContainerStyle={{ paddingHorizontal: 12, paddingTop: 14 + ins.top }}
       style={DR.wrap}>
       <View style={{ paddingHorizontal: 6, marginBottom: 4 }}>
         <Text style={DR.brand}>🤖 ZerotheBot</Text>
@@ -375,10 +377,11 @@ function Login({ onDone }) {
 // ----------------------------------------------------------------- home
 function Home({ bots, busy, apps, noteBadge, onOpen, onPlug, onBell, onNew, onDecide, onBotLong, onMenu }) {
   const [modal, setModal] = useState(null);
+  const ins = useSafeAreaInsets();
   const working = Object.keys(busy).length;
   return (
     <View style={n.screen}>
-      <View style={n.hdr}>
+      <View style={[n.hdr, { paddingTop: 14 + ins.top }]}>
         <Pressable onPress={onMenu} hitSlop={8}><View style={n.hbtn}><Text style={{ fontSize: 16, color: C.text }}>☰</Text></View></Pressable>
         <View style={{ flex: 1 }}>
           <Text style={n.brand}>ZerotheBot</Text>
