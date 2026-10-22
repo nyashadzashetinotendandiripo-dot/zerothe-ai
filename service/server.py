@@ -797,8 +797,10 @@ def create_app(engine: Engine, token: str) -> FastAPI:
         return {"message": eng.plugins.test(pid)}
 
     @app.post("/api/plugins/{pid}/connect", dependencies=[api])
-    def plugins_connect(pid: str, mobile: int = 0) -> dict:
-        return {"url": eng.plugins.begin_oauth(pid, eng.base_url.rstrip("/") + "/oauth/callback", mobile=bool(mobile))}
+    def plugins_connect(pid: str, request: Request, mobile: int = 0) -> dict:
+        # Vendors must be able to reach the callback: use the public tunnel URL when
+        # this request came through one, not the loopback address.
+        return {"url": eng.plugins.begin_oauth(pid, _pub_origin(request) + "/oauth/callback", mobile=bool(mobile))}
 
     @app.post("/api/plugins/{pid}/disconnect", dependencies=[api])
     def plugins_disconnect(pid: str) -> dict:
@@ -888,7 +890,7 @@ google.accounts.id.renderButton(document.getElementById('gbtn'),
         ov = str(eng.settings.get("auth.public_base_url") or "").rstrip("/")
         if ov:
             return ov
-        host = request.headers.get("host") or "127.0.0.1:8765"
+        host = (request.headers.get("x-forwarded-host") or request.headers.get("host") or "127.0.0.1:8765")
         name = host.split(":")[0]
         public = "." in name and not name.replace(".", "").isdigit() and name != "localhost"
         proto = "https" if public else (request.headers.get("x-forwarded-proto") or "http")

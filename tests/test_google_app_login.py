@@ -42,6 +42,15 @@ class GoogleAppFlowTests(unittest.TestCase):
         self.assertEqual(r.status_code, 307)
         self.assertIn("redirect_uri=https%3A%2F%2F8765-x.instabox.tech", r.headers["location"])
 
+    def test_start_prefers_forwarded_host(self):
+        # Tunnels rewrite Host to 127.0.0.1 and put the real name in X-Forwarded-Host.
+        self.eng.settings.set("auth.google_client_id", "1234.apps.googleusercontent.com")
+        self.eng.settings.set("auth.google_client_secret", "s3cret")
+        r = self.c.get("/auth/google-app/start", headers={
+            "host": "127.0.0.1:8765", "x-forwarded-host": "8765-x.instabox.tech", "x-forwarded-proto": "https"})
+        self.assertEqual(r.status_code, 307)
+        self.assertIn("redirect_uri=https%3A%2F%2F8765-x.instabox.tech%2Fauth%2Fgoogle-app%2Fcb", r.headers["location"])
+
     def test_api_google_requires_client_id(self):
         self.eng.settings.set("auth.google_client_id", "")
         r = self.c.post("/api/google", json={"id_token": "a.b.c"})
