@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState, useCallback } from 'react';
 import { SafeAreaProvider, useSafeAreaInsets } from 'react-native-safe-area-context';
-import { Animated, Modal, View, Text, TextInput, Pressable, FlatList, StyleSheet } from 'react-native';
+import { Animated, Modal, View, Text, TextInput, Pressable, FlatList, StyleSheet, Linking } from 'react-native';
 import { StatusBar as ExpoStatus } from 'expo-status-bar';
 import { api, connectEvents, loadKey, saveConf, tryConf, clearConf, conf, cfgGet, K_SERVER, K_TOKEN, K_EMAIL, K_PASS, loginEmail, loginGoogle } from './src/session';
 import { C } from './src/theme';
@@ -395,8 +395,10 @@ function Login({ onDone }) {
   const [pass, setPass] = useState('');
   const [err, setErr] = useState('');
   const [go, setGo] = useState(false);
-  const [ov, setOv] = useState(null);         // Google sign-in overlay
+  const [ov, setOv] = useState(null);         // Google sign-in overlay (unused now; kept for AuthModal webview fallback)
   const gDone = useRef(false);
+  const baseRef = useRef(base);
+  baseRef.current = base;
   const save = async () => {
     setErr(''); setGo(true);
     try {
@@ -408,18 +410,20 @@ function Login({ onDone }) {
     setGo(false);
   };
   const google = () => {
+    // System-browser flow: Google refuses embedded webviews, so sign in in real Chrome.
+    // The server bounces back to the app via the zerothebot:// deep link.
     setErr('');
     const b = String(base || '').replace(/\/+$/, '');
     if (!/^https?:\/\/.+/.test(b)) { setErr('Enter the server address first.'); return; }
     gDone.current = false;
-    setOv(b + '/auth/google-login');
+    Linking.openURL(b + '/auth/google-app/start').catch((e) => setErr('Could not open the browser: ' + (e.message || e)));
   };
   const finishGoogle = async (tok) => {
     setOv(null);
-    const b = String(base || '').replace(/\/+$/, '');
+    const b = String(baseRef.current || '').replace(/\/+$/, '');
     try {
       if (String(tok).includes('.')) {
-        // redirect mode: the server already verified + bound the owner; tok IS the session
+        // google-app flow: the server verified + bound the owner; tok IS the session
         await saveConf(b, tok, '', '');
         onDone();
         return;
@@ -429,11 +433,16 @@ function Login({ onDone }) {
       onDone();
     } catch (e) { setErr(e.message || 'Google sign-in failed.'); }
   };
-  const onGUrl = (u) => {
-    if (!u || gDone.current) return;
-    const m = String(u).match(/\/auth\/google-done\?tok=([^&]+)/);
-    if (m) { gDone.current = true; finishGoogle(decodeURIComponent(m[1])); }
-  };
+  useEffect(() => {
+    const handle = ({ url }) => {
+      const m = String(url || '').match(/[?&]tok=([^&]+)/);
+      if (m && !gDone.current) { gDone.current = true; finishGoogle(decodeURIComponent(m[1])); }
+    };
+    let sub = { remove: () => {} };
+    try { sub = Linking.addEventListener('url', handle); } catch (e) { /* older RN */ }
+    Linking.getInitialURL().then((u) => handle({ url: u })).catch(() => {});
+    return () => sub.remove && sub.remove();
+  }, []);
   const ready = !!mail.trim() && !!pass;
   return (
     <View style={[l.box, { justifyContent: 'flex-start', paddingTop: 80 }]}>
@@ -457,7 +466,6 @@ function Login({ onDone }) {
         <AuthModal
           o={{ url: ov, auto: false, name: 'Google', title: 'Sign in with Google' }}
           onClose={() => setOv(null)}
-          onUrl={onGUrl}
         />
       )}
     </View>
