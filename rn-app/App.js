@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState, useCallback } from 'react';
-import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { SafeAreaProvider, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Animated, Modal, View, Text, TextInput, Pressable, FlatList, StyleSheet } from 'react-native';
 import { StatusBar as ExpoStatus } from 'expo-status-bar';
 import { api, connectEvents, loadKey, saveConf, tryConf, clearConf, conf, cfgGet, K_SERVER, K_TOKEN, K_EMAIL, K_PASS, loginEmail, loginGoogle } from './src/session';
@@ -37,6 +37,14 @@ function asky(a) {
 }
 
 export default function App() {
+  return (
+    <SafeAreaProvider>
+      <ZbRoot />
+    </SafeAreaProvider>
+  );
+}
+
+function ZbRoot() {
   const [ready, setReady] = useState(false);
   const [signed, setSigned] = useState(false);
   const [screen, setScreen] = useState('home');            // dash home chat market approvals plugins mcp routines files wallet set
