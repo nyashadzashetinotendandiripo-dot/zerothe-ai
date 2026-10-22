@@ -1,8 +1,8 @@
 // Connectors & MCP servers: grant apps to your Bots from the phone.
 // Authorization and setup pages open in an in-app overlay (WebView), closing
 // automatically when the platform hands control back to the ZerotheBot server.
-import React, { useCallback, useState } from 'react';
-import { View, Text, TextInput, Pressable, ScrollView, Modal, StyleSheet, ActivityIndicator } from 'react-native';
+import React, { useCallback, useEffect, useState } from 'react';
+import { View, Text, TextInput, Pressable, ScrollView, Modal, StyleSheet, ActivityIndicator, Linking, Platform } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { WebView } from 'react-native-webview';
 import { api, API_BASE } from './session';
@@ -51,6 +51,20 @@ function Connectors() {
     try { const d = await api('/api/plugins'); setRows(d.plugins || []); } catch (e) { setMsg(String(e.message || e)); }
   }, []);
   useState(() => { load(); }, []);
+  // System-browser sign-in (Google et al. block embedded webviews): the server
+  // bounces back via zerothebot://plugins/go once the vendor approves.
+  useEffect(() => {
+    const onUrl = ({ url }) => {
+      const m = String(url || '').match(/plugins\/go\?pid=([^&]+)/);
+      if (!m) return;
+      setMsg(`${m[1]} connected ✓`);
+      load();
+    };
+    let sub = { remove: () => {} };
+    try { sub = Linking.addEventListener('url', onUrl); } catch (e) { /* older RN */ }
+    Linking.getInitialURL().then((u) => u && onUrl({ url: u })).catch(() => {});
+    return () => sub.remove && sub.remove();
+  }, [load]);
   const done = async (id) => {
     setOverlay(null); setMsg('');
     await load();
@@ -60,9 +74,17 @@ function Connectors() {
     setBusyId(p.id + what); setMsg('');
     try {
       if (what === 'connect') {
-        const d = await api('/api/plugins/' + p.id + '/connect', { method: 'POST', body: '{}' });
-        if (/^https?:/.test(d.url || '')) setOverlay({ url: d.url, name: p.name, auto: true, pid: p.id });
-        else setMsg(p.id + ': could not start the sign-in.');
+        if (Platform.OS !== 'web') {
+          const d = await api('/api/plugins/' + p.id + '/connect?mobile=1', { method: 'POST', body: '{}' });
+          if (/^https?:/.test(d.url || '')) {
+            setMsg('Finish signing in to ' + p.name + ' in your browser…');
+            await Linking.openURL(d.url);
+          } else setMsg(p.id + ': could not start the sign-in.');
+        } else {
+          const d = await api('/api/plugins/' + p.id + '/connect', { method: 'POST', body: '{}' });
+          if (/^https?:/.test(d.url || '')) setOverlay({ url: d.url, name: p.name, auto: true, pid: p.id });
+          else setMsg(p.id + ': could not start the sign-in.');
+        }
       } else if (what === 'setup' && p.setup_url) {
         setOverlay({ url: p.setup_url, name: p.name, auto: false, pid: '' });
       } else if (what === 'test') {
@@ -81,8 +103,8 @@ function Connectors() {
         <Pressable onPress={load} style={[l.btn, { backgroundColor: C.panel2, borderWidth: 1, borderColor: C.line }]}><Text style={[l.btnT, { color: C.text }]}>↻ Refresh</Text></Pressable>
         {!!msg && <Text style={l.msg}>{msg}</Text>}
         <Text style={st.foot}>
-          Sign-in and setup pages open right here in the app. When you approve, it closes by
-          itself and the light turns green. Bots see a connector's tools only after you grant it in the Bot's settings.
+          Sign-in opens in your browser and comes back to the app by itself. Setup pages open
+          right here in the app. Bots see a connector's tools only after you grant it in the Bot's settings.
         </Text>
       </ScrollView>
       {!!overlay && <AuthModal o={overlay} onClose={() => done(overlay.auto ? overlay.pid : '')} />}

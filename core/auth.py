@@ -150,8 +150,12 @@ def _google_keys() -> list[dict]:
     return keys
 
 
-def verify_google(id_token: str) -> str:
-    """Verify a Google ID token; return the verified email. Raises ValueError."""
+def verify_google(id_token: str, audience: str = "") -> str:
+    """Verify a Google ID token; return the verified email. Raises ValueError.
+
+    ``audience`` is our OAuth client id: when given, tokens minted for any other
+    app are rejected (otherwise a token from a stranger's app would sign in).
+    """
     if not id_token or id_token.count(".") != 2:
         raise ValueError("That Google sign-in did not come through.")
     try:
@@ -181,6 +185,11 @@ def verify_google(id_token: str) -> str:
 
     if payload.get("iss") not in _GOOGLE_ISSUERS:
         raise ValueError("That Google sign-in is from the wrong issuer.")
+    if audience:
+        aud = payload.get("aud")
+        auds = aud if isinstance(aud, list) else [aud]
+        if audience not in [str(a) for a in auds]:
+            raise ValueError("That Google sign-in was issued for a different app.")
     if payload.get("exp", 0) < time.time():
         raise ValueError("That Google sign-in expired; try again.")
     addr = payload.get("email")

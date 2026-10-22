@@ -35,6 +35,18 @@ class GoogleAppFlowTests(unittest.TestCase):
         self.assertEqual(r.status_code, 200)
         self.assertIn("not set up", r.text.lower())
 
+    def test_start_uses_https_even_if_proxy_forgets_to_say_so(self):
+        self.eng.settings.set("auth.google_client_id", "1234.apps.googleusercontent.com")
+        self.eng.settings.set("auth.google_client_secret", "s3cret")
+        r = self.c.get("/auth/google-app/start", headers={"host": "8765-x.instabox.tech", "x-forwarded-proto": "http"})
+        self.assertEqual(r.status_code, 307)
+        self.assertIn("redirect_uri=https%3A%2F%2F8765-x.instabox.tech", r.headers["location"])
+
+    def test_api_google_requires_client_id(self):
+        self.eng.settings.set("auth.google_client_id", "")
+        r = self.c.post("/api/google", json={"id_token": "a.b.c"})
+        self.assertEqual(r.status_code, 403)
+
     def test_callback_rejects_bad_state(self):
         self.eng.settings.set("auth.google_client_id", "1234.apps.googleusercontent.com")
         self.eng.settings.set("auth.google_client_secret", "s3cret")

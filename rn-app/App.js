@@ -83,7 +83,14 @@ function ZbRoot() {
     await loadKey();
     const saved = await cfgGet(K_SERVER), tok = await cfgGet(K_TOKEN);
     const mail = await cfgGet(K_EMAIL), pass = await cfgGet(K_PASS);
-    if (saved && tok) { await saveConf(saved, tok); setSigned(true); await refresh(); }
+    if (saved && tok) {
+      await saveConf(saved, tok);
+      try { await api('/api/bootstrap'); setSigned(true); await refresh(); }
+      catch (e) {
+        // A dead/expired session must not leave the app signed-in with no data.
+        if (String(e.message || e) === 'Not authorized') await clearConf();
+      }
+    }
     else if (saved && mail && pass) {
       // silent re-login with the stored web credentials (cookie session)
       try {

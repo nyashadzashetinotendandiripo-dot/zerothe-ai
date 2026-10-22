@@ -49,6 +49,8 @@ class PluginDef:
     version: str = "1.0.0"
     fields: list[dict] = field(default_factory=list)   # {key,label,secret,required,placeholder,default}
     oauth: dict | None = None      # {"provider":"google","scopes":[...]}
+    setup_url: str = ""            # browser link that starts the vendor-side setup (Connect or token page)
+    setup_label: str = ""          # short label for the setup link button
     build: Callable[["Conn"], list[ToolSpec]] | None = None
     check: Callable[["Conn"], str] | None = None
     path: Path | None = None
@@ -93,28 +95,52 @@ class GoogleOAuth:
         self._cache: dict[str, tuple[str, float]] = {}
         self._lock = threading.Lock()
 
-    def auth_url(self, plugin_id: str, client_id: str, scopes: list[str], redirect_uri: str) -> str:
+    def auth_url(self, plugin_id: str, client_id: str, scopes: list[str], redirect_uri: str, *, auth_url: str = AUTH,
+                 token_url: str = TOKEN, secret_style: str = "body", extra: dict | None = None,
+                 mobile: bool = False) -> str:
         state = pysecrets.token_urlsafe(24)
         verifier = pysecrets.token_urlsafe(64)
         challenge = base64.urlsafe_b64encode(hashlib.sha256(verifier.encode()).digest()).rstrip(b"=").decode()
-        self.pending[state] = {"plugin": plugin_id, "verifier": verifier, "redirect": redirect_uri, "ts": time.time()}
+        self.pending[state] = {"plugin": plugin_id, "verifier": verifier, "redirect": redirect_uri, "ts": time.time(),
+                               "token_url": token_url, "secret_style": secret_style, "mobile": bool(mobile)}
         q = {"client_id": client_id, "redirect_uri": redirect_uri, "response_type": "code", "scope": " ".join(scopes),
              "access_type": "offline", "prompt": "consent", "state": state, "code_challenge": challenge, "code_challenge_method": "S256"}
-        return f"{self.AUTH}?{urlencode(q)}"
+        q.update(extra or {})
+        return f"{auth_url}?{urlencode(q)}"
 
-    def exchange(self, state: str, code: str, client_id: str, client_secret: str) -> str:
+    def exchange(self, state: str, code: str, client_id: str, client_secret: str, *, token_url: str | None = None,
+                 secret_style: str = "body") -> str:
         import httpx
         p = self.pending.pop(state, None)
         if not p or time.time() - p["ts"] > 900:
             raise ConnectorError("This sign-in link expired or was not started here. Start again from Plugins.")
-        r = httpx.post(self.TOKEN, data={"code": code, "client_id": client_id, "client_secret": client_secret, "redirect_uri": p["redirect"],
-                                         "grant_type": "authorization_code", "code_verifier": p["verifier"]}, timeout=30)
+        payload = {"code": code, "redirect_uri": p["redirect"], "grant_type": "authorization_code", "code_verifier": p["verifier"]}
+        headers = None
+        if secret_style == "basic" and client_secret:
+            headers = {"Authorization": "Basic " + base64.b64encode(f"{client_id}:{client_secret}".encode()).decode()}
+        else:   # public clients (PKCE, no secret) authenticate with the client id in the body
+            payload["client_id"] = client_id
+            if client_secret:
+                payload["client_secret"] = client_secret
+        r = httpx.post(token_url or self.TOKEN, data=payload, headers=headers, timeout=30)
         if r.status_code >= 400:
             raise ConnectorError(f"Google rejected the sign-in: {short(r.text, 200)}")
         data = r.json()
-        if not data.get("refresh_token"):
-            raise ConnectorError("Google did not return a refresh token. Remove the app's access in your Google account and try again.")
-        secrets.set_secret(f"plugin:{p['plugin']}:refresh_token", data["refresh_token"])
+        if not data.get("access_token"):
+            raise ConnectorError(f"Sign-in failed: {short(json.dumps(data, default=str)[:200], 200)}")
+        if data.get("refresh_token"):
+            secrets.set_secret(f"plugin:{p['plugin']}:refresh_token", data["refresh_token"])
+        else:
+            # Providers with long-lived access tokens (e.g. Asana) may not rotate:
+            # keep the access token as the stored credential so Connect still counts.
+            secrets.set_secret(f"plugin:{p['plugin']}:refresh_token", data["access_token"])
+            secrets.set_secret(f"plugin:{p['plugin']}:token", data["access_token"])
+        # Some vendors (Salesforce) require the original redirect_uri
+        # on later refresh calls, so remember which one this sign-in used.
+        try:
+            secrets.set_secret(f"plugin:{p['plugin']}:redirect_uri", p["redirect"])
+        except Exception:  # noqa: BLE001
+            pass
         with self._lock:
             self._cache[p["plugin"]] = (data["access_token"], time.time() + int(data.get("expires_in", 3600)) - 60)
         return p["plugin"]
@@ -138,6 +164,54 @@ class GoogleOAuth:
         return data["access_token"]
 
 
+_OAUTH2_CACHE: dict[str, tuple[dict, float]] = {}
+
+
+def stored_redirect_uri(pid: str) -> str:
+    """The redirect URI a plugin's Connect sign-in used (remembered at exchange).
+
+    Some providers (Salesforce) require it back on refresh_token grants.
+    """
+    try:
+        return secrets.get_secret(f"plugin:{pid}:redirect_uri") or ""
+    except Exception:  # noqa: BLE001
+        return ""
+
+
+def oauth2_token(c: Conn, pid: str, token_url: str, payload: dict, headers: dict | None = None,
+                 rotate_field: str | None = "refresh_token") -> dict:
+    """Generic OAuth2 token grant for plugins (refresh_token, password, account_credentials...).
+
+    Caches the token response per plugin id. When the provider rotates the credential named by
+    rotate_field (Xero, QuickBooks and Sage hand back a new refresh token on every refresh),
+    the new value is written back to the credential store. Raises ConnectorError on failure.
+    """
+    now = time.time()
+    hit = _OAUTH2_CACHE.get(pid)
+    if hit and hit[1] > now:
+        return hit[0]
+    import httpx
+    try:
+        r = httpx.post(token_url, data=payload, headers=headers, timeout=30)
+    except Exception as e:  # noqa: BLE001
+        raise ConnectorError(f"Could not reach the sign-in server: {e}")
+    if r.status_code >= 400:
+        raise ConnectorError(f"Sign-in failed (HTTP {r.status_code}). Check the plugin credentials in Plugins. {short(r.text, 200)}")
+    try:
+        data = r.json()
+    except ValueError:
+        raise ConnectorError("Sign-in returned an unexpected answer.")
+    if not isinstance(data, dict) or not data.get("access_token"):
+        raise ConnectorError(f"Sign-in failed: {short(json.dumps(data, default=str)[:200], 200)}")
+    _OAUTH2_CACHE[pid] = (data, now + int(data.get("expires_in", 3600) or 3600) - 60)
+    if rotate_field and data.get(rotate_field) and data[rotate_field] != payload.get(rotate_field):
+        try:
+            secrets.set_secret(f"plugin:{pid}:{rotate_field}", data[rotate_field])
+        except Exception:  # noqa: BLE001
+            pass
+    return data
+
+
 # ----------------------------------------------------------------------------- per-plugin runtime
 class Conn:
     """What a plugin's tool builder uses: config, secrets, and a policy-checked HTTP client."""
@@ -146,6 +220,31 @@ class Conn:
         self.mgr, self.pdef = mgr, pdef
 
     def cfg(self, key: str, default: str = "") -> str:
+        # Declarative OAuth first: {{secret.token}} resolves to a fresh access
+        # token when the user signed in via Connect (refresh_token stored),
+        # so Connect wins over an older pasted token. Falls back to the stored
+        # token when the refresh is unavailable or fails.
+        if key == "token":
+            o = self.pdef.oauth or {}
+            rt = self.mgr.config_value(self.pdef.id, "refresh_token")
+            if o and rt:
+                try:
+                    cid = self.mgr.config_value(self.pdef.id, "client_id")
+                    csec = self.mgr.config_value(self.pdef.id, "client_secret")
+                    payload: dict[str, str] = {"grant_type": "refresh_token", "refresh_token": rt}
+                    headers: dict[str, str] | None = None
+                    if (o.get("secret_style") or "body") == "basic" and csec:
+                        headers = {"Authorization": "Basic " + base64.b64encode(f"{cid}:{csec}".encode()).decode()}
+                    else:
+                        if cid:
+                            payload["client_id"] = cid
+                        if csec:
+                            payload["client_secret"] = csec
+                    data = oauth2_token(self, self.pdef.id, o.get("token_url") or GoogleOAuth.TOKEN, payload, headers=headers)
+                    if data.get("access_token"):
+                        return data["access_token"]
+                except Exception:  # noqa: BLE001
+                    pass
         return self.mgr.config_value(self.pdef.id, key) or default
 
     def http(self, ctx: ToolContext, method: str, url: str, *, headers: dict | None = None, params: dict | None = None,
@@ -842,7 +941,8 @@ def builtin_defs() -> list[PluginDef]:
         PluginDef("gmail", "Gmail", "Read, search, draft and (with approval) send email.", fields=GOOGLE_FIELDS,
                   oauth={"provider": "google", "scopes": ["https://www.googleapis.com/auth/gmail.modify"]}, build=build_gmail,
                   check=_google_check("https://gmail.googleapis.com/gmail/v1/users/me/profile"),
-                  help="Create an OAuth client (type: Desktop app) in Google Cloud Console, enable the Gmail API, paste the client id/secret, then press Connect."),
+                  help="Create an OAuth client (type: Desktop app) in Google Cloud Console, enable the Gmail API, paste the client id/secret, then press Connect.",
+                  setup_url="https://console.cloud.google.com/apis/credentials", setup_label="Open Google Cloud Console"),
         PluginDef("google_calendar", "Google Calendar", "Read your calendar, find free time, create events.", fields=GOOGLE_FIELDS,
                   oauth={"provider": "google", "scopes": ["https://www.googleapis.com/auth/calendar"]}, build=build_calendar,
                   check=_google_check("https://www.googleapis.com/calendar/v3/users/me/calendarList?maxResults=1"),
@@ -857,26 +957,31 @@ def builtin_defs() -> list[PluginDef]:
                   help="Uses the same Google OAuth client as Gmail if you leave the fields blank. Enable the Google Docs, Sheets, Slides and Drive APIs."),
         PluginDef("slack", "Slack", "Read channels and post messages (with approval).",
                   fields=[{"key": "bot_token", "label": "Bot token (xoxb-...)", "secret": True, "required": True},
-                          {"key": "user_token", "label": "User token (xoxp-..., optional, for search)", "secret": True, "required": False}],
+                           {"key": "user_token", "label": "User token (xoxp-..., optional, for search)", "secret": True, "required": False}],
                   build=build_slack, check=check_http(lambda c: ("https://slack.com/api/auth.test", {"Authorization": f"Bearer {c.cfg('bot_token') or c.cfg('user_token')}"})),
-                  help="Create a Slack app, add scopes channels:read, channels:history, groups:read, chat:write, and install it to your workspace."),
+                  help="Create a Slack app, add scopes channels:read, channels:history, groups:read, chat:write, and install it to your workspace.",
+                  setup_url="https://api.slack.com/apps", setup_label="Create a Slack app"),
         PluginDef("notion", "Notion", "Search, read and write Notion pages.", fields=[{"key": "token", "label": "Internal integration token", "secret": True, "required": True}],
                   build=build_notion, check=check_http(lambda c: ("https://api.notion.com/v1/users/me", {"Authorization": f"Bearer {c.cfg('token')}", "Notion-Version": "2022-06-28"})),
-                  help="Create an internal integration at notion.so/my-integrations and share your pages with it."),
+                  help="Create an internal integration at notion.so/my-integrations and share your pages with it.",
+                  setup_url="https://www.notion.so/my-integrations", setup_label="Create a Notion integration"),
         PluginDef("linear", "Linear", "Search, read, create and comment on issues.", fields=[{"key": "api_key", "label": "Personal API key", "secret": True, "required": True}],
-                  build=build_linear, help="Create a personal API key in Linear > Settings > API."),
+                  build=build_linear, help="Create a personal API key in Linear > Settings > API.",
+                  setup_url="https://linear.app/settings/api", setup_label="Create a Linear API key"),
         PluginDef("jira", "Jira", "Search, read, create and comment on Jira Cloud issues.",
                   fields=[{"key": "base_url", "label": "Site URL", "secret": False, "required": True, "placeholder": "https://yourteam.atlassian.net"},
-                          {"key": "email", "label": "Account email", "secret": False, "required": True},
-                          {"key": "api_token", "label": "API token", "secret": True, "required": True}], build=build_jira,
+                           {"key": "email", "label": "Account email", "secret": False, "required": True},
+                           {"key": "api_token", "label": "API token", "secret": True, "required": True}], build=build_jira,
                   check=check_http(lambda c: (c.cfg("base_url").rstrip("/") + "/rest/api/3/myself",
                                                {"Authorization": "Basic " + base64.b64encode(f"{c.cfg('email')}:{c.cfg('api_token')}".encode()).decode()})),
-                  help="Create an API token at id.atlassian.com > Security > API tokens."),
+                  help="Create an API token at id.atlassian.com > Security > API tokens.",
+                  setup_url="https://id.atlassian.com/manage-profile/security/api-tokens", setup_label="Create a Jira API token"),
         PluginDef("github", "GitHub", "Issues, pull requests, files and code search.",
                   fields=[{"key": "token", "label": "Personal access token", "secret": True, "required": True},
-                          {"key": "api_url", "label": "API URL (GitHub Enterprise only)", "secret": False, "required": False, "placeholder": "https://api.github.com"}],
+                           {"key": "api_url", "label": "API URL (GitHub Enterprise only)", "secret": False, "required": False, "placeholder": "https://api.github.com"}],
                   build=build_github, check=check_http(lambda c: ((c.cfg("api_url") or "https://api.github.com").rstrip("/") + "/user", {"Authorization": f"Bearer {c.cfg('token')}"})),
-                  help="Create a fine-grained token with Issues, Pull requests and Contents access to the repos you want."),
+                  help="Create a fine-grained token with Issues, Pull requests and Contents access to the repos you want.",
+                  setup_url="https://github.com/settings/tokens", setup_label="Create a GitHub token"),
     ]
 
 
@@ -980,7 +1085,8 @@ def build_python(path: Path, manifest: dict) -> Callable[[Conn], list[ToolSpec]]
                 out_ = _fn(ctx, args) if len(inspect.signature(_fn).parameters) >= 2 else _fn(args)
                 return out_ if isinstance(out_, ToolResult) else _res(out_, manifest["name"])
             out.append(ToolSpec(safe_name(f"{manifest['id']}_{t['name']}"), t.get("description", t["name"]), t.get("input_schema") or obj(), handler, risk=risk,
-                                label=lambda a, _n=t["name"], _p=manifest["name"]: f"{_p}: {_n}", read_only=not risk))
+                                label=lambda a, _n=t["name"], _p=manifest["name"]: f"{_p}: {_n}", read_only=not risk,
+                                needs_screen=bool(t.get("needs_screen", False))))
         return out
     return build
 
@@ -1056,11 +1162,33 @@ class PluginManager:
 
     def _def_from_manifest(self, m: dict, folder: Path) -> PluginDef:
         pid = re.sub(r"[^a-z0-9_-]", "-", str(m["id"]).lower())
+        # Stale installs: an older copy in the data dir may lack the oauth/setup
+        # links that the bundled manifest already ships. Bundled installs always
+        # adopt the bundled sign-in block (oauth endpoints migrate, e.g. HubSpot
+        # v1 -> versioned token URL); other sources only get gaps filled.
+        try:
+            bundled = paths.resource_root() / "plugins" / pid / "plugin.json"
+            if bundled.is_file():
+                bm = json.loads(bundled.read_text(encoding="utf-8"))
+                src = self.db.scalar("SELECT source FROM plugins WHERE id=?", (pid,), "local") or "local"
+                if src.startswith("bundled:"):
+                    for k in ("oauth", "setup_url", "setup_label", "help"):
+                        if bm.get(k):
+                            m[k] = bm[k]
+                else:
+                    for k in ("oauth", "setup_url", "setup_label"):
+                        if bm.get(k) and not m.get(k):
+                            m[k] = bm[k]
+                    if bm.get("help") and not m.get("help"):
+                        m["help"] = bm["help"]
+        except Exception:  # noqa: BLE001
+            pass
         kind = "python" if m.get("entry") else "declarative"
         build = build_python(folder, {**m, "id": pid}) if kind == "python" else build_declarative({**m, "id": pid})
         return PluginDef(pid, m.get("name", pid), m.get("description", ""), kind=kind, version=m.get("version", "1.0.0"), fields=m.get("fields", []),
                          build=build, path=folder, source=(self.db.scalar("SELECT source FROM plugins WHERE id=?", (pid,), "local") or "local"),
-                         skills=m.get("skills", []), help=m.get("help", ""))
+                         skills=m.get("skills", []), help=m.get("help", ""), oauth=m.get("oauth"),
+                         setup_url=m.get("setup_url", "") or "", setup_label=m.get("setup_label", "") or "")
 
     # -- config ----------------------------------------------------------------
     def config_value(self, pid: str, key: str) -> str:
@@ -1098,13 +1226,30 @@ class PluginManager:
         d = self.defs.get(pid)
         if not d:
             return False
+        rt = secrets.get_secret(f"plugin:{pid}:refresh_token")
+        tok = self.config_value(pid, "token")
         for f in d.fields:
             if f.get("required") and not self.config_value(pid, f["key"]):
-                if d.id == "google_calendar" and f["key"] in ("client_id", "client_secret") and self.config_value("gmail", f["key"]):
+                if (d.oauth or {}).get("provider") == "google" and d.id != "gmail" \
+                        and f["key"] in ("client_id", "client_secret") and self.config_value("gmail", f["key"]):
+                    continue   # uses Gmail's OAuth client when its own fields are blank (as the help text says)
+                if f["key"] == "token" and rt and self.config_value(pid, "client_id"):
+                    continue   # signed in via Connect (OAuth) instead of a pasted token
+                if pid == "zoom" and f["key"] in ("client_id", "client_secret") and rt:
                     continue
                 return False
-        if d.oauth and not secrets.get_secret(f"plugin:{pid}:refresh_token"):
-            return False
+        if d.oauth and not rt:
+            # Alternative credential paths that need no browser sign-in.
+            if tok:
+                pass   # pasted PAT / bearer / private-app token (asana, hubspot, x)
+            elif pid == "zoom" and self.config_value(pid, "account_id"):
+                pass   # Server-to-Server OAuth path
+            elif pid == "salesforce" and self.config_value(pid, "username") and self.config_value(pid, "password"):
+                pass   # username-password OAuth flow
+            elif pid == "onshape" and self.config_value(pid, "access_key") and self.config_value(pid, "secret_key"):
+                pass   # API key pair
+            else:
+                return False
         return True
 
     def info(self, pid: str) -> dict:
@@ -1117,6 +1262,7 @@ class PluginManager:
         return {"id": d.id, "name": d.name, "description": d.description, "kind": d.kind, "version": d.version, "help": d.help,
                 "fields": [{**f, "set": bool(self.config_value(d.id, f["key"])), "value": ("" if f.get("secret") else self.config_value(d.id, f["key"]))} for f in d.fields],
                 "oauth": bool(d.oauth), "connected": bool(not d.oauth or secrets.get_secret(f"plugin:{d.id}:refresh_token")),
+                "setup_url": d.setup_url, "setup_label": d.setup_label or "Open setup",
                 "configured": self.configured(d.id), "allowed": plugin_allowed(self.admin, d.id), "installed": d.kind != "builtin" and d.kind != "rest",
                 "source": d.source, "tools": [{"name": t.name, "description": t.description, "read_only": t.read_only or t.risk is None} for t in specs],
                 "removable": d.kind in ("declarative", "python", "rest")}
@@ -1149,24 +1295,45 @@ class PluginManager:
         return d.check(Conn(self, d))
 
     # -- OAuth ----------------------------------------------------------------------
-    def begin_oauth(self, pid: str, redirect_uri: str) -> str:
+    def begin_oauth(self, pid: str, redirect_uri: str, mobile: bool = False) -> str:
         d = self.defs.get(pid)
         if not d or not d.oauth:
             raise ValueError("This plugin does not use sign-in.")
         c = Conn(self, d)
-        cid = c.cfg("client_id") or (self.config_value("gmail", "client_id") if pid != "gmail" else "")
+        cid = c.cfg("client_id")
+        if not cid and pid != "gmail" and (d.oauth or {}).get("provider") == "google":
+            cid = self.config_value("gmail", "client_id")
         if not cid:
             raise ConnectorError("Enter the OAuth client ID and secret first.")
-        return self.google.auth_url(pid, cid, d.oauth["scopes"], redirect_uri)
+        o = dict(d.oauth)
+        auth_url, token_url = o.get("auth_url") or GoogleOAuth.AUTH, o.get("token_url") or GoogleOAuth.TOKEN
+        if pid == "salesforce":  # sandbox vs production login host
+            base = (c.cfg("login_url") or "https://login.salesforce.com").rstrip("/")
+            auth_url, token_url = base + "/services/oauth2/authorize", base + "/services/oauth2/token"
+        if pid == "teams":  # tenant-specific Microsoft endpoints
+            tenant = (c.cfg("tenant") or "common").strip() or "common"
+            auth_url = (o.get("auth_url") or "").replace("common", tenant)
+            token_url = (o.get("token_url") or "").replace("common", tenant)
+        # Region/account overrides (e.g. Sage token host, self-hosted vendors):
+        # a plugin may expose optional auth_url/token_url config fields.
+        auth_url = c.cfg("auth_url") or auth_url
+        token_url = c.cfg("token_url") or token_url
+        return self.google.auth_url(pid, cid, o["scopes"], redirect_uri, auth_url=auth_url, token_url=token_url,
+                                    secret_style=o.get("secret_style", "body"), extra=o.get("extra_auth"),
+                                    mobile=mobile)
 
     def finish_oauth(self, state: str, code: str) -> str:
         p = self.google.pending.get(state)
         if not p:
             raise ConnectorError("Unknown or expired sign-in request.")
         c = Conn(self, self.defs[p["plugin"]])
-        cid = c.cfg("client_id") or self.config_value("gmail", "client_id")
-        csec = c.cfg("client_secret") or self.config_value("gmail", "client_secret")
-        return self.google.exchange(state, code, cid, csec)
+        d = self.defs[p["plugin"]]
+        cid = c.cfg("client_id")
+        csec = c.cfg("client_secret")
+        if (d.oauth or {}).get("provider") == "google":
+            cid = cid or self.config_value("gmail", "client_id")
+            csec = csec or self.config_value("gmail", "client_secret")
+        return self.google.exchange(state, code, cid, csec, token_url=p.get("token_url"), secret_style=p.get("secret_style", "body"))
 
     # -- install / uninstall -----------------------------------------------------------
     def catalog(self) -> list[dict]:

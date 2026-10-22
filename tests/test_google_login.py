@@ -67,7 +67,11 @@ class GoogleLoginTests(unittest.TestCase):
         # Create account, then a malformed id_token -> 401
         self.c.post("/api/signup", json={"email": "owner@test.dev", "password": "test pass 123"})
         r = self.c.post("/api/google", json={"id_token": "not-a-token"})
+        self.assertEqual(r.status_code, 403)   # client id not configured yet
+        self.eng.settings.set("auth.google_client_id", "1234.apps.googleusercontent.com")
+        r = self.c.post("/api/google", json={"id_token": "not-a-token"})
         self.assertEqual(r.status_code, 401)
+        self.eng.settings.set("auth.google_client_id", "")
 
     def test_google_binding_and_status(self):
         r = self.c.get("/api/auth_status").json()

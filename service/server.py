@@ -182,8 +182,11 @@ def create_app(engine: Engine, token: str) -> FastAPI:
     def google_login(request: Request, response: Response, body: dict = Body(...)) -> dict:
         if not auth_mod.has_account():
             raise HTTPException(403, "Create your account first (email + password), then sign in with Google.")
+        cid = str(eng.settings.get("auth.google_client_id") or "")
+        if not cid:
+            raise HTTPException(403, "Google sign-in is not set up on this server.")
         try:
-            addr = auth_mod.verify_google(str(body.get("id_token", "")))
+            addr = auth_mod.verify_google(str(body.get("id_token", "")), cid)
         except ValueError as e:
             raise HTTPException(401, str(e))
         if not auth_mod.google_email():
@@ -794,8 +797,8 @@ def create_app(engine: Engine, token: str) -> FastAPI:
         return {"message": eng.plugins.test(pid)}
 
     @app.post("/api/plugins/{pid}/connect", dependencies=[api])
-    def plugins_connect(pid: str) -> dict:
-        return {"url": eng.plugins.begin_oauth(pid, eng.base_url.rstrip("/") + "/oauth/callback")}
+    def plugins_connect(pid: str, mobile: int = 0) -> dict:
+        return {"url": eng.plugins.begin_oauth(pid, eng.base_url.rstrip("/") + "/oauth/callback", mobile=bool(mobile))}
 
     @app.post("/api/plugins/{pid}/disconnect", dependencies=[api])
     def plugins_disconnect(pid: str) -> dict:
@@ -810,9 +813,18 @@ def create_app(engine: Engine, token: str) -> FastAPI:
     def oauth_callback(code: str = "", state: str = "", error: str = "") -> str:
         if error or not code:
             return f"<h3>Sign-in failed</h3><p>{error or 'No code returned.'}</p>"
+        mobile = bool((eng.plugins.pending.get(state) or {}).get("mobile"))
         try:
             pid = eng.plugins.finish_oauth(state, code)
             eng.events.publish("plugins", change="connected", plugin_id=pid)
+            if mobile:
+                deep = f"zerothebot://plugins/go?pid={pid}"
+                return (f"<!doctype html><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'>"
+                        f"<body style='font-family:-apple-system,sans-serif;background:#111;color:#eee;padding:40px;text-align:center'>"
+                        f"<h2>Connected ✔</h2><p style='opacity:.8'>Taking you back to {APP_NAME}…</p>"
+                        f"<p><a href='{deep}' style='display:inline-block;margin-top:12px;padding:12px 22px;border-radius:999px;"
+                        f"background:#25d366;color:#04110a;font-weight:700;text-decoration:none'>Open {APP_NAME}</a></p>"
+                        f"<script>setTimeout(function(){{location.replace('{deep}');}},150);</script></body>")
             return f"<body style='font-family:sans-serif;background:#111;color:#eee;padding:40px'><h2>Connected ✔</h2><p>You can close this tab and return to {APP_NAME}.</p></body>"
         except Exception as e:  # noqa: BLE001
             return f"<h3>Sign-in failed</h3><p>{e}</p>"
@@ -852,7 +864,7 @@ google.accounts.id.renderButton(document.getElementById('gbtn'),
         if not auth_mod.has_account():
             return "<h3>Create your account first (email + password), then sign in with Google.</h3>"
         try:
-            addr = auth_mod.verify_google(cred)
+            addr = auth_mod.verify_google(cred, str(eng.settings.get("auth.google_client_id") or ""))
         except ValueError as e:
             return f"<h3>Sign-in failed</h3><p>{e}</p>"
         if not auth_mod.google_email():
@@ -868,12 +880,18 @@ google.accounts.id.renderButton(document.getElementById('gbtn'),
 
     # ------- phone app: real system-browser Google sign-in (webviews are blocked by Google policy)
     def _pub_origin(request: Request) -> str:
-        """Public https origin of this service (tunnel-aware)."""
+        """Public https origin of this service (tunnel-aware).
+
+        Public hostnames are always https: tunnels usually terminate TLS, and a
+        mismatch here makes Google reject the flow with redirect_uri_mismatch.
+        """
         ov = str(eng.settings.get("auth.public_base_url") or "").rstrip("/")
         if ov:
             return ov
         host = request.headers.get("host") or "127.0.0.1:8765"
-        proto = request.headers.get("x-forwarded-proto") or ("https" if "." in host and "127." not in host else "http")
+        name = host.split(":")[0]
+        public = "." in name and not name.replace(".", "").isdigit() and name != "localhost"
+        proto = "https" if public else (request.headers.get("x-forwarded-proto") or "http")
         return f"{proto}://{host}"
 
     def _g_state(secret: str) -> str:
@@ -902,11 +920,21 @@ google.accounts.id.renderButton(document.getElementById('gbtn'),
         cid = str(eng.settings.get("auth.google_client_id") or "")
         secret = str(eng.settings.get("auth.google_client_secret") or "")
         head = "<!doctype html><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'>"
-        body_open = f"<!doctype html><meta charset='utf-8'><body style='{_GOOGLE_BODY_CSS}'><p style='max-width:24em;text-align:center'>"
+
+        def page(title: str, line: str, deep: str = "") -> str:
+            extra = ""
+            if deep:
+                extra = (f"<p><a href='{deep}' style='display:inline-block;margin-top:14px;padding:12px 22px;border-radius:999px;"
+                         f"background:#25d366;color:#04110a;font-weight:700;text-decoration:none'>Open {APP_NAME}</a></p>"
+                         f"<p style='font-size:13px;opacity:.7'>If nothing happens, tap the green button.</p>"
+                         f"<script>setTimeout(function(){{location.replace('{deep}');}},150);</script>")
+            return (f"{head}<body style='{_GOOGLE_BODY_CSS}'><div style='max-width:24em;text-align:center;margin:0 auto'>"
+                    f"<h3>{title}</h3><p>{line}</p>{extra}</div></body>")
+
         if error or not code:
-            return f"{body_open}<h3>Sign-in cancelled</h3><p>{error or 'No code returned from Google.'}<br>Go back to the app and try again.</p></body>"
+            return page("Sign-in cancelled", f"{error or 'No code returned from Google.'}<br>Go back to the app and try again.")
         if not secret or state != _g_state(secret):
-            return f"{body_open}<h3>Sign-in expired</h3><p>Go back to the app and tap Continue with Google again.</p></body>"
+            return page("Sign-in expired", "Go back to the app and tap Continue with Google again.")
         try:
             import urllib.request as _ureq
             form = urlencode({
@@ -915,18 +943,16 @@ google.accounts.id.renderButton(document.getElementById('gbtn'),
                 "grant_type": "authorization_code",
             }).encode()
             r = json.loads(_ureq.urlopen(_ureq.Request("https://oauth2.googleapis.com/token", data=form), timeout=30).read())
-            addr = auth_mod.verify_google(str(r.get("id_token") or ""))
+            addr = auth_mod.verify_google(str(r.get("id_token") or ""), cid)
         except Exception as e:  # noqa: BLE001
-            return f"{head}{body_open}<h3>Sign-in failed</h3><p>{e}</p></body>"
+            return page("Sign-in failed", f"{e}<br>Go back to the app and try again.")
         if not auth_mod.has_account():
-            return f"{body_open}<h3>No account yet</h3><p>Create your {APP_NAME} account first (email + password), then sign in with Google.</p></body>"
+            return page("No account yet", f"Create your {APP_NAME} account first (email + password), then sign in with Google.")
         if not auth_mod.google_email():
             auth_mod.set_google_email(addr)
         tok = session_string(addr)
-        deep = f"intent://auth/google-app/go?tok={tok}#Intent;scheme=zerothebot;package=ai.zerothebot.app;end"
-        return (f"{head}{body_open}<h3>✅ Signed in</h3><p>{addr}<br>You can close this tab.</p></body>"
-                f"<script>location.replace('{deep}');</script>"
-                f"<p><a href='{deep}' style='color:#25d366;font-weight:700'>Return to {APP_NAME}</a></p>")
+        deep = f"zerothebot://auth/google-app/go?tok={tok}"
+        return page("Signed in", f"{addr}<br>Taking you back to the app…", deep)
 
     @app.get("/api/mcp", dependencies=[api])
     def mcp_list() -> list[dict]:
