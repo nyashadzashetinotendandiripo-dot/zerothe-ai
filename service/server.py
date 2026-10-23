@@ -811,6 +811,29 @@ def create_app(engine: Engine, token: str) -> FastAPI:
     def plugins_rest(body: dict = Body(...)) -> dict:
         return eng.plugins.add_rest(body)
 
+    # ------- phone app: over-the-air JS updates (expo-updates protocol, self-hosted)
+    _updates_dir = paths.data_dir() / "updates"
+
+    @app.get("/updates/manifest")
+    def updates_manifest() -> Response:
+        f = _updates_dir / "manifest.json"
+        if not f.is_file():
+            raise HTTPException(404, "No update published yet.")
+        return Response(f.read_bytes(), media_type="application/json", headers={
+            "expo-protocol-version": "1",
+            "expo-sfv-version": "0",
+            "expo-manifest-filters": "",
+            "expo-server-defined-headers": "",
+            "cache-control": "private, max-age=0",
+        })
+
+    @app.get("/updates/assets/{name}")
+    def updates_asset(name: str) -> Response:
+        f = (_updates_dir / "assets" / Path(name).name)
+        if not f.is_file():
+            raise HTTPException(404, "No such asset.")
+        return FileResponse(f, headers={"Cache-Control": "public, max-age=31536000, immutable"})
+
     @app.get("/oauth/callback", response_class=HTMLResponse)
     def oauth_callback(code: str = "", state: str = "", error: str = "") -> str:
         if error or not code:
