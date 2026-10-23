@@ -172,6 +172,7 @@ function ZbRoot() {
   const go = useCallback((k) => { setMenuOpen(false); if (k === 'chat') openChatTabRef.current && openChatTabRef.current(); else setScreen(k); }, []);
 
   const menuProps = {
+    open: menuOpen,
     working: Object.keys(busy).length,
     approvals: apps.length,
     notes: noteBadge,
@@ -355,6 +356,7 @@ function Drawer({ open, tab, onGo, onClose, approvals, working, notes }) {
             data={TAB_GROUPS}
             keyExtractor={([g]) => g}
             showsVerticalScrollIndicator={false}
+            contentContainerStyle={{ paddingBottom: 18 + (dIns.bottom || 0) }}
             renderItem={({ item: [g, rows] }) => (
               <View>
                 <Text style={DR.grp}>{g}</Text>

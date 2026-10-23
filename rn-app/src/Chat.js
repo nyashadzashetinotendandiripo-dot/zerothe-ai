@@ -258,7 +258,7 @@ export default function Chat({ thread, threads, onSwitch, onBack, onEvent, onMen
           <Pressable onPress={() => setReplyTo(null)} hitSlop={8}><Text style={st.replyX}>✕</Text></Pressable>
         </View>
       )}
-      <View style={st.inputRow}>
+      <View style={[st.inputRow, { paddingBottom: 8 + (ins?.bottom || 0) }]}>
         <View style={st.inputWrap}>
           <TextInput style={st.input} value={text} onChangeText={setText} placeholder="Message" placeholderTextColor="#8696a0"
             multiline />
@@ -268,7 +268,7 @@ export default function Chat({ thread, threads, onSwitch, onBack, onEvent, onMen
 
       {!!pick && (
         <View style={st.scrimM} onStartShouldSetResponder={() => true}>
-          <View style={st.sheet}>
+          <View style={[st.sheet, { paddingBottom: 16 + (ins?.bottom || 0) }]}>
             <Text style={st.sheetT}>{pick.type === 'user' ? 'Your message' : (pick.name || 'Bot')}'s message</Text>
             <Text numberOfLines={3} style={st.sheetSub}>{String(pick.text || '').slice(0, 140)}</Text>
             <View style={{ flexDirection: 'row', gap: 12, marginTop: 10, flexWrap: 'wrap' }}>
@@ -286,7 +286,7 @@ export default function Chat({ thread, threads, onSwitch, onBack, onEvent, onMen
 
       {histOpen && (
         <View style={st.scrimM}>
-          <View style={st.sheet}>
+          <View style={[st.sheet, { paddingBottom: 16 + (ins?.bottom || 0) }]}>
             <TextInput style={st.histIn} value={histQ} onChangeText={setHistQ} placeholder="Search chats" placeholderTextColor="#8696a0" autoCorrect={false} />
             <ScrollView style={{ maxHeight: 320 }} nestedScrollEnabled>
               {(threads || []).filter((t) => !histQ.trim() || String(t.title || '').toLowerCase().includes(histQ.trim().toLowerCase())).map((t) => (
