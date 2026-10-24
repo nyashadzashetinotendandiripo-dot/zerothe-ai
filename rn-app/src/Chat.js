@@ -1,14 +1,17 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { View, Text, TextInput, Pressable, FlatList, StyleSheet, KeyboardAvoidingView, Platform, Image, ActivityIndicator, ScrollView } from 'react-native';
+import Svg, { Defs, Pattern, Rect, Circle } from 'react-native-svg';
 import { api, API_BASE } from './session';
 import md from './md';
 import { aiBody, uiPlain } from './widgets';
 import { C } from './theme';
 
-const IN_BG = '#202c33';     // incoming bubble / chrome (WhatsApp dark)
+const IN_BG = '#202c33';     // incoming bubble
 const OUT_BG = '#005c4b';    // outgoing bubble (WhatsApp dark green)
-const WALL = '#0b141a';      // wallpaper
+const WALL = '#0b141a';      // wallpaper base
+const WA_GREEN = '#075E54';  // WhatsApp header green
+const WA_GREEN_LIGHT = '#128C7E';
 const FAINT = 'rgba(233,237,238,.55)';
 
 function AnsRow({ onSend, placeholder }) {
@@ -55,6 +58,25 @@ function parseDate(it) {
 const REACTS = ['👍', '❤️', '🎉', '😄', '🚀', '👀'];
 
 const TOOL_GLYPH = { running: '●', ok: '✓', error: '✕', denied: '⛔', blocked: '⛔' };
+
+function Wallpaper() {
+  return (
+    <View pointerEvents="none" style={{ ...StyleSheet.absoluteFillObject, opacity: 0.06 }}>
+      <Svg width="100%" height="100%">
+        <Defs>
+          <Pattern id="wa" width="120" height="120" patternUnits="userSpaceOnUse" patternTransform="rotate(12)">
+            <Circle cx="20" cy="20" r="1.3" fill="#fff" />
+            <Circle cx="60" cy="10" r="1" fill="#fff" />
+            <Circle cx="90" cy="50" r="1.2" fill="#fff" />
+            <Circle cx="40" cy="80" r="1" fill="#fff" />
+            <Circle cx="10" cy="90" r="1.1" fill="#fff" />
+          </Pattern>
+        </Defs>
+        <Rect width="100%" height="100%" fill="url(#wa)" />
+      </Svg>
+    </View>
+  );
+}
 
 export default function Chat({ thread, threads, onSwitch, onBack, onEvent, onMenu }) {
   const ins = useSafeAreaInsets();
@@ -109,9 +131,16 @@ export default function Chat({ thread, threads, onSwitch, onBack, onEvent, onMen
   const send = async () => {
     const t = text.trim();
     if (!t) return;
+    if (!thread?.id) return;
+    const pid = replyTo ? replyTo.id : 0;
+    const snapshot = t;
     setText(''); setReplyTo(null);
-    try { await api('/api/threads/' + thread.id + '/messages', { method: 'POST', body: JSON.stringify({ text: t, images: [], parent_id: replyTo ? replyTo.id : 0 }) }); }
-    catch (e) { setText(t); }
+    try {
+      await api('/api/threads/' + thread.id + '/messages', { method: 'POST', body: JSON.stringify({ text: snapshot, images: [], parent_id: pid }) });
+    } catch (e) {
+      // restore on failure so the user doesn't lose their message; guard against unmounted state
+      setText(snapshot);
+    }
   };
   const stop = async () => { try { await api('/api/threads/' + thread.id + '/stop', { method: 'POST', body: '{}' }); } catch (e) { /* already done */ } };
   const react = async (mid, emoji) => { try { await api('/api/messages/' + mid + '/reactions', { method: 'POST', body: JSON.stringify({ emoji, author: 'user' }) }); load(); } catch (e) { /* ignore */ } };
@@ -128,15 +157,17 @@ export default function Chat({ thread, threads, onSwitch, onBack, onEvent, onMen
     if (item.typing) return <View style={st.msg}><Text style={st.typingT}>● ● ●</Text></View>;
     if (item.type === 'user') return (
       <Pressable onLongPress={() => item.id && setPick(item)} delayLongPress={350} style={[st.msg, st.msgMe]}>
-        <Text selectable style={st.msgTOut}>{item.text}</Text>
-        <MsgFoot it={item} time={fmtT(item)} />
+        <Text selectable style={st.msgTOut}>{String(item.text || '')}</Text>
+        <MsgFoot it={item} time={fmtT(item)} outgoing />
+        <View style={st.tailOut} />
       </Pressable>
     );
     if (item.type === 'assistant') return (
       <Pressable onLongPress={() => item.id && setPick(item)} delayLongPress={350} style={[st.msg]}>
         {!!item.name && !item.eq && <Text style={st.who}>{item.emoji || ''} {item.name}</Text>}
-        {aiBody(item.text, (t) => md(t, st.msgT), (r) => { setText(r); })}
+        {aiBody(String(item.text || ''), (t) => md(t, st.msgT), (r) => { setText(r); })}
         <MsgFoot it={item} time={fmtT(item)} />
+        <View style={st.tailIn} />
       </Pressable>
     );
     if (item.type === 'tool') {
@@ -178,23 +209,25 @@ export default function Chat({ thread, threads, onSwitch, onBack, onEvent, onMen
     }); }
   const HEADER = (
     <View style={{ flex: 1 }}>
-      <Text style={st.htitle}>ZerotheBot</Text>
-      <Text style={st.hstatus}>{!!busy ? (busy.status === 'waiting_approval' ? 'needs your approval' : 'typing…') : 'online'}</Text>
+      <Text style={st.htitle} numberOfLines={1}>{(threads && threads.find(t=>t.id===thread.id)?.title) || 'ZerotheBot'}</Text>
+      <Text style={st.hstatus} numberOfLines={1}>{!!busy ? (busy.status === 'waiting_approval' ? 'needs your approval • tap to respond' : 'typing…') : 'tap here for contact info'}</Text>
     </View>
   );
   return (
-    <KeyboardAvoidingView style={{ flex: 1, backgroundColor: WALL }} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
-      <View style={[st.header, { paddingTop: (ins?.top || 0) + 8 }]}>
-        <Pressable onPress={onMenu || onBack} hitSlop={10}><Text style={st.back}>{onMenu ? '☰' : '‹'}</Text></Pressable>
+    <KeyboardAvoidingView style={{ flex: 1, backgroundColor: WALL }} behavior={Platform.OS === 'ios' ? 'padding' : undefined} keyboardVerticalOffset={0}>
+      {/* WhatsApp-style header */}
+      <View style={[st.header, { paddingTop: (ins?.top || 0) + 6, backgroundColor: WA_GREEN }]}>
+        <Pressable onPress={onBack} hitSlop={10} style={st.backBtn}><Text style={st.back}>‹</Text></Pressable>
         <View style={st.av}><Text style={{ fontSize: 16 }}>🤖</Text></View>
         {HEADER}
+        <Pressable hitSlop={8} style={st.hIconBtn}><Text style={st.hIcon}>📞</Text></Pressable>
+        <Pressable hitSlop={8} style={st.hIconBtn}><Text style={st.hIcon}>🎥</Text></Pressable>
         <Pressable onPress={() => setReasonOpen(!reasonOpen)} hitSlop={8}>
-          <Text style={[st.hbtn, reasonOpen && st.hbtnOn]}>⚡{acts.length ? ' ' + acts.length : ''}</Text>
-        </Pressable>
-        <Pressable onPress={() => { setHistQ(''); setHistOpen(true); }} hitSlop={8}>
-          <Text style={st.hbtn}>🗂</Text>
+          <Text style={[st.hbtn, reasonOpen && st.hbtnOn]}>⋮</Text>
         </Pressable>
       </View>
+      {/* header bottom strip like WhatsApp */}
+      <View style={{ height: 1, backgroundColor: 'rgba(0,0,0,0.12)' }} />
       {reasonOpen && (
         <ScrollView style={st.reasonBody} nestedScrollEnabled>
           {acts.length ? [...acts].reverse().map((it, i) => (
@@ -214,16 +247,21 @@ export default function Chat({ thread, threads, onSwitch, onBack, onEvent, onMen
           {!!shotUri && <Image style={st.liveImgSm} source={{ uri: shotUri }} resizeMode="contain" />}
         </Pressable>
       )}
+      <View style={{ flex: 1, backgroundColor: WALL }}>
+        <Wallpaper />
       {loading ? <ActivityIndicator style={{ marginTop: 24 }} color={C.muted} /> : (
         <FlatList
           ref={listRef}
           data={[...disp, ...streamRows.map(([sid, t]) => ({ id: 's' + sid, stream: t })), ...((busy && busy.status !== 'waiting_approval' && !streamRows.length) ? [{ id: 'typing', typing: true }] : [])]}
           keyExtractor={(i) => String(i.id)}
           renderItem={renderStreamAware(renderItem)}
-          contentContainerStyle={st.list}
+          contentContainerStyle={[st.list, { paddingBottom: 12 }]}
+          keyboardShouldPersistTaps="handled"
           onContentSizeChange={() => listRef.current && listRef.current.scrollToEnd({ animated: false })}
+          onLayout={() => listRef.current && listRef.current.scrollToEnd({ animated: false })}
         />
       )}
+      </View>
       {!!busy && (
         <View style={st.busyRow}>
           <Text style={{ color: busy.status === 'waiting_approval' ? '#f0b232' : '#00a884' }}>{busy.status === 'waiting_approval' ? '⏸ waiting for your approval' : '● working…'}</Text>
@@ -258,12 +296,27 @@ export default function Chat({ thread, threads, onSwitch, onBack, onEvent, onMen
           <Pressable onPress={() => setReplyTo(null)} hitSlop={8}><Text style={st.replyX}>✕</Text></Pressable>
         </View>
       )}
-      <View style={[st.inputRow, { paddingBottom: 8 + (ins?.bottom || 0) }]}>
-        <View style={st.inputWrap}>
-          <TextInput style={st.input} value={text} onChangeText={setText} placeholder="Message" placeholderTextColor="#8696a0"
-            multiline />
+      {/* WhatsApp-style composer */}
+      <View style={[st.inputRow, { paddingBottom: 8 + (ins?.bottom || 0), backgroundColor: '#111b21' }]}>
+        <View style={st.inputWrapWA}>
+          <Pressable hitSlop={8} style={st.inputIconBtn}><Text style={st.inputIcon}>😊</Text></Pressable>
+          <TextInput
+            style={st.inputWA}
+            value={text}
+            onChangeText={setText}
+            placeholder="Message"
+            placeholderTextColor="#8696a0"
+            multiline
+            returnKeyType="send"
+            onSubmitEditing={send}
+            blurOnSubmit={false}
+          />
+          <Pressable hitSlop={8} style={st.inputIconBtn}><Text style={st.inputIcon}>📎</Text></Pressable>
+          {!!text.trim() ? null : <Pressable hitSlop={8} style={st.inputIconBtn}><Text style={st.inputIcon}>📷</Text></Pressable>}
         </View>
-        <Pressable onPress={send} style={st.sendBtn} hitSlop={6}><Text style={st.sendT}>➤</Text></Pressable>
+        <Pressable onPress={send} style={[st.sendBtn, !text.trim() && { backgroundColor: '#00a884', opacity: 0.95 }]} hitSlop={6}>
+          <Text style={st.sendT}>{text.trim() ? '➤' : '🎤'}</Text>
+        </Pressable>
       </View>
 
       {!!pick && (
@@ -326,38 +379,45 @@ function renderStreamAware(fn) {
   };
 }
 
-function MsgFoot({ it, time }) {
+function MsgFoot({ it, time, outgoing }) {
   const rx = it.reactions || [];
-  if (!rx.length && !time) return null;
+  const showTicks = !!outgoing;
   return (
     <View style={st.foot}>
       {rx.map((r, i) => <Text key={i} style={st.rx}>{r.emoji}{r.count > 1 ? ' ' + r.count : ''}</Text>)}
       <View style={st.gap} />
       {!!time && <Text style={st.time}>{time}</Text>}
+      {!!showTicks && <Text style={st.ticks}>✓✓</Text>}
     </View>
   );
 }
 
 const st = StyleSheet.create({
-  header: { flexDirection: 'row', alignItems: 'center', gap: 10, backgroundColor: IN_BG, paddingHorizontal: 10, paddingTop: 8, paddingBottom: 8, borderBottomWidth: 1, borderColor: '#111b21' },
-  back: { color: C.text, fontSize: 28, fontWeight: '600', width: 26 },
+  header: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: 10, paddingTop: 8, paddingBottom: 8, borderBottomWidth: 1, borderColor: '#111b21' },
+  back: { color: '#fff', fontSize: 28, fontWeight: '600', width: 26, textAlign: 'center' },
+  backBtn: { width: 30, alignItems: 'center', justifyContent: 'center' },
   av: { width: 38, height: 38, borderRadius: 19, backgroundColor: '#2a3942', alignItems: 'center', justifyContent: 'center' },
-  htitle: { color: C.text, fontSize: 16, fontWeight: '700' },
-  hstatus: { color: '#8696a0', fontSize: 12, marginTop: 1 },
-  hbtn: { fontSize: 16, opacity: .7 },
+  htitle: { color: '#fff', fontSize: 16, fontWeight: '700' },
+  hstatus: { color: 'rgba(255,255,255,0.78)', fontSize: 12, marginTop: 1 },
+  hIconBtn: { width: 36, height: 36, borderRadius: 18, alignItems: 'center', justifyContent: 'center' },
+  hIcon: { color: '#fff', fontSize: 16 },
+  hbtn: { fontSize: 20, color: '#fff', opacity: 0.95, paddingHorizontal: 6 },
   hbtnOn: { opacity: 1 },
   chipRow: { backgroundColor: IN_BG, paddingBottom: 8, paddingTop: 2, borderBottomWidth: 1, borderColor: '#111b21' },
   chip: { color: '#8696a0', fontSize: 12.5, backgroundColor: '#2a3942', borderRadius: 999, paddingHorizontal: 12, paddingVertical: 5, overflow: 'hidden' },
   chipOn: { color: '#e9edef', backgroundColor: OUT_BG, fontWeight: '700' },
-  list: { padding: 10, paddingBottom: 16, gap: 4 },
-  msg: { alignSelf: 'flex-start', backgroundColor: IN_BG, borderTopLeftRadius: 12, borderBottomLeftRadius: 12, borderTopRightRadius: 12, borderBottomRightRadius: 4, paddingVertical: 7, paddingHorizontal: 10, maxWidth: '84%', elevation: 1 },
-  msgMe: { alignSelf: 'flex-end', backgroundColor: OUT_BG, borderTopLeftRadius: 12, borderBottomLeftRadius: 12, borderTopRightRadius: 12, borderBottomRightRadius: 4 },
+  list: { padding: 10, paddingBottom: 16, gap: 3 },
+  msg: { alignSelf: 'flex-start', backgroundColor: IN_BG, borderRadius: 8, borderTopLeftRadius: 8, borderTopRightRadius: 8, borderBottomLeftRadius: 8, borderBottomRightRadius: 8, paddingVertical: 6, paddingHorizontal: 9, maxWidth: '78%', elevation: 1, overflow: 'visible' },
+  msgMe: { alignSelf: 'flex-end', backgroundColor: OUT_BG },
   msgT: { color: C.text, fontSize: 15, lineHeight: 20 },
   msgTOut: { color: '#e9edef', fontSize: 15, lineHeight: 20 },
   who: { color: '#53bdeb', fontSize: 12.5, fontWeight: '700', marginBottom: 2 },
   foot: { flexDirection: 'row', alignItems: 'center', gap: 4, marginTop: 4 },
   gap: { flex: 1 },
-  time: { color: FAINT, fontSize: 10 },
+  time: { color: FAINT, fontSize: 10.5 },
+  ticks: { color: '#53bdeb', fontSize: 11, fontWeight: '700', marginLeft: 2 },
+  tailIn: { position: 'absolute', left: -5, bottom: 0, width: 10, height: 10, backgroundColor: IN_BG, transform: [{ rotate: '45deg' }], borderBottomLeftRadius: 2 },
+  tailOut: { position: 'absolute', right: -5, bottom: 0, width: 10, height: 10, backgroundColor: OUT_BG, transform: [{ rotate: '45deg' }], borderBottomRightRadius: 2 },
   rx: { color: '#8696a0', fontSize: 12 },
   rxBtn: { color: '#8696a0', fontSize: 13, paddingHorizontal: 2 },
   toolWrap: { alignSelf: 'center', flexDirection: 'row', alignItems: 'center', gap: 6, backgroundColor: '#182229', borderRadius: 999, paddingHorizontal: 10, paddingVertical: 3, marginVertical: 1, flexWrap: 'wrap' },
@@ -371,11 +431,15 @@ const st = StyleSheet.create({
   replyBar: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: 14, paddingVertical: 5, backgroundColor: IN_BG, borderTopWidth: 1, borderColor: '#111b21' },
   replyTxt: { color: '#8696a0', fontSize: 12.5, flex: 1 },
   replyX: { color: '#8696a0', fontSize: 15 },
-  inputRow: { flexDirection: 'row', alignItems: 'flex-end', gap: 8, padding: 8, backgroundColor: WALL },
+  inputRow: { flexDirection: 'row', alignItems: 'flex-end', gap: 8, padding: 6, paddingHorizontal: 8, backgroundColor: '#111b21' },
   inputWrap: { flex: 1, backgroundColor: IN_BG, borderRadius: 22, flexDirection: 'row', alignItems: 'flex-end' },
+  inputWrapWA: { flex: 1, backgroundColor: '#202c33', borderRadius: 24, flexDirection: 'row', alignItems: 'flex-end', paddingHorizontal: 4, paddingVertical: 4, gap: 2 },
   input: { flex: 1, color: C.text, fontSize: 15.5, paddingHorizontal: 14, paddingTop: 10, paddingBottom: 8, maxHeight: 110 },
-  sendBtn: { width: 44, height: 44, borderRadius: 22, backgroundColor: '#00a884', alignItems: 'center', justifyContent: 'center' },
-  sendT: { color: '#fff', fontSize: 17, fontWeight: '700' },
+  inputWA: { flex: 1, color: '#e9edef', fontSize: 15.5, paddingHorizontal: 8, paddingTop: 8, paddingBottom: 8, maxHeight: 110, textAlignVertical: 'center' },
+  inputIconBtn: { width: 34, height: 34, borderRadius: 17, alignItems: 'center', justifyContent: 'center' },
+  inputIcon: { fontSize: 18, color: '#8696a0' },
+  sendBtn: { width: 46, height: 46, borderRadius: 23, backgroundColor: '#00a884', alignItems: 'center', justifyContent: 'center', elevation: 2 },
+  sendT: { color: '#fff', fontSize: 18, fontWeight: '700' },
   reasonBody: { maxHeight: 190, backgroundColor: WALL, paddingHorizontal: 14, paddingVertical: 6, borderBottomWidth: 1, borderColor: '#111b21' },
   reasonRow: { flexDirection: 'row', gap: 8, alignItems: 'center', paddingVertical: 2 },
   reasonGlyph: { fontSize: 12, width: 14, textAlign: 'center' },

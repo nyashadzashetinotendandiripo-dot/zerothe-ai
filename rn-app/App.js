@@ -383,10 +383,11 @@ function Drawer({ open, tab, onGo, onClose, approvals, working, notes }) {
 const tabSPECIAL = ['chat', 'dash', 'market', 'approvals', 'plugins', 'mcp', 'routines', 'files', 'wallet', 'set'];
 
 function Shell({ children, upd, onUpd, updState }) {
+  const insets = useSafeAreaInsets();
   return (
     <View style={{ flex: 1, backgroundColor: C.bg }}>{children}
       {!!upd && (
-        <Pressable onPress={onUpd} style={sh.banner} disabled={updState === 'installing'}>
+        <Pressable onPress={onUpd} style={[sh.banner, { paddingBottom: 12 + (insets.bottom || 0), height: 44 + (insets.bottom || 0) }]} disabled={updState === 'installing'}>
           <Text style={sh.bannerT}>
             {updState === 'installing' ? `Downloading ZerotheBot ${upd.version}…` : `Update available: ZerotheBot ${upd.version} — tap to install`}
           </Text>

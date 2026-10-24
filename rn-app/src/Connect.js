@@ -47,6 +47,8 @@ function Connectors() {
   const [msg, setMsg] = useState('');
   const [busyId, setBusyId] = useState('');
   const [overlay, setOverlay] = useState(null);   // {url, ptit, auto}
+  // remember the last connect URL attempt for retry / debugging + external open
+  const [externalUrl, setExternalUrl] = useState('');
   const load = useCallback(async () => {
     try { const d = await api('/api/plugins'); setRows(d.plugins || []); } catch (e) { setMsg(String(e.message || e)); }
   }, []);
@@ -71,28 +73,41 @@ function Connectors() {
     if (id) setMsg((rows || []).find((r) => r.id === id)?.name + ' connected ✓');
   };
   const act = async (p, what) => {
+    // `p` may be an object or (legacy) an id string for 'test'
+    const obj = (typeof p === 'string') ? (rows || []).find(r => r.id === p) || { id: p } : p;
+    const pid = obj.id || p;
     setBusyId(p.id + what); setMsg('');
     try {
       if (what === 'connect') {
         if (Platform.OS !== 'web') {
-          const d = await api('/api/plugins/' + p.id + '/connect?mobile=1', { method: 'POST', body: '{}' });
+          const d = await api('/api/plugins/' + pid + '/connect?mobile=1', { method: 'POST', body: '{}' });
           if (/^https?:/.test(d.url || '')) {
-            setMsg('Finish signing in to ' + p.name + ' in your browser…');
-            await Linking.openURL(d.url);
-          } else setMsg(p.id + ': could not start the sign-in.');
+            setExternalUrl(d.url);
+            setMsg('Finish signing in to ' + (obj.name || pid) + ' in your browser…');
+            await Linking.openURL(d.url).catch((ee) => setMsg('Could not open browser: ' + String(ee.message || ee)));
+          } else setMsg(pid + ': could not start the sign-in.');
         } else {
-          const d = await api('/api/plugins/' + p.id + '/connect', { method: 'POST', body: '{}' });
-          if (/^https?:/.test(d.url || '')) setOverlay({ url: d.url, name: p.name, auto: true, pid: p.id });
-          else setMsg(p.id + ': could not start the sign-in.');
+          const d = await api('/api/plugins/' + pid + '/connect', { method: 'POST', body: '{}' });
+          if (/^https?:/.test(d.url || '')) setOverlay({ url: d.url, name: obj.name || pid, auto: true, pid: pid });
+          else setMsg(pid + ': could not start the sign-in.');
         }
-      } else if (what === 'setup' && p.setup_url) {
-        setOverlay({ url: p.setup_url, name: p.name, auto: false, pid: '' });
+      } else if (what === 'setup' && obj.setup_url) {
+        // Some vendor setup / console pages block embedded webviews (Google):
+        // open those externally so you don't get "this browser may not be secure".
+        const u = String(obj.setup_url || '');
+        const blocked = /accounts\.google\.com|console\.cloud\.google\.com|google\.com/i.test(u);
+        if (blocked && Platform.OS !== 'web') {
+          setExternalUrl(u);
+          await Linking.openURL(u).catch(() => setOverlay({ url: u, name: obj.name || pid, auto: false, pid: '' }));
+        } else {
+          setOverlay({ url: u, name: obj.name || pid, auto: false, pid: '' });
+        }
       } else if (what === 'test') {
-        const d = await api('/api/plugins/' + p.id + '/test', { method: 'POST', body: '{}' });
-        setMsg(p.id + ': ' + (d.message || 'ok'));
+        const d = await api('/api/plugins/' + pid + '/test', { method: 'POST', body: '{}' });
+        setMsg(pid + ': ' + (d.message || 'ok'));
       }
       await load();
-    } catch (e) { setMsg(p.id + ': ' + (e.message || 'failed')); }
+    } catch (e) { setMsg(pid + ': ' + (e.message || 'failed')); }
     setBusyId('');
   };
   if (!rows) return <Text style={l.cap}>Loading connectors…</Text>;
@@ -101,6 +116,11 @@ function Connectors() {
       <ScrollView style={{ flex: 1 }} contentContainerStyle={st.list}>
         {rows.map((p) => <Row key={p.id} p={p} act={act} busyId={busyId} />)}
         <Pressable onPress={load} style={[l.btn, { backgroundColor: C.panel2, borderWidth: 1, borderColor: C.line }]}><Text style={[l.btnT, { color: C.text }]}>↻ Refresh</Text></Pressable>
+        {!!externalUrl && (
+          <Pressable onPress={() => Linking.openURL(externalUrl).catch(()=>{})} style={[l.btn, { backgroundColor: '#111b21', borderWidth: 1, borderColor: C.line }]}>
+            <Text style={[l.btnT, { color: '#53bdeb' }]}>Open last link in browser ↗</Text>
+          </Pressable>
+        )}
         {!!msg && <Text style={l.msg}>{msg}</Text>}
         <Text style={st.foot}>
           Sign-in opens in your browser and comes back to the app by itself. Setup pages open
