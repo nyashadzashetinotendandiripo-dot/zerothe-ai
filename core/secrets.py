@@ -142,7 +142,13 @@ _VAULT: _VaultBackend | None = None
 
 def vault_backend() -> _VaultBackend | None:
     """The encrypted-file backend in use, or None when the OS store is available."""
-    return _VAULT
+    if _VAULT is not None:
+        return _VAULT
+    try:
+        kr = keyring.get_keyring() if keyring is not None else None
+    except Exception:  # noqa: BLE001
+        return None
+    return kr if isinstance(kr, _VaultBackend) else None
 
 
 def install_fallback_backend() -> bool:
