@@ -124,7 +124,7 @@ function Connectors() {
         </View>
       )}
       <ScrollView style={{ flex: 1 }} contentContainerStyle={st.list}>
-        {rows.map((p) => <Row key={p.id} p={p} act={act} busyId={busyId} />)}
+        {rows.map((p) => <Row key={p.id} p={p} act={act} busyId={busyId} onMsg={setMsg} />)}
         <Pressable onPress={load} style={[l.btn, { backgroundColor: C.panel2, borderWidth: 1, borderColor: C.line }]}><Text style={[l.btnT, { color: C.text }]}>↻ Refresh</Text></Pressable>
         {!!externalUrl && (
           <Pressable onPress={() => Linking.openURL(externalUrl).catch(()=>{})} style={[l.btn, { backgroundColor: '#111b21', borderWidth: 1, borderColor: C.line }]}>
@@ -193,18 +193,22 @@ export function AuthModal({ o, onClose, onUrl }) {
   );
 }
 
-function Row({ p, act, busyId }) {
+function Row({ p, act, busyId, onMsg }) {
   const [open, setOpen] = useState(false);
   const [vals, setVals] = useState({});
   const [saved, setSaved] = useState(false);
   const save = async () => {
+    const body = {}; for (const f of (p.fields || [])) if (String(vals[f.key] || '').trim()) body[f.key] = vals[f.key];
+    if (!Object.keys(body).length) { setSaved(false); if (onMsg) onMsg(p.name + ': nothing to save yet.'); return; }
     try {
-      const body = {}; for (const f of (p.fields || [])) if (String(vals[f.key] || '').trim()) body[f.key] = vals[f.key];
-      if (Object.keys(body).length) {
-        await api('/api/plugins/' + p.id + '/config', { method: 'PUT', body: JSON.stringify(body) });
-        setSaved(true);
-      }
-    } catch (e) { setSaved(false); }
+      await api('/api/plugins/' + p.id + '/config', { method: 'PUT', body: JSON.stringify(body) });
+      setSaved(true);
+      if (onMsg) onMsg(p.name + ': keys saved ✓');
+    } catch (e) {
+      // Never fail silently: a rejected save used to look like a dead Connect button.
+      setSaved(false);
+      if (onMsg) onMsg(p.name + ': ' + (e.message || 'could not save the keys'));
+    }
   };
   const chip = p.oauth && !p.connected ? ['not connected', C.warn] : p.configured ? ['ready', C.ok] : ['needs setup', C.warn];
   const hasFields = (p.fields || []).length > 0;
@@ -215,6 +219,9 @@ function Row({ p, act, busyId }) {
         <Text style={[st.chip, { color: chip[1], borderColor: chip[1] }]}>{chip[0]}</Text>
       </View>
       <Text style={l.cap} numberOfLines={2}>{p.description}</Text>
+      {!!p.managed && (
+        <Text style={st.managed}>Uses this server’s Google app — just tap Connect, nothing to paste.</Text>
+      )}
       <View style={{ flexDirection: 'row', gap: 8, marginTop: 6, flexWrap: 'wrap' }}>
         {p.oauth ? (
           <PBtn label={busyId === p.id + 'connect' ? 'opening…' : 'Connect'} onPress={() => act(p, 'connect')} />
@@ -341,6 +348,7 @@ const st = StyleSheet.create({
   cardTop: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 2 },
   cardName: { color: C.text, fontSize: 15.5, fontWeight: '700', flex: 1, marginRight: 8 },
   chip: { fontSize: 11.5, fontWeight: '700', borderWidth: 1, borderRadius: 999, paddingHorizontal: 8, paddingVertical: 3, overflow: 'hidden' },
+  managed: { color: C.ok, fontSize: 12, lineHeight: 16, marginTop: 4 },
   pb: { backgroundColor: C.panel2, borderRadius: 10, borderWidth: 1, borderColor: C.line, paddingVertical: 8, paddingHorizontal: 12 },
   pbOn: { backgroundColor: C.solid, borderColor: C.solid },
   pbT: { color: C.text, fontSize: 13.5, fontWeight: '600' },

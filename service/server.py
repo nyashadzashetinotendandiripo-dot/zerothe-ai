@@ -801,7 +801,13 @@ def create_app(engine: Engine, token: str) -> FastAPI:
     def plugins_connect(pid: str, request: Request, mobile: int = 0) -> dict:
         # Vendors must be able to reach the callback: use the public tunnel URL when
         # this request came through one, not the loopback address.
-        return {"url": eng.plugins.begin_oauth(pid, _pub_origin(request) + "/oauth/callback", mobile=bool(mobile))}
+        d = eng.plugins.defs.get(pid)
+        provider = ((d.oauth if d else None) or {}).get("provider")
+        # Google plugins sign in with the server's Google app (the same client as
+        # "Continue with Google"), whose only registered redirect URI is
+        # /auth/google-app/cb. One callback, one console entry, no extra setup.
+        path = "/auth/google-app/cb" if provider == "google" else "/oauth/callback"
+        return {"url": eng.plugins.begin_oauth(pid, _pub_origin(request) + path, mobile=bool(mobile))}
 
     @app.post("/api/plugins/{pid}/disconnect", dependencies=[api])
     def plugins_disconnect(pid: str) -> dict:
@@ -959,6 +965,18 @@ google.accounts.id.renderButton(document.getElementById('gbtn'),
 
         if error or not code:
             return page("Sign-in cancelled", f"{error or 'No code returned from Google.'}<br>Go back to the app and try again.")
+        pend = eng.plugins.pending.get(state) if state else None
+        if pend:
+            # A plugin Connect (Gmail/Calendar/Docs) came back through this
+            # callback: finish the token exchange and hand control to the app.
+            try:
+                pid = eng.plugins.finish_oauth(state, code)
+            except Exception as e:  # noqa: BLE001
+                return page("Sign-in failed", str(e))
+            eng.events.publish("plugins", change="connected", plugin_id=pid)
+            pdef = eng.plugins.defs.get(pid)
+            deep = f"zerothebot://plugins/go?pid={pid}" if pend.get("mobile") else ""
+            return page("Connected ✔", f"{pdef.name if pdef else pid} is connected. You can close this tab.", deep)
         if not secret or state != _g_state(secret):
             return page("Sign-in expired", "Go back to the app and tap Continue with Google again.")
         try:

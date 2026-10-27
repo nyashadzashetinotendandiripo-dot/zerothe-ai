@@ -167,6 +167,30 @@ class GoogleOAuth:
 _OAUTH2_CACHE: dict[str, tuple[dict, float]] = {}
 
 
+def google_client(mgr: "PluginManager", pid: str) -> tuple[str, str]:
+    """The Google OAuth client to use for a plugin's Connect sign-in.
+
+    Order: the server-wide client (the one used for "Continue with Google",
+    so Gmail/Calendar/Docs need no per-plugin setup at all), then the plugin's
+    own pasted client, then Gmail's (the historical fallback). Returning the
+    server client first means one redirect URI, one consent screen, zero
+    console work on the phone.
+    """
+    d = mgr.defs.get(pid)
+    if not d or (d.oauth or {}).get("provider") != "google":
+        return "", ""
+    auth = mgr.settings.get("auth") or {}
+    if isinstance(auth, dict) and auth.get("google_client_id") and auth.get("google_client_secret"):
+        return str(auth["google_client_id"]), str(auth["google_client_secret"])
+    cid = mgr.config_value(pid, "client_id")
+    csec = mgr.config_value(pid, "client_secret")
+    if pid != "gmail":
+        cid = cid or mgr.config_value("gmail", "client_id")
+        csec = csec or mgr.config_value("gmail", "client_secret")
+    return cid or "", csec or ""
+
+
+
 def stored_redirect_uri(pid: str) -> str:
     """The redirect URI a plugin's Connect sign-in used (remembered at exchange).
 
@@ -229,8 +253,11 @@ class Conn:
             rt = self.mgr.config_value(self.pdef.id, "refresh_token")
             if o and rt:
                 try:
-                    cid = self.mgr.config_value(self.pdef.id, "client_id")
-                    csec = self.mgr.config_value(self.pdef.id, "client_secret")
+                    if (o.get("provider") or "") == "google":
+                        cid, csec = google_client(self.mgr, self.pdef.id)
+                    else:
+                        cid = self.mgr.config_value(self.pdef.id, "client_id")
+                        csec = self.mgr.config_value(self.pdef.id, "client_secret")
                     payload: dict[str, str] = {"grant_type": "refresh_token", "refresh_token": rt}
                     headers: dict[str, str] | None = None
                     if (o.get("secret_style") or "body") == "basic" and csec:
@@ -271,10 +298,9 @@ class Conn:
             return r.text
 
     def google_headers(self) -> dict:
-        cid, csec = self.cfg("client_id"), self.cfg("client_secret")
-        if self.pdef.id != "gmail":
-            cid = cid or self.mgr.config_value("gmail", "client_id")
-            csec = csec or self.mgr.config_value("gmail", "client_secret")
+        cid, csec = google_client(self.mgr, self.pdef.id)
+        if not cid:
+            cid, csec = self.cfg("client_id"), self.cfg("client_secret")
         return {"Authorization": "Bearer " + self.mgr.google.access_token(self.pdef.id, cid, csec)}
 
 
@@ -1230,9 +1256,10 @@ class PluginManager:
         tok = self.config_value(pid, "token")
         for f in d.fields:
             if f.get("required") and not self.config_value(pid, f["key"]):
-                if (d.oauth or {}).get("provider") == "google" and d.id != "gmail" \
-                        and f["key"] in ("client_id", "client_secret") and self.config_value("gmail", f["key"]):
-                    continue   # uses Gmail's OAuth client when its own fields are blank (as the help text says)
+                if (d.oauth or {}).get("provider") == "google" and f["key"] in ("client_id", "client_secret"):
+                    gcid, gcsec = google_client(self, pid)
+                    if gcid and gcsec:
+                        continue   # the server's Google app (or Gmail's client) covers this
                 if f["key"] == "token" and rt and self.config_value(pid, "client_id"):
                     continue   # signed in via Connect (OAuth) instead of a pasted token
                 if pid == "zoom" and f["key"] in ("client_id", "client_secret") and rt:
@@ -1259,10 +1286,26 @@ class PluginManager:
             specs = d.build(Conn(self, d)) if d.build else []
         except Exception:
             specs = []
-        return {"id": d.id, "name": d.name, "description": d.description, "kind": d.kind, "version": d.version, "help": d.help,
-                "fields": [{**f, "set": bool(self.config_value(d.id, f["key"])), "value": ("" if f.get("secret") else self.config_value(d.id, f["key"]))} for f in d.fields],
+        # Google plugins ride on the server's Google app (same client as
+        # "Continue with Google"): no client id to paste and no Cloud Console
+        # detour. Fields stay in the def so a custom client can still be set
+        # through the desktop app / API, they are just not advertised here.
+        managed_google = False
+        if (d.oauth or {}).get("provider") == "google":
+            gcid, gcsec = google_client(self, d.id)
+            managed_google = bool(gcid and gcsec)
+        fields = [] if managed_google else d.fields
+        setup_url = "" if managed_google else d.setup_url
+        setup_label = "" if managed_google else (d.setup_label or "Open setup")
+        help_text = d.help
+        if managed_google:
+            help_text = ("One tap: Connect opens Google's sign-in with this server's Google app, so there is no "
+                         "client ID or secret to paste. Use the Google account that owns the Gmail/Calendar/Drive data.")
+        return {"id": d.id, "name": d.name, "description": d.description, "kind": d.kind, "version": d.version, "help": help_text,
+                "fields": [{**f, "set": bool(self.config_value(d.id, f["key"])), "value": ("" if f.get("secret") else self.config_value(d.id, f["key"]))} for f in fields],
                 "oauth": bool(d.oauth), "connected": bool(not d.oauth or secrets.get_secret(f"plugin:{d.id}:refresh_token")),
-                "setup_url": d.setup_url, "setup_label": d.setup_label or "Open setup",
+                "managed": managed_google,
+                "setup_url": setup_url, "setup_label": setup_label,
                 "configured": self.configured(d.id), "allowed": plugin_allowed(self.admin, d.id), "installed": d.kind != "builtin" and d.kind != "rest",
                 "source": d.source, "tools": [{"name": t.name, "description": t.description, "read_only": t.read_only or t.risk is None} for t in specs],
                 "removable": d.kind in ("declarative", "python", "rest")}
@@ -1295,16 +1338,23 @@ class PluginManager:
         return d.check(Conn(self, d))
 
     # -- OAuth ----------------------------------------------------------------------
+    @property
+    def pending(self) -> dict[str, dict]:
+        """In-flight sign-in requests (state -> request), used by the callbacks."""
+        return self.google.pending
+
     def begin_oauth(self, pid: str, redirect_uri: str, mobile: bool = False) -> str:
         d = self.defs.get(pid)
         if not d or not d.oauth:
             raise ValueError("This plugin does not use sign-in.")
         c = Conn(self, d)
-        cid = c.cfg("client_id")
-        if not cid and pid != "gmail" and (d.oauth or {}).get("provider") == "google":
-            cid = self.config_value("gmail", "client_id")
+        cid, csec = google_client(self, pid)
+        if not cid:
+            cid = c.cfg("client_id")
         if not cid:
             raise ConnectorError("Enter the OAuth client ID and secret first.")
+        if (d.oauth or {}).get("provider") == "google" and not csec:
+            raise ConnectorError("This Google sign-in needs the client secret too. Add it in Plugins (desktop) or set it for the server's Google app.")
         o = dict(d.oauth)
         auth_url, token_url = o.get("auth_url") or GoogleOAuth.AUTH, o.get("token_url") or GoogleOAuth.TOKEN
         if pid == "salesforce":  # sandbox vs production login host
@@ -1328,11 +1378,9 @@ class PluginManager:
             raise ConnectorError("Unknown or expired sign-in request.")
         c = Conn(self, self.defs[p["plugin"]])
         d = self.defs[p["plugin"]]
-        cid = c.cfg("client_id")
-        csec = c.cfg("client_secret")
-        if (d.oauth or {}).get("provider") == "google":
-            cid = cid or self.config_value("gmail", "client_id")
-            csec = csec or self.config_value("gmail", "client_secret")
+        cid, csec = google_client(self, p["plugin"])
+        if not cid:
+            cid, csec = c.cfg("client_id"), c.cfg("client_secret")
         return self.google.exchange(state, code, cid, csec, token_url=p.get("token_url"), secret_style=p.get("secret_style", "body"))
 
     # -- install / uninstall -----------------------------------------------------------
