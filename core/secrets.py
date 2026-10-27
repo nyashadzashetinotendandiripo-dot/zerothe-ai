@@ -16,9 +16,13 @@ OLD_SERVICE = "OpenGrokBot"   # pre-rename credential store; read as a fallback,
 
 try:  # keyring is a hard dependency, but fail soft so the app can still explain itself
     import keyring
+    from keyring.backend import KeyringBackend as _KeyringBackend
     from keyring.errors import KeyringError, PasswordDeleteError
 except Exception:  # pragma: no cover
     keyring = None  # type: ignore
+
+    class _KeyringBackend:  # type: ignore
+        priority = 1.0
 
     class KeyringError(Exception):  # type: ignore
         pass
@@ -35,7 +39,7 @@ VAULT_FILE = "secrets.vault"       # encrypted JSON blob (Fernet) in the data di
 VAULT_KEY_FILE = "secrets.key"     # vault key, chmod 600; override with ZEROTHEBOT_VAULT_KEY
 
 
-class _VaultBackend:
+class _VaultBackend(_KeyringBackend):
     """Encrypted-at-rest credential file for hosts with no OS credential store.
 
     Headless servers (Linux VMs, containers) ship keyring without a usable
@@ -154,10 +158,17 @@ def install_fallback_backend() -> bool:
     try:
         _VAULT = _VaultBackend()
         keyring.set_keyring(_VAULT)
-        return True
     except Exception:  # noqa: BLE001
         _VAULT = None
         return False
+    # Belt and braces: some keyring builds resolve the backend lazily, so make
+    # sure the module-level handle points at the vault as well.
+    try:
+        import keyring.core as _kc
+        _kc._keyring_backend = _VAULT
+    except Exception:  # noqa: BLE001
+        pass
+    return backend_available()
 
 
 def _env_name(name: str) -> str:
