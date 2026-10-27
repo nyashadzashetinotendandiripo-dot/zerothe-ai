@@ -56,6 +56,8 @@ function parseDate(it) {
 }
 
 const REACTS = ['👍', '❤️', '🎉', '😄', '🚀', '👀'];
+const EMOJI_SET = ['😀', '😂', '🙂', '😍', '😎', '🤔', '👍', '👏', '🙏', '🔥', '🎉', '❤️',
+  '😅', '😢', '😮', '🤝', '✅', '⚡', '🚀', '💡', '📌', '📊', '🛠', '🧠'];
 
 const TOOL_GLYPH = { running: '●', ok: '✓', error: '✕', denied: '⛔', blocked: '⛔' };
 
@@ -92,6 +94,7 @@ export default function Chat({ thread, threads, onSwitch, onBack, onEvent, onMen
   const [liveFull, setLiveFull] = useState(false);
   const [histOpen, setHistOpen] = useState(false);
   const [histQ, setHistQ] = useState('');
+  const [emojiOpen, setEmojiOpen] = useState(false);
   const listRef = useRef(null);
 
   const load = useCallback(async () => {
@@ -137,8 +140,9 @@ export default function Chat({ thread, threads, onSwitch, onBack, onEvent, onMen
     setText(''); setReplyTo(null);
     try {
       await api('/api/threads/' + thread.id + '/messages', { method: 'POST', body: JSON.stringify({ text: snapshot, images: [], parent_id: pid }) });
+      await load();                      // show it immediately even if SSE lags
     } catch (e) {
-      // restore on failure so the user doesn't lose their message; guard against unmounted state
+      // restore on failure so the user doesn't lose their message
       setText(snapshot);
     }
   };
@@ -183,8 +187,8 @@ export default function Chat({ thread, threads, onSwitch, onBack, onEvent, onMen
       );
     }
     if (item.type === 'notice') return item.level === 'cmd'
-      ? <View style={st.cmdNote}>{md(item.text, st.noteT)}</View>
-      : <Text style={st.noteT}>{item.text}</Text>;
+      ? <View style={st.cmdNote}>{md(item.text || '', st.noteT)}</View>
+      : <Text style={st.noteT}>{String(item.text || '')}</Text>;
     if (item.type === 'system_note') return <Text style={st.noteT}>{String(item.text || '').slice(0, 200)}</Text>;
     return null;
   };
@@ -208,10 +212,10 @@ export default function Chat({ thread, threads, onSwitch, onBack, onEvent, onMen
       disp.push(it);
     }); }
   const HEADER = (
-    <View style={{ flex: 1 }}>
+    <Pressable style={{ flex: 1 }} onPress={() => { setHistQ(''); setHistOpen(true); }}>
       <Text style={st.htitle} numberOfLines={1}>{(threads && threads.find(t=>t.id===thread.id)?.title) || 'ZerotheBot'}</Text>
-      <Text style={st.hstatus} numberOfLines={1}>{!!busy ? (busy.status === 'waiting_approval' ? 'needs your approval • tap to respond' : 'typing…') : 'tap here for contact info'}</Text>
-    </View>
+      <Text style={st.hstatus} numberOfLines={1}>{!!busy ? (busy.status === 'waiting_approval' ? 'needs your approval • tap to respond' : 'typing…') : ((threads || []).length > 1 ? ((threads || []).length + ' chats • tap for history') : 'online')}</Text>
+    </Pressable>
   );
   return (
     <KeyboardAvoidingView style={{ flex: 1, backgroundColor: WALL }} behavior={Platform.OS === 'ios' ? 'padding' : undefined} keyboardVerticalOffset={0}>
@@ -220,8 +224,8 @@ export default function Chat({ thread, threads, onSwitch, onBack, onEvent, onMen
         <Pressable onPress={onBack} hitSlop={10} style={st.backBtn}><Text style={st.back}>‹</Text></Pressable>
         <View style={st.av}><Text style={{ fontSize: 16 }}>🤖</Text></View>
         {HEADER}
-        <Pressable hitSlop={8} style={st.hIconBtn}><Text style={st.hIcon}>📞</Text></Pressable>
-        <Pressable hitSlop={8} style={st.hIconBtn}><Text style={st.hIcon}>🎥</Text></Pressable>
+        <Pressable onPress={() => { setHistQ(''); setHistOpen(true); }} hitSlop={8} style={st.hIconBtn}><Text style={st.hIcon}>🗂</Text></Pressable>
+        <Pressable onPress={onMenu} hitSlop={8} style={st.hIconBtn}><Text style={st.hIcon}>☰</Text></Pressable>
         <Pressable onPress={() => setReasonOpen(!reasonOpen)} hitSlop={8}>
           <Text style={[st.hbtn, reasonOpen && st.hbtnOn]}>⋮</Text>
         </Pressable>
@@ -296,10 +300,21 @@ export default function Chat({ thread, threads, onSwitch, onBack, onEvent, onMen
           <Pressable onPress={() => setReplyTo(null)} hitSlop={8}><Text style={st.replyX}>✕</Text></Pressable>
         </View>
       )}
+      {emojiOpen && (
+        <View style={st.emojiPanel}>
+          {EMOJI_SET.map((e) => (
+            <Pressable key={e} onPress={() => setText((t) => t + e)} hitSlop={4} style={st.emojiB}>
+              <Text style={{ fontSize: 23 }}>{e}</Text>
+            </Pressable>
+          ))}
+        </View>
+      )}
       {/* WhatsApp-style composer */}
       <View style={[st.inputRow, { paddingBottom: 8 + (ins?.bottom || 0), backgroundColor: '#111b21' }]}>
         <View style={st.inputWrapWA}>
-          <Pressable hitSlop={8} style={st.inputIconBtn}><Text style={st.inputIcon}>😊</Text></Pressable>
+          <Pressable onPress={() => setEmojiOpen((v) => !v)} hitSlop={8} style={st.inputIconBtn}>
+            <Text style={[st.inputIcon, emojiOpen && { color: '#00a884' }]}>😊</Text>
+          </Pressable>
           <TextInput
             style={st.inputWA}
             value={text}
@@ -311,10 +326,9 @@ export default function Chat({ thread, threads, onSwitch, onBack, onEvent, onMen
             onSubmitEditing={send}
             blurOnSubmit={false}
           />
-          <Pressable hitSlop={8} style={st.inputIconBtn}><Text style={st.inputIcon}>📎</Text></Pressable>
-          {!!text.trim() ? null : <Pressable hitSlop={8} style={st.inputIconBtn}><Text style={st.inputIcon}>📷</Text></Pressable>}
         </View>
-        <Pressable onPress={send} style={[st.sendBtn, !text.trim() && { backgroundColor: '#00a884', opacity: 0.95 }]} hitSlop={6}>
+        <Pressable onPress={send} disabled={!text.trim()} hitSlop={6}
+          style={[st.sendBtn, !text.trim() && { backgroundColor: '#202c33', opacity: 0.9 }]}>
           <Text style={st.sendT}>{text.trim() ? '➤' : '🎤'}</Text>
         </Pressable>
       </View>
@@ -357,7 +371,7 @@ export default function Chat({ thread, threads, onSwitch, onBack, onEvent, onMen
 
       {liveFull && !!shotUri && (
         <View style={st.fullScr}>
-          <View style={st.fullBar}>
+          <View style={[st.fullBar, { paddingTop: (ins?.top || 0) + 8 }]}>
             <Pressable onPress={() => setLiveFull(false)} hitSlop={8}><Text style={st.fullX}>✕ Close</Text></Pressable>
             <Pressable onPress={stop} hitSlop={8}><Text style={st.stop}>■ Stop bot</Text></Pressable>
           </View>
@@ -438,6 +452,8 @@ const st = StyleSheet.create({
   inputWA: { flex: 1, color: '#e9edef', fontSize: 15.5, paddingHorizontal: 8, paddingTop: 8, paddingBottom: 8, maxHeight: 110, textAlignVertical: 'center' },
   inputIconBtn: { width: 34, height: 34, borderRadius: 17, alignItems: 'center', justifyContent: 'center' },
   inputIcon: { fontSize: 18, color: '#8696a0' },
+  emojiPanel: { flexDirection: 'row', flexWrap: 'wrap', gap: 4, backgroundColor: '#111b21', paddingHorizontal: 10, paddingTop: 8, borderTopWidth: 1, borderColor: '#202c33' },
+  emojiB: { width: 40, height: 40, alignItems: 'center', justifyContent: 'center', borderRadius: 10 },
   sendBtn: { width: 46, height: 46, borderRadius: 23, backgroundColor: '#00a884', alignItems: 'center', justifyContent: 'center', elevation: 2 },
   sendT: { color: '#fff', fontSize: 18, fontWeight: '700' },
   reasonBody: { maxHeight: 190, backgroundColor: WALL, paddingHorizontal: 14, paddingVertical: 6, borderBottomWidth: 1, borderColor: '#111b21' },

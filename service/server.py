@@ -13,7 +13,7 @@ import queue
 import re
 import socket
 import time
-from urllib.parse import urlencode
+from urllib.parse import urlencode, quote
 from pathlib import Path
 from typing import Any
 
@@ -160,7 +160,8 @@ def create_app(engine: Engine, token: str) -> FastAPI:
             if not check_token(cred, ip):   # service token still works for the desktop/API
                 raise HTTPException(401, "That email or password is not right.")
         issue_session(response, addr or auth_mod.email() or "owner")
-        return {"ok": True, "email": addr or auth_mod.email()}
+        return {"ok": True, "email": addr or auth_mod.email(),
+                "session": session_string(addr or auth_mod.email() or "owner")}
 
     @app.get("/api/auth_status")
     def auth_status() -> dict:
@@ -369,7 +370,7 @@ def create_app(engine: Engine, token: str) -> FastAPI:
             p = paths.screenshots_dir() / f"upload-{int(time.time() * 1000)}{ext}"
             p.write_bytes(raw)
             paths_.append(str(p))
-        return eng.send_user_message(tid, body.get("text", ""), paths_)
+        return eng.send_user_message(tid, body.get("text", ""), paths_, parent_id=int(body.get("parent_id") or 0))
 
     @app.post("/api/bots/pause_all", dependencies=[api])
     def bots_pause_all(body: dict = Body(default={})) -> dict:
@@ -976,7 +977,7 @@ google.accounts.id.renderButton(document.getElementById('gbtn'),
         if not auth_mod.google_email():
             auth_mod.set_google_email(addr)
         tok = session_string(addr)
-        deep = f"zerothebot://auth/google-app/go?tok={tok}"
+        deep = f"zerothebot://auth/google-app/go?tok={tok}&email={quote(addr)}"
         return page("Signed in", f"{addr}<br>Taking you back to the app…", deep)
 
     @app.get("/api/mcp", dependencies=[api])

@@ -39,9 +39,40 @@ function asky(a) {
 export default function App() {
   return (
     <SafeAreaProvider>
-      <ZbRoot />
+      <ErrorBoundary>
+        <ZbRoot />
+      </ErrorBoundary>
     </SafeAreaProvider>
   );
+}
+
+// A render error anywhere in the tree must not kill the app: show a recover screen
+// instead of a blank/force-close, and let the user get straight back to work.
+class ErrorBoundary extends React.Component {
+  constructor(props) { super(props); this.state = { err: null }; }
+  static getDerivedStateFromError(err) { return { err }; }
+  componentDidCatch(err, info) { console.log('ZerotheBot recovered from a UI error', err, info); }
+  render() {
+    if (this.state.err) {
+      return (
+        <View style={{ flex: 1, backgroundColor: C.bg, alignItems: 'center', justifyContent: 'center', padding: 26, gap: 10 }}>
+          <Text style={{ fontSize: 42 }}>🛠</Text>
+          <Text style={{ color: C.text, fontSize: 19, fontWeight: '800' }}>That screen hit a snag</Text>
+          <Text style={{ color: C.muted, fontSize: 13, textAlign: 'center', lineHeight: 18 }}>
+            {String((this.state.err && this.state.err.message) || this.state.err || 'Unknown error')}
+          </Text>
+          <Pressable onPress={() => this.setState({ err: null })}
+            style={{ backgroundColor: C.solid, borderRadius: 999, paddingHorizontal: 24, paddingVertical: 12, marginTop: 8 }}>
+            <Text style={{ color: C.onSolid, fontWeight: '800' }}>Try again</Text>
+          </Pressable>
+          <Text style={{ color: C.muted, fontSize: 11.5, textAlign: 'center' }}>
+            Your Bots keep running on the server — nothing was lost.
+          </Text>
+        </View>
+      );
+    }
+    return this.props.children;
+  }
 }
 
 function ZbRoot() {
@@ -92,10 +123,11 @@ function ZbRoot() {
       }
     }
     else if (saved && mail && pass) {
-      // silent re-login with the stored web credentials (cookie session)
+      // migrate old installs that stored the password: log in once, then keep only
+      // the signed session token (never the password).
       try {
-        await loginEmail(saved, mail, pass);
-        await saveConf(saved, '', mail, pass);
+        const d = await loginEmail(saved, mail, pass);
+        await saveConf(saved, d.session || '', mail, d.session ? '' : pass);
         setSigned(true); await refresh();
       } catch (e) { /* stale password: stay on the login screen, keep values */ }
     }
@@ -256,7 +288,7 @@ function ZbRoot() {
     );
     case 'set': return (
       <Shell upd={upd} onUpd={doUpdate} updState={updState}>
-        <Settings onOut={async () => { await clearConf(); setSigned(false); }} onCheck={runCheck} onPlug={() => setScreen('plugins')} />
+        <Settings onOut={async () => { await clearConf(); setSigned(false); }} onCheck={runCheck} onPlug={() => setScreen('plugins')} onMenu={() => setMenuOpen(true)} />
         <DragMenu onMenu={() => setMenuOpen(true)} />
         {menuBlock}
       </Shell>
@@ -347,7 +379,7 @@ function Drawer({ open, tab, onGo, onClose, approvals, working, notes }) {
         <Animated.View style={[{ flex: 1, backgroundColor: '#000' }, { opacity: sc }]}>
           <Pressable style={{ flex: 1 }} onPress={onClose} />
         </Animated.View>
-        <Animated.View style={[DR.panel, { width: W, transform: [{ translateX: tx }] }]}>
+        <Animated.View style={[DR.panel, { width: W, paddingTop: (dIns.top || 0) + 14, transform: [{ translateX: tx }] }]}>
           <View style={{ paddingHorizontal: 8 }}>
             <Text style={DR.brand}>🤖 ZerotheBot</Text>
             <Text style={DR.vs}>v{APP_VERSION}{working ? ' · ' + working + ' working' : ''}</Text>
@@ -387,7 +419,7 @@ function Shell({ children, upd, onUpd, updState }) {
   return (
     <View style={{ flex: 1, backgroundColor: C.bg }}>{children}
       {!!upd && (
-        <Pressable onPress={onUpd} style={[sh.banner, { paddingBottom: 12 + (insets.bottom || 0), height: 44 + (insets.bottom || 0) }]} disabled={updState === 'installing'}>
+        <Pressable onPress={onUpd} style={[sh.banner, { paddingBottom: 12 + (insets.bottom || 0) }]} disabled={updState === 'installing'}>
           <Text style={sh.bannerT}>
             {updState === 'installing' ? `Downloading ZerotheBot ${upd.version}…` : `Update available: ZerotheBot ${upd.version} — tap to install`}
           </Text>
@@ -412,8 +444,8 @@ function Login({ onDone }) {
   const save = async () => {
     setErr(''); setGo(true);
     try {
-      await loginEmail(base, mail, pass);                // cookie session
-      await saveConf(base, '', mail, pass);              // remember for silent re-login
+      const d = await loginEmail(base, mail, pass);       // cookie session + signed session token
+      await saveConf(base, d.session || '', mail, d.session ? '' : pass);
       onDone();
     }
     catch (e) { setErr(e.message || 'Could not connect.'); }
@@ -428,29 +460,41 @@ function Login({ onDone }) {
     gDone.current = false;
     Linking.openURL(b + '/auth/google-app/start').catch((e) => setErr('Could not open the browser: ' + (e.message || e)));
   };
-  const finishGoogle = async (tok) => {
+  const finishGoogle = async (tok, email) => {
     setOv(null);
     const b = String(baseRef.current || '').replace(/\/+$/, '');
     try {
       if (String(tok).includes('.')) {
         // google-app flow: the server verified + bound the owner; tok IS the session
-        await saveConf(b, tok, '', '');
+        await saveConf(b, tok, email || '', '');
         onDone();
         return;
       }
       const d = await loginGoogle(b, tok);
-      await saveConf(b, d.session, d.email, '');         // session token, no password
+      await saveConf(b, d.session, d.email || email || '', '');   // session token, no password
       onDone();
     } catch (e) { setErr(e.message || 'Google sign-in failed.'); }
   };
   useEffect(() => {
     const handle = ({ url }) => {
-      const m = String(url || '').match(/[?&]tok=([^&]+)/);
-      if (m && !gDone.current) { gDone.current = true; finishGoogle(decodeURIComponent(m[1])); }
+      const s = String(url || '');
+      const m = s.match(/[?&]tok=([^&]+)/);
+      if (!m || gDone.current) return;
+      gDone.current = true;
+      const em = s.match(/[?&]email=([^&]+)/);
+      const email = em ? decodeURIComponent(em[1]) : '';
+      if (email) setMail(email);
+      finishGoogle(decodeURIComponent(m[1]), email);
     };
     let sub = { remove: () => {} };
     try { sub = Linking.addEventListener('url', handle); } catch (e) { /* older RN */ }
     Linking.getInitialURL().then((u) => handle({ url: u })).catch(() => {});
+    // remember the last server/email so a re-install or sign-out is one tap away
+    (async () => {
+      const s = await cfgGet(K_SERVER), m = await cfgGet(K_EMAIL);
+      if (s) setBase(s);
+      if (m) setMail(m);
+    })();
     return () => sub.remove && sub.remove();
   }, []);
   const ready = !!mail.trim() && !!pass;
@@ -566,7 +610,7 @@ function Home({ bots, busy, apps, noteBadge, onOpen, onPlug, onBell, onNew, onDe
           );
         }}
       />
-      <Pressable onPress={() => setModal({})} style={({ pressed }) => [n.fab, pressed && { opacity: .9 }]}>
+      <Pressable onPress={() => setModal({})} style={({ pressed }) => [n.fab, { bottom: 24 + (ins.bottom || 0) }, pressed && { opacity: .9 }]}>
         <Text style={n.fabT}>＋  New Bot</Text>
       </Pressable>
       {!!modal && <NewBotModal onDone={(nm, j, em) => { setModal(null); nm && onNew(nm, j, em); }} />}
@@ -670,11 +714,12 @@ function BotModal({ bot, onClose, onCloseSaved }) {
 }
 
 // ----------------------------------------------------------------- settings
-function Settings({ onOut, onCheck, onPlug }) {
-  const c2 = conf();
-  const mail2 = String(cfgGet(K_EMAIL) || '');
+function Settings({ onOut, onCheck, onPlug, onMenu }) {
+  const ins = useSafeAreaInsets();
+  const [mail2, setMail2] = useState('');
   const [updMsg, setUpdMsg] = useState('');
   const [checking, setChecking] = useState(false);
+  useEffect(() => { cfgGet(K_EMAIL).then((m) => setMail2(String(m || ''))).catch(() => {}); }, []);
   const check = async () => {
     setChecking(true); setUpdMsg('');
     try { const u = await onCheck(true); setUpdMsg(u ? ('New version ' + u.version + ' is available — tap the banner to install it.') : 'You are up to date.'); }
@@ -682,10 +727,11 @@ function Settings({ onOut, onCheck, onPlug }) {
     setChecking(false);
   };
   let host = '';
-  try { host = new URL(c2.base).host; } catch (e) { host = c2.base || ''; }
+  try { host = new URL(conf().base).host; } catch (e) { host = conf().base || ''; }
   return (
     <View style={n.screen}>
-      <View style={n.hdr}>
+      <View style={[n.hdr, { paddingTop: 14 + (ins.top || 0) }]}>
+        <Pressable onPress={onMenu} hitSlop={8}><View style={n.hbtn}><Text style={{ fontSize: 16, color: C.text }}>☰</Text></View></Pressable>
         <View style={{ flex: 1 }}>
           <Text style={n.brand}>Settings</Text>
           <Text style={n.sub}>app v{APP_VERSION}</Text>
@@ -694,7 +740,7 @@ function Settings({ onOut, onCheck, onPlug }) {
       <FlatList
         data={null}
         ListHeaderComponent={
-          <View style={{ padding: 16, gap: 10 }}>
+          <View style={{ padding: 16, gap: 10, paddingBottom: 30 + (ins.bottom || 0) }}>
             <View style={[n.card, { paddingVertical: 15 }]}>
               <View style={[n.av, { backgroundColor: C.solid, borderColor: C.solid }]}>
                 <Text style={{ fontSize: 20 }}>{mail2 ? '👤' : '🤖'}</Text>
@@ -706,13 +752,13 @@ function Settings({ onOut, onCheck, onPlug }) {
               <View style={n.pill}><Text style={{ color: C.ok, fontSize: 11, fontWeight: '800' }}>● online</Text></View>
             </View>
             <Row icon="🧩" label="Connectors & MCP" sub="Gmail, Slack, GitHub, Notion, MCP servers…" onPress={onPlug} />
-            <Row icon="⬇️" label="Check for updates" sub={checking ? 'Checking…' : (updMsg || 'Install new versions over the air')} onPress={check} />
-            <Row icon="🖥" label="Server" sub={host || c2.base} />
+            <Row icon="⬇️" label="Check for updates" sub={checking ? 'Checking…' : (updMsg || 'JS updates arrive silently on next launch')} onPress={check} />
+            <Row icon="🖥" label="Server" sub={host || conf().base} />
             <Pressable onPress={onOut} style={({ pressed }) => [n.row, { borderColor: '#5c2723' }, pressed && { opacity: .9 }]}>
               <View style={n.rowIc}><Text style={{ fontSize: 15 }}>🚪</Text></View>
               <View style={{ flex: 1 }}><Text style={[n.rowL, { color: C.bad }]}>Sign out</Text><Text style={n.rowS}>Clears this phone's saved sign-in</Text></View>
             </Pressable>
-            <Text style={l.cap}>Your Bots keep running on the server either way — sign-out only affects this phone. Google sign-in is coming next.</Text>
+            <Text style={l.cap}>Your Bots keep running on the server either way — sign-out only affects this phone. Sign in with Google or the same email + password as the web app.</Text>
           </View>
         }
       />
@@ -785,7 +831,7 @@ const n = StyleSheet.create({
 });
 const st2 = { on: { opacity: 1, color: C.text } };
 const sh = StyleSheet.create({
-  banner: { backgroundColor: C.okSoft, borderTopWidth: 1, borderColor: C.line, paddingVertical: 12, paddingHorizontal: 14, height: 44, justifyContent: 'center' },
+  banner: { backgroundColor: C.okSoft, borderTopWidth: 1, borderColor: C.line, paddingVertical: 12, paddingHorizontal: 14, justifyContent: 'center' },
   bannerT: { color: C.ok, fontWeight: '700', fontSize: 13 },
 });
 const m = StyleSheet.create({

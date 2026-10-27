@@ -34,8 +34,12 @@ const assets = (fm.assets || []).map((a) => {
 });
 const manifest = {
   id: crypto.randomUUID(), createdAt: new Date().toISOString(), runtimeVersion: '1',
-  launchAsset: { key: 'bundle', contentType: 'application/javascript', url: `${base}/updates/assets/${bundle.name}` },
-  assets, metadata: {}, extra: {},
+  launchAsset: { key: 'bundle', contentType: 'application/javascript', fileExtension: '.' + bundle.ext,
+    url: `${base}/updates/assets/${bundle.name}` },
+  assets, metadata: {},
+  // expo-constants reads the app config from here; without it Constants.expoConfig
+  // is null after an OTA update (version/code would fall back to stale defaults).
+  extra: { expoClient: JSON.parse(fs.readFileSync(path.join(process.cwd(), 'app.json'), 'utf8')).expo || {} },
 };
 fs.writeFileSync(path.join(out, 'manifest.json'), JSON.stringify(manifest, null, 2));
 console.log(`OTA ${manifest.id.slice(0, 8)} bundle=${bundle.name} assets=${assets.length}`);

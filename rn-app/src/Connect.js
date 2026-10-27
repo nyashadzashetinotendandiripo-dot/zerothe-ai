@@ -2,7 +2,7 @@
 // Authorization and setup pages open in an in-app overlay (WebView), closing
 // automatically when the platform hands control back to the ZerotheBot server.
 import React, { useCallback, useEffect, useState } from 'react';
-import { View, Text, TextInput, Pressable, ScrollView, Modal, StyleSheet, ActivityIndicator, Linking, Platform } from 'react-native';
+import { View, Text, TextInput, Pressable, ScrollView, Modal, StyleSheet, ActivityIndicator, Linking, Platform, AppState } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { WebView } from 'react-native-webview';
 import { api, API_BASE } from './session';
@@ -28,9 +28,9 @@ export default function Connect({ onBack, onMenu }) {
   return (
     <View style={st.box}>
       <View style={[st.hdr, { paddingTop: 14 + ins.top }]}>
-        <Pressable onPress={onMenu || onBack} hitSlop={10}><Text style={st.back}>{onMenu ? '☰' : '‹'}</Text></Pressable>
+        <Pressable onPress={onBack} hitSlop={10}><Text style={st.back}>‹</Text></Pressable>
         <Text style={st.h1}>Connections</Text>
-        <View style={{ width: 30 }} />
+        <Pressable onPress={onMenu || onBack} hitSlop={10}><Text style={[st.back, { textAlign: 'right' }]}>☰</Text></Pressable>
       </View>
       <View style={st.tabs}>
         <Pressable onPress={() => setTab('conn')}><Text style={[st.tab, tab === 'conn' && st.tabOn]}>Connectors</Text></Pressable>
@@ -52,9 +52,13 @@ function Connectors() {
   const load = useCallback(async () => {
     try { const d = await api('/api/plugins'); setRows(d.plugins || []); } catch (e) { setMsg(String(e.message || e)); }
   }, []);
-  useState(() => { load(); }, []);
-  // System-browser sign-in (Google et al. block embedded webviews): the server
-  // bounces back via zerothebot://plugins/go once the vendor approves.
+  useEffect(() => { load(); }, [load]);
+  // Coming back from the system browser must refresh the list even when the deep
+  // link is swallowed by Android — otherwise Connect looks like it did nothing.
+  useEffect(() => {
+    const sub = AppState.addEventListener('change', (s) => { if (s === 'active') load(); });
+    return () => sub && sub.remove && sub.remove();
+  }, [load]);
   useEffect(() => {
     const onUrl = ({ url }) => {
       const m = String(url || '').match(/plugins\/go\?pid=([^&]+)/);
@@ -76,7 +80,7 @@ function Connectors() {
     // `p` may be an object or (legacy) an id string for 'test'
     const obj = (typeof p === 'string') ? (rows || []).find(r => r.id === p) || { id: p } : p;
     const pid = obj.id || p;
-    setBusyId(p.id + what); setMsg('');
+    setBusyId(pid + what); setMsg('');
     try {
       if (what === 'connect') {
         if (Platform.OS !== 'web') {
@@ -113,6 +117,12 @@ function Connectors() {
   if (!rows) return <Text style={l.cap}>Loading connectors…</Text>;
   return (
     <View style={{ flex: 1 }}>
+      {!!msg && (
+        <View style={st.statusBar}>
+          <Text style={st.statusT} numberOfLines={3}>{msg}</Text>
+          <Pressable onPress={() => setMsg('')} hitSlop={8}><Text style={st.statusX}>✕</Text></Pressable>
+        </View>
+      )}
       <ScrollView style={{ flex: 1 }} contentContainerStyle={st.list}>
         {rows.map((p) => <Row key={p.id} p={p} act={act} busyId={busyId} />)}
         <Pressable onPress={load} style={[l.btn, { backgroundColor: C.panel2, borderWidth: 1, borderColor: C.line }]}><Text style={[l.btnT, { color: C.text }]}>↻ Refresh</Text></Pressable>
@@ -121,10 +131,10 @@ function Connectors() {
             <Text style={[l.btnT, { color: '#53bdeb' }]}>Open last link in browser ↗</Text>
           </Pressable>
         )}
-        {!!msg && <Text style={l.msg}>{msg}</Text>}
         <Text style={st.foot}>
-          Sign-in opens in your browser and comes back to the app by itself. Setup pages open
-          right here in the app. Bots see a connector's tools only after you grant it in the Bot's settings.
+          Sign-in opens in your browser and comes back to the app by itself. Google setup/console
+          pages also open in your browser (they block in-app views). Bots see a connector's tools
+          only after you grant it in the Bot's settings.
         </Text>
       </ScrollView>
       {!!overlay && <AuthModal o={overlay} onClose={() => done(overlay.auto ? overlay.pid : '')} />}
@@ -137,6 +147,7 @@ const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML,
 
 export function AuthModal({ o, onClose, onUrl }) {
   const [loaded, setLoaded] = useState(false);
+  const ins = useSafeAreaInsets();
   const nav = (s) => {
     const u = String(s && s.url || '');
     if (onUrl) onUrl(u);
@@ -146,7 +157,7 @@ export function AuthModal({ o, onClose, onUrl }) {
   return (
     <Modal animationType="slide" transparent={false} visible onRequestClose={onClose}>
       <View style={{ flex: 1, backgroundColor: C.bg }}>
-        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10, padding: 12, paddingTop: 40, backgroundColor: C.panel, borderBottomWidth: 1, borderBottomColor: C.line }}>
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10, padding: 12, paddingTop: 12 + (ins.top || 0), backgroundColor: C.panel, borderBottomWidth: 1, borderBottomColor: C.line }}>
           <Pressable onPress={onClose} hitSlop={8}><Text style={st.back}>✕</Text></Pressable>
           <Text style={{ color: C.text, fontSize: 15, fontWeight: '800', flex: 1 }} numberOfLines={1}>{o.title || (o.auto ? 'Sign in to ' + o.name : o.name + ' setup')}</Text>
           <Pressable onPress={onClose} hitSlop={8}>
@@ -248,7 +259,7 @@ function Mcp() {
   const load = useCallback(async () => {
     try { setRows(await api('/api/mcp')); } catch (e) { setMsg(String(e.message || e)); }
   }, []);
-  useState(() => { load(); }, []);
+  useEffect(() => { load(); }, [load]);
   const addPreset = async (preset) => {
     setMsg('');
     try {
@@ -335,4 +346,7 @@ const st = StyleSheet.create({
   pbT: { color: C.text, fontSize: 13.5, fontWeight: '600' },
   form: { marginTop: 10, borderTopWidth: 1, borderColor: C.line, paddingTop: 8 },
   foot: { color: C.muted, fontSize: 12, lineHeight: 17, marginTop: 4 },
+  statusBar: { flexDirection: 'row', alignItems: 'center', gap: 8, backgroundColor: '#132a24', borderBottomWidth: 1, borderColor: '#1f4438', paddingHorizontal: 14, paddingVertical: 9 },
+  statusT: { color: '#7ee2a8', fontSize: 12.5, lineHeight: 17, flex: 1 },
+  statusX: { color: '#7ee2a8', fontSize: 14, fontWeight: '800' },
 });

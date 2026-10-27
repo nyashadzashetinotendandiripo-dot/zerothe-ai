@@ -267,7 +267,8 @@ class Engine:
             self.turns.start(run.bot_id, run.thread_id, trigger="user")
 
     # ------------------------------------------------------- high-level actions
-    def send_user_message(self, thread_id: str, text: str, image_paths: list[str] | None = None) -> dict:
+    def send_user_message(self, thread_id: str, text: str, image_paths: list[str] | None = None,
+                          parent_id: int = 0) -> dict:
         th = self.threads.get(thread_id)
         if not th:
             raise ValueError("No such thread.")
@@ -284,7 +285,7 @@ class Engine:
             blocks.append({"type": "image", "path": p, "media_type": "image/jpeg" if p.lower().endswith((".jpg", ".jpeg")) else "image/png"})
         if not blocks:
             raise ValueError("Empty message.")
-        self.threads.add(thread_id, "user", "user", blocks)
+        self.threads.add(thread_id, "user", "user", blocks, parent_id=int(parent_id or 0))
         started = []
         for bid in self.messaging.on_user_message(thread_id, text):
             if self.turns.start(bid, thread_id, trigger="user"):

@@ -74,7 +74,7 @@ export async function loginEmail(base, email, pass) {
     body: JSON.stringify({ email: String(email || '').trim().toLowerCase(), password: String(pass || '') }) });
   const d = await r.json().catch(() => ({}));
   if (r.status !== 200) throw new Error(d.error || 'That email or password was not accepted.');
-  return { ok: true, email: d.email || email };
+  return { ok: true, email: d.email || email, session: d.session || '' };
 }
 
 // Sign in with Google: the reader app hands the verified Google ID token here

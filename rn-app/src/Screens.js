@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { ActivityIndicator, FlatList, Pressable, Text, TextInput, View, Share } from 'react-native';
+import { ActivityIndicator, FlatList, Pressable, Text, TextInput, View, Share, Linking } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { api, conf } from './session';
 import { C } from './theme';
@@ -335,7 +335,8 @@ export function FilesScreen({ onMenu }) {
     const { base, token } = conf();
     const url = base + '/api/computer/file?path=' + encodeURIComponent(path === '.' ? it.name : path + '/' + it.name)
       + '&download=1&token=' + encodeURIComponent(token);
-    Share.share({ message: url });
+    // open in the browser so Android downloads it; share is the fallback
+    Linking.openURL(url).catch(() => Share.share({ message: url }));
   };
   const up = () => { if (path && path !== '.') { const parts = path.split('/').filter(Boolean); parts.pop(); load(parts.join('/') || '.'); } };
   return (
