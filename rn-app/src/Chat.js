@@ -62,6 +62,10 @@ const EMOJI_SET = ['😀', '😂', '🙂', '😍', '😎', '🤔', '👍', '👏
 
 const TOOL_GLYPH = { running: '◌', ok: '✓', error: '✕', denied: '⛔', blocked: '⛔' };
 
+// One assistant message can carry several rows (the text plus each tool call), and
+// they share the message id — so identity needs the type and the tool call id.
+const keyOf = (i) => i.id + '|' + (i.type || '') + '|' + (i.call_id || '');
+
 export default function Chat({ thread, threads, onSwitch, onBack, onEvent, onMenu }) {
   const ins = useSafeAreaInsets();
   const [items, setItems] = useState([]);
@@ -88,8 +92,8 @@ export default function Chat({ thread, threads, onSwitch, onBack, onEvent, onMen
     setItems((prev) => {
       if (!quiet) return rows;
       // Quiet polls only append what is new, so a streaming answer never flickers.
-      const known = new Set(prev.map((i) => i.id));
-      const extra = rows.filter((i) => !known.has(i.id));
+      const known = new Set(prev.map(keyOf));
+      const extra = rows.filter((i) => !known.has(keyOf(i)));
       return extra.length ? [...prev, ...extra] : prev;
     });
     setApps(d.approvals || []);
@@ -133,8 +137,8 @@ export default function Chat({ thread, threads, onSwitch, onBack, onEvent, onMen
       if (ev.thread_id && ev.thread_id !== thread.id) return;
       if (ev.type === 'message' && Array.isArray(ev.items)) {
         setItems((prev) => {
-          const known = new Set(prev.map((i) => i.id));
-          const add = ev.items.filter((i) => !known.has(i.id));
+          const known = new Set(prev.map(keyOf));
+          const add = ev.items.filter((i) => !known.has(keyOf(i)));
           return add.length ? [...prev, ...add] : prev;
         });
         setStreams({});
@@ -293,7 +297,7 @@ export default function Chat({ thread, threads, onSwitch, onBack, onEvent, onMen
           <FlatList
             ref={listRef}
             data={[...disp, ...streamRows.map(([sid, t]) => ({ id: 's' + sid, stream: t })), ...((busy && busy.status !== 'waiting_approval' && !streamRows.length) ? [{ id: 'typing', typing: true }] : [])]}
-            keyExtractor={(i) => String(i.id)}
+            keyExtractor={keyOf}
             renderItem={renderStreamAware(renderItem)}
             contentContainerStyle={[st.list, { paddingBottom: 16 }]}
             keyboardShouldPersistTaps="handled"
