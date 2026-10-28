@@ -1,0 +1,19 @@
+{
+  "id": "teams",
+  "name": "Microsoft Teams",
+  "version": "1.0.0",
+  "description": "Teams chats and meetings: read chats, send messages, schedule online meetings.",
+  "help": "FASTEST: paste the Application (client) ID below, press Connect and approve in the browser. ALTERNATIVE: use teams_connect_start, open the shown link and enter the code, then teams_connect_finish. Register the app once at portal.azure.com > App registrations (multitenant, public client flows allowed, delegated: User.Read, Chat.ReadWrite, Chat.Create, OnlineMeetings.ReadWrite, offline_access). The sign-in is remembered and refreshes itself.",
+  "setup_url": "https://portal.azure.com/#view/Microsoft_AAD_RegisteredApps/ApplicationsListBlade",
+  "setup_label": "Create an Azure app",
+  "oauth": {"provider": "microsoft", "scopes": ["offline_access", "openid", "profile", "User.Read", "Chat.ReadWrite", "Chat.Create", "OnlineMeetings.ReadWrite"],
+            "auth_url": "https://login.microsoftonline.com/common/oauth2/v2.0/authorize",
+            "token_url": "https://login.microsoftonline.com/common/oauth2/v2.0/token", "secret_style": "body"},
+  "entry": "plugin.py",
+  "fields": [
+    {"key": "client_id", "label": "Application (client) ID", "secret": false, "required": true, "placeholder": "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"},
+    {"key": "client_secret", "label": "Client secret (only for confidential apps, blank for public clients)", "secret": true, "required": false},
+    {"key": "tenant", "label": "Tenant (directory) ID or 'common'", "secret": false, "required": false, "default": "common", "placeholder": "common"},
+    {"key": "refresh_token", "label": "Refresh token (filled in automatically by connect)", "secret": true, "required": false}
+  ]
+}

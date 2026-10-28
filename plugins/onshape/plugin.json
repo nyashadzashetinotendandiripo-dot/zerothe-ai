@@ -1,0 +1,21 @@
+{
+  "id": "onshape",
+  "name": "Onshape",
+  "version": "1.0.0",
+  "description": "Onshape CAD: list documents, workspaces, parts and assemblies, create documents.",
+  "help": "FASTEST: paste the Client ID + secret below, press Connect and approve in the browser. ALTERNATIVE: paste an API Access Key + Secret Key (cad.onshape.com > My account > API keys). If calls ever 404, try another API version.",
+  "setup_url": "https://dev-portal.onshape.com/",
+  "setup_label": "Create an Onshape app",
+  "oauth": {"provider": "onshape", "scopes": ["OAuth2Read", "OAuth2Write"],
+            "auth_url": "https://oauth.onshape.com/oauth/authorize",
+            "token_url": "https://oauth.onshape.com/oauth/token", "secret_style": "body"},
+  "entry": "plugin.py",
+  "fields": [
+    {"key": "access_key", "label": "Access Key (or leave blank when using Connect)", "secret": false, "required": false},
+    {"key": "secret_key", "label": "Secret Key (or leave blank when using Connect)", "secret": true, "required": false},
+    {"key": "client_id", "label": "Client ID (for Connect sign-in)", "secret": false, "required": false},
+    {"key": "client_secret", "label": "Client secret (for Connect sign-in)", "secret": true, "required": false},
+    {"key": "refresh_token", "label": "Refresh token (filled by Connect)", "secret": true, "required": false},
+    {"key": "api_version", "label": "API version", "secret": false, "required": false, "default": "v9", "placeholder": "v9"}
+  ]
+}

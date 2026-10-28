@@ -1,0 +1,9 @@
+{
+  "id": "whatsapp",
+  "name": "WhatsApp Web",
+  "version": "1.0.0",
+  "description": "Read and send WhatsApp messages through the Bot's browser tab. Each tool does a whole WhatsApp task in one call.",
+  "help": "No API key needed. The Bot opens WhatsApp Web in its own browser tab, which shares the app's logins. FIRST RUN: use whatsapp_status. If it says the phone is not linked, open the Computer page, look at the Bot's tab and scan the QR code with your phone (WhatsApp > Settings > Linked devices > Link a device). The pairing is remembered, so you only do it once. Then grant this plugin to the Bots that should use WhatsApp (request_access or the Bot's settings). Sending messages always asks for your approval first.",
+  "entry": "plugin.py",
+  "fields": []
+}

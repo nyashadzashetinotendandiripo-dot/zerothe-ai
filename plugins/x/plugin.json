@@ -1,0 +1,18 @@
+{
+  "id": "x",
+  "name": "X (Twitter)",
+  "version": "2.0.0",
+  "description": "Read X: user profiles, recent posts, search. Post with a write-capable sign-in.",
+  "help": "Two ways in. FAST READS: paste a Bearer Token from developer.x.com (reads need at least Basic tier). FULL ACCESS (post + reads): create an app at developer.x.com, paste its Client ID below, press Connect and approve in the browser. Posting always asks your approval first.",
+  "entry": "plugin.py",
+  "setup_url": "https://developer.x.com/en/portal/dashboard",
+  "setup_label": "Create an X app",
+  "fields": [
+    {"key": "token", "label": "Bearer Token (for reads)", "secret": true, "required": false},
+    {"key": "client_id", "label": "Client ID (for Connect sign-in)", "secret": false, "required": false},
+    {"key": "client_secret", "label": "Client secret (only if your X app is confidential)", "secret": true, "required": false}
+  ],
+  "oauth": {"provider": "x", "scopes": ["tweet.read", "tweet.write", "users.read", "offline.access"],
+            "auth_url": "https://x.com/i/oauth2/authorize", "token_url": "https://api.x.com/2/oauth2/token",
+            "secret_style": "basic"}
+}

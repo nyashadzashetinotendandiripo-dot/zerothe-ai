@@ -1,0 +1,20 @@
+{
+  "id": "quickbooks",
+  "name": "QuickBooks Online",
+  "version": "1.0.0",
+  "description": "QuickBooks customers, invoices and any query: look up, create invoices, run reports-style queries.",
+  "help": "Two ways in. FASTEST: paste the Client ID + secret below, press Connect and approve in the browser. ALTERNATIVE: run Intuit's OAuth playground once and paste the Refresh Token. Either way also paste your Company ID (realm id, digits in your QuickBooks URL). Tokens refresh themselves; rotated ones are saved back. Set sandbox to yes while testing.",
+  "entry": "plugin.py",
+  "setup_url": "https://developer.intuit.com/app/developer/dashboard",
+  "setup_label": "Create an Intuit app",
+  "oauth": {"provider": "intuit", "scopes": ["com.intuit.quickbooks.accounting"],
+            "auth_url": "https://appcenter.intuit.com/connect/oauth2",
+            "token_url": "https://oauth.platform.intuit.com/oauth2/v1/tokens/bearer", "secret_style": "basic"},
+  "fields": [
+    {"key": "client_id", "label": "Client ID", "secret": false, "required": true},
+    {"key": "client_secret", "label": "Client secret", "secret": true, "required": true},
+    {"key": "refresh_token", "label": "Refresh token (filled by Connect, or paste from the playground)", "secret": true, "required": false},
+    {"key": "realm_id", "label": "Company ID (realm id)", "secret": false, "required": true, "placeholder": "123456789"},
+    {"key": "sandbox", "label": "Use the sandbox company (yes/no)", "secret": false, "required": false, "default": "no", "placeholder": "no"}
+  ]
+}

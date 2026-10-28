@@ -1,0 +1,20 @@
+{
+  "id": "sage",
+  "name": "Sage Accounting",
+  "version": "1.0.0",
+  "description": "Sage Business Cloud contacts, sales invoices, ledger accounts and tax rates.",
+  "help": "Two ways in. FASTEST: paste the Client ID + secret below, press Connect and approve in the browser. ALTERNATIVE: run the OAuth flow once in the Sage developer portal and paste the Refresh Token. Tokens refresh themselves; rotated ones are saved back automatically. US/CA accounts: also set the Token URL and API base to your regional hosts.",
+  "entry": "plugin.py",
+  "setup_url": "https://developers.sage.com/",
+  "setup_label": "Create a Sage app",
+  "oauth": {"provider": "sage", "scopes": ["full_access"],
+            "auth_url": "https://www.sageone.com/oauth2/auth/central",
+            "token_url": "https://oauth.accounting.sage.com/token", "secret_style": "body"},
+  "fields": [
+    {"key": "client_id", "label": "Client ID", "secret": false, "required": true},
+    {"key": "client_secret", "label": "Client secret", "secret": true, "required": true},
+    {"key": "refresh_token", "label": "Refresh token (filled by Connect, or paste from the OAuth flow)", "secret": true, "required": false},
+    {"key": "token_url", "label": "Token URL (only for US/CA: https://oauth.na.sageone.com/token)", "secret": false, "required": false, "placeholder": "https://oauth.accounting.sage.com/token"},
+    {"key": "api_base", "label": "API base (only for US/CA accounts)", "secret": false, "required": false, "placeholder": "https://api.accounting.sage.com/v3.1"}
+  ]
+}

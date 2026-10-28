@@ -1,0 +1,84 @@
+{
+  "id": "hubspot",
+  "name": "HubSpot",
+  "version": "1.0.0",
+  "description": "HubSpot CRM: search and manage contacts, list companies and deals.",
+  "help": "FASTEST: create a Service Key (HubSpot > Settings > Integrations > Service Keys, scopes: crm.objects.contacts.read/write, crm.objects.companies.read, crm.objects.deals.read) and paste it below — no app needed. Legacy private-app tokens (pat-...) work too. ALTERNATIVE: paste the Client ID + secret below, press Connect and approve in the browser. Either way the tools work the same.",
+  "setup_url": "https://developers.hubspot.com/docs/apps/developer-platform/build-apps/authentication/account-service-keys",
+  "setup_label": "Create a HubSpot Service Key",
+  "oauth": {"provider": "hubspot", "scopes": ["crm.objects.contacts.read", "crm.objects.contacts.write", "crm.objects.companies.read", "crm.objects.deals.read"],
+            "auth_url": "https://app.hubspot.com/oauth/authorize",
+            "token_url": "https://api.hubapi.com/oauth/2026-03/token", "secret_style": "body"},
+  "base_url": "https://api.hubapi.com",
+  "fields": [
+    {"key": "token", "label": "Service Key or private app token (or leave blank when using Connect)", "secret": true, "required": false},
+    {"key": "client_id", "label": "Client ID (for Connect sign-in)", "secret": false, "required": false},
+    {"key": "client_secret", "label": "Client secret (for Connect sign-in)", "secret": true, "required": false},
+    {"key": "refresh_token", "label": "Refresh token (filled by Connect)", "secret": true, "required": false}
+  ],
+  "tools": [
+    {
+      "name": "find_contact",
+      "description": "Find a contact by exact email address.",
+      "input_schema": {"type": "object", "properties": {"email": {"type": "string", "description": "Email address"}}, "required": ["email"]},
+      "request": {"method": "POST", "path": "/crm/v3/objects/contacts/search",
+                  "headers": {"Authorization": "Bearer {{secret.token}}", "Content-Type": "application/json"},
+                  "body": {"filterGroups": [{"filters": [{"propertyName": "email", "operator": "EQ", "value": "{email}"}]}], "properties": ["firstname", "lastname", "email", "phone", "company"], "limit": 5}},
+      "response_path": "results",
+      "risk": "safe"
+    },
+    {
+      "name": "list_contacts",
+      "description": "Most recently created contacts.",
+      "input_schema": {"type": "object", "properties": {}},
+      "request": {"method": "GET", "path": "/crm/v3/objects/contacts",
+                  "headers": {"Authorization": "Bearer {{secret.token}}"},
+                  "query": {"limit": "20", "properties": "firstname,lastname,email,phone,company"}},
+      "response_path": "results",
+      "risk": "safe"
+    },
+    {
+      "name": "create_contact",
+      "description": "Create a contact (first name, last name and email are all required).",
+      "input_schema": {"type": "object", "properties": {
+        "firstname": {"type": "string"}, "lastname": {"type": "string"}, "email": {"type": "string", "description": "Email address"}},
+        "required": ["firstname", "lastname", "email"]},
+      "request": {"method": "POST", "path": "/crm/v3/objects/contacts",
+                  "headers": {"Authorization": "Bearer {{secret.token}}", "Content-Type": "application/json"},
+                  "body": {"properties": {"firstname": "{firstname}", "lastname": "{lastname}", "email": "{email}"}}},
+      "risk": "write"
+    },
+    {
+      "name": "update_contact",
+      "description": "Update a contact's email and phone. Include the current value of any field you are not changing.",
+      "input_schema": {"type": "object", "properties": {
+        "id": {"type": "string", "description": "Contact id"},
+        "email": {"type": "string", "description": "Email address"},
+        "phone": {"type": "string", "description": "Phone number"}}, "required": ["id", "email", "phone"]},
+      "request": {"method": "PATCH", "path": "/crm/v3/objects/contacts/{id}",
+                  "headers": {"Authorization": "Bearer {{secret.token}}", "Content-Type": "application/json"},
+                  "body": {"properties": {"email": "{email}", "phone": "{phone}"}}},
+      "risk": "write"
+    },
+    {
+      "name": "list_companies",
+      "description": "List companies (name, domain, phone).",
+      "input_schema": {"type": "object", "properties": {}},
+      "request": {"method": "GET", "path": "/crm/v3/objects/companies",
+                  "headers": {"Authorization": "Bearer {{secret.token}}"},
+                  "query": {"limit": "20", "properties": "name,domain,phone"}},
+      "response_path": "results",
+      "risk": "safe"
+    },
+    {
+      "name": "list_deals",
+      "description": "List deals (name, amount, stage).",
+      "input_schema": {"type": "object", "properties": {}},
+      "request": {"method": "GET", "path": "/crm/v3/objects/deals",
+                  "headers": {"Authorization": "Bearer {{secret.token}}"},
+                  "query": {"limit": "20", "properties": "dealname,amount,dealstage"}},
+      "response_path": "results",
+      "risk": "safe"
+    }
+  ]
+}

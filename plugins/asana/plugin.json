@@ -1,0 +1,83 @@
+{
+  "id": "asana",
+  "name": "Asana",
+  "version": "1.0.0",
+  "description": "List and manage Asana tasks: my tasks, task details, create and complete tasks.",
+  "help": "FASTEST: paste the Client ID + secret below, press Connect and approve in the browser. Register the app with Full permissions, or with at least tasks, projects, users and workspaces read/write scopes. ALTERNATIVE: paste a Personal Access Token (Asana > My Settings > Apps > Manage Developer Apps). Either way the tools work the same.",
+  "setup_url": "https://app.asana.com/0/my-apps",
+  "setup_label": "Create an Asana app",
+  "oauth": {"provider": "asana", "scopes": ["default"],
+            "auth_url": "https://app.asana.com/-/oauth_authorize",
+            "token_url": "https://app.asana.com/-/oauth_token", "secret_style": "body"},
+  "base_url": "https://app.asana.com/api/1.0",
+  "fields": [
+    {"key": "token", "label": "Personal Access Token (or leave blank when using Connect)", "secret": true, "required": false},
+    {"key": "client_id", "label": "Client ID (for Connect sign-in)", "secret": false, "required": false},
+    {"key": "client_secret", "label": "Client secret (for Connect sign-in)", "secret": true, "required": false},
+    {"key": "refresh_token", "label": "Refresh token (filled by Connect)", "secret": true, "required": false}
+  ],
+  "tools": [
+    {
+      "name": "me",
+      "description": "Who am I (name, email, workspaces).",
+      "input_schema": {"type": "object", "properties": {}},
+      "request": {"method": "GET", "path": "/users/me",
+                  "headers": {"Authorization": "Bearer {{secret.token}}"},
+                  "query": {"opt_fields": "name,email,workspaces.name"}},
+      "response_path": "data",
+      "risk": "safe"
+    },
+    {
+      "name": "workspaces",
+      "description": "List Asana workspaces (needed as the workspace argument elsewhere).",
+      "input_schema": {"type": "object", "properties": {}},
+      "request": {"method": "GET", "path": "/workspaces",
+                  "headers": {"Authorization": "Bearer {{secret.token}}"}},
+      "response_path": "data",
+      "risk": "safe"
+    },
+    {
+      "name": "my_tasks",
+      "description": "My incomplete tasks in a workspace, most urgent first.",
+      "input_schema": {"type": "object", "properties": {"workspace": {"type": "string", "description": "Workspace gid (from asana_workspaces)"}}, "required": ["workspace"]},
+      "request": {"method": "GET", "path": "/tasks",
+                  "headers": {"Authorization": "Bearer {{secret.token}}"},
+                  "query": {"assignee": "me", "workspace": "{workspace}", "completed_since": "now",
+                            "opt_fields": "name,due_on,completed,projects.name,permalink_url", "limit": "50"}},
+      "response_path": "data",
+      "risk": "safe"
+    },
+    {
+      "name": "get_task",
+      "description": "Full details of one task.",
+      "input_schema": {"type": "object", "properties": {"task": {"type": "string", "description": "Task gid"}}, "required": ["task"]},
+      "request": {"method": "GET", "path": "/tasks/{task}",
+                  "headers": {"Authorization": "Bearer {{secret.token}}"},
+                  "query": {"opt_fields": "name,notes,due_on,completed,projects.name,assignee.name,permalink_url"}},
+      "response_path": "data",
+      "risk": "safe"
+    },
+    {
+      "name": "create_task",
+      "description": "Create a task with a title in a workspace. Title-only: put dates and details in the title text.",
+      "input_schema": {"type": "object", "properties": {
+        "name": {"type": "string", "description": "Task title"},
+        "workspace": {"type": "string", "description": "Workspace gid"}}, "required": ["name", "workspace"]},
+      "request": {"method": "POST", "path": "/tasks",
+                  "headers": {"Authorization": "Bearer {{secret.token}}", "Content-Type": "application/json"},
+                  "body": {"data": {"name": "{name}", "workspace": "{workspace}"}}},
+      "response_path": "data",
+      "risk": "write"
+    },
+    {
+      "name": "complete_task",
+      "description": "Mark a task complete.",
+      "input_schema": {"type": "object", "properties": {"task": {"type": "string", "description": "Task gid"}}, "required": ["task"]},
+      "request": {"method": "PUT", "path": "/tasks/{task}",
+                  "headers": {"Authorization": "Bearer {{secret.token}}", "Content-Type": "application/json"},
+                  "body": {"data": {"completed": true}}},
+      "response_path": "data",
+      "risk": "write"
+    }
+  ]
+}

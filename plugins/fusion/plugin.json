@@ -1,0 +1,18 @@
+{
+  "id": "fusion",
+  "name": "Autodesk Fusion",
+  "version": "1.0.0",
+  "description": "Browse Fusion hubs, projects, folders, files and versions. Read-only.",
+  "help": "Create an app at aps.autodesk.com > My Apps (Fusion 360 + Data Management APIs). Paste the Client ID + secret below, press Connect and approve in the browser. Sign-in refreshes itself. Browsing only in this version: uploads are a two-step flow and come next.",
+  "entry": "plugin.py",
+  "setup_url": "https://aps.autodesk.com/myapps/",
+  "setup_label": "Create an Autodesk app",
+  "oauth": {"provider": "autodesk", "scopes": ["data:read", "data:write"],
+            "auth_url": "https://developer.api.autodesk.com/authentication/v2/authorize",
+            "token_url": "https://developer.api.autodesk.com/authentication/v2/token", "secret_style": "basic"},
+  "fields": [
+    {"key": "client_id", "label": "Client ID", "secret": false, "required": true},
+    {"key": "client_secret", "label": "Client secret", "secret": true, "required": true},
+    {"key": "refresh_token", "label": "Refresh token (filled by Connect)", "secret": true, "required": false}
+  ]
+}

@@ -1,0 +1,11 @@
+{
+  "id": "chrome-local",
+  "name": "Google Chrome (this PC)",
+  "version": "1.0.0",
+  "description": "Search the Chrome bookmarks and browsing history on this PC.",
+  "help": "No key needed. Reads the local Chrome profile directly (bookmarks file and a copy of the history database, so running Chrome is never disturbed). If you use several Chrome profiles, set the profile field to its folder name (e.g. Profile 1).",
+  "entry": "plugin.py",
+  "fields": [
+    {"key": "profile", "label": "Chrome profile folder", "secret": false, "required": false, "default": "Default", "placeholder": "Default"}
+  ]
+}

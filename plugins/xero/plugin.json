@@ -1,0 +1,20 @@
+{
+  "id": "xero",
+  "name": "Xero",
+  "version": "1.0.0",
+  "description": "Xero accounting: contacts, invoices, chart of accounts, plus tenant lookup.",
+  "help": "Two ways in. FASTEST: paste the Client ID + secret below, press Connect and approve in the browser. ALTERNATIVE: run Xero's OAuth flow once and paste the Refresh Token. Either way paste the Tenant ID too (run the tenants tool once any token works). Refresh tokens rotate every request and are saved back automatically.",
+  "entry": "plugin.py",
+  "setup_url": "https://developer.xero.com/app/manage",
+  "setup_label": "Create a Xero app",
+  "oauth": {"provider": "xero", "scopes": ["accounting.transactions", "accounting.contacts", "offline_access"],
+            "auth_url": "https://login.xero.com/identity/connect/authorize",
+            "token_url": "https://identity.xero.com/connect/token", "secret_style": "basic"},
+  "fields": [
+    {"key": "client_id", "label": "Client ID", "secret": false, "required": true},
+    {"key": "client_secret", "label": "Client secret", "secret": true, "required": true},
+    {"key": "refresh_token", "label": "Refresh token (filled by Connect, or paste from the OAuth flow)",
+     "secret": true, "required": false},
+    {"key": "tenant_id", "label": "Tenant ID", "secret": false, "required": true, "placeholder": "paste from the tenants tool"}
+  ]
+}

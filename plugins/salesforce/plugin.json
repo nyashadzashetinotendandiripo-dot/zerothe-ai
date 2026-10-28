@@ -1,0 +1,21 @@
+{
+  "id": "salesforce",
+  "name": "Salesforce",
+  "version": "1.0.0",
+  "description": "Salesforce CRM: query any object (SOQL), read, create and update records.",
+  "help": "FASTEST: paste the Consumer Key + secret below, press Connect and approve in the browser. ALTERNATIVE (no browser): paste the username and password+security-token too and the plugin signs in with the password flow. For sandboxes change the login URL to https://test.salesforce.com.",
+  "setup_url": "https://help.salesforce.com/s/articleView?id=sf.connected_app_create.htm&type=5",
+  "setup_label": "Create a Salesforce Connected App",
+  "oauth": {"provider": "salesforce", "scopes": ["api", "refresh_token"],
+            "auth_url": "https://login.salesforce.com/services/oauth2/authorize",
+            "token_url": "https://login.salesforce.com/services/oauth2/token", "secret_style": "body"},
+  "entry": "plugin.py",
+  "fields": [
+    {"key": "username", "label": "Username (only for password flow, blank when using Connect)", "secret": false, "required": false, "placeholder": "you@company.com"},
+    {"key": "password", "label": "Password + security token (only for password flow)", "secret": true, "required": false},
+    {"key": "client_id", "label": "Consumer Key", "secret": false, "required": true},
+    {"key": "client_secret", "label": "Consumer Secret", "secret": true, "required": true},
+    {"key": "refresh_token", "label": "Refresh token (filled by Connect)", "secret": true, "required": false},
+    {"key": "login_url", "label": "Login URL", "secret": false, "required": false, "default": "https://login.salesforce.com", "placeholder": "https://login.salesforce.com"}
+  ]
+}

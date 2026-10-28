@@ -1,0 +1,19 @@
+{
+  "id": "zoom",
+  "name": "Zoom",
+  "version": "1.0.0",
+  "description": "Zoom meetings: list upcoming, details, recordings, and schedule new ones.",
+  "help": "FASTEST: paste the Client ID + secret below, press Connect and approve in the browser. ALTERNATIVE (no browser): create a Server-to-Server OAuth app at marketplace.zoom.us > Develop > Build App and paste the Client ID, secret and Account ID. Tokens refresh themselves.",
+  "setup_url": "https://marketplace.zoom.us/develop/create",
+  "setup_label": "Create a Zoom app",
+  "oauth": {"provider": "zoom", "scopes": ["meeting:read", "meeting:write", "recording:read", "user:read"],
+            "auth_url": "https://zoom.us/oauth/authorize",
+            "token_url": "https://zoom.us/oauth/token", "secret_style": "basic"},
+  "entry": "plugin.py",
+  "fields": [
+    {"key": "client_id", "label": "Client ID", "secret": false, "required": true},
+    {"key": "client_secret", "label": "Client secret", "secret": true, "required": true},
+    {"key": "account_id", "label": "Account ID (only for Server-to-Server, blank when using Connect)", "secret": false, "required": false},
+    {"key": "refresh_token", "label": "Refresh token (filled by Connect)", "secret": true, "required": false}
+  ]
+}

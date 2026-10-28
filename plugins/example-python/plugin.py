@@ -1,4 +1,4 @@
-"""Example OpenGrokBot Python plugin.
+"""Example ZerotheBot Python plugin.
 
 register(api) returns a list of tool dicts:
     name         tool name (the plugin id is prefixed automatically: example-python_text_stats)
@@ -6,6 +6,7 @@ register(api) returns a list of tool dicts:
     input_schema JSON Schema for the arguments
     handler      callable(ctx, args) or callable(args) -> str | dict | list  (the result is treated as untrusted data)
     risk         "safe" (default) or one of: send, write, delete, submit, purchase, command  -> the user is asked first
+    needs_screen True if the tool drives the Bot's browser tab (one computer-use task at a time)
 
 api.config(key, default) reads the plugin's settings (non-secret and secret fields from plugin.json).
 api.http(ctx, "GET", url, ...) makes HTTP requests that respect the Bot's network policy.
