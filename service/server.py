@@ -821,9 +821,29 @@ def create_app(engine: Engine, token: str) -> FastAPI:
     # ------- phone app: over-the-air JS updates (expo-updates protocol, self-hosted)
     _updates_dir = paths.data_dir() / "updates"
 
+    def _note_update(request: Request, what: str) -> None:
+        """Keep a tiny trail of what the phone asks for — the update check is silent
+        otherwise, and "it never updates" is impossible to debug without it."""
+        try:
+            line = " ".join([
+                time.strftime("%Y-%m-%d %H:%M:%S"),
+                what,
+                (request.client.host if request.client else "-"),
+                "platform=" + request.headers.get("expo-platform", "-"),
+                "runtime=" + request.headers.get("expo-runtime-version", "-"),
+                "current=" + (request.headers.get("expo-current-update-id", "-") or "-")[:8],
+                "ua=" + (request.headers.get("user-agent", "-") or "-")[:50],
+            ])
+            _updates_dir.mkdir(parents=True, exist_ok=True)
+            with open(_updates_dir / "requests.log", "a", encoding="utf-8") as fh:
+                fh.write(line + "\n")
+        except Exception:
+            pass
+
     @app.get("/updates/manifest")
-    def updates_manifest() -> Response:
+    def updates_manifest(request: Request) -> Response:
         f = _updates_dir / "manifest.json"
+        _note_update(request, "manifest" if f.is_file() else "manifest-missing")
         if not f.is_file():
             raise HTTPException(404, "No update published yet.")
         return Response(f.read_bytes(), media_type="application/json", headers={
@@ -835,8 +855,9 @@ def create_app(engine: Engine, token: str) -> FastAPI:
         })
 
     @app.get("/updates/assets/{name}")
-    def updates_asset(name: str) -> Response:
+    def updates_asset(name: str, request: Request) -> Response:
         f = (_updates_dir / "assets" / Path(name).name)
+        _note_update(request, "asset:" + Path(name).name[:24] + ("" if f.is_file() else ":missing"))
         if not f.is_file():
             raise HTTPException(404, "No such asset.")
         return FileResponse(f, headers={"Cache-Control": "public, max-age=31536000, immutable"})
