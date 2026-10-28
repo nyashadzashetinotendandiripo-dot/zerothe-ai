@@ -128,7 +128,7 @@ function shortBot(id, bots) {
 }
 
 // ---------------------------------------------------------------- workspace 4: marketplace
-export function MarketplaceScreen({ onMenu, onRefresh }) {
+export function MarketplaceScreen({ onMenu, onRefresh, onHired }) {
   const [rows, setRows] = useState(null);
   const [q, setQ] = useState('');
   const [busyId, setBusyId] = useState('');
@@ -139,8 +139,10 @@ export function MarketplaceScreen({ onMenu, onRefresh }) {
     setBusyId(t.id); setMsg('');
     try {
       const b = await api('/api/bots/from_template', { method: 'POST', body: JSON.stringify({ template: t.id }) });
-      setMsg((b && b.name ? b.name : 'Bot') + ' joined your team. 🎉');
+      setMsg((b && b.name ? b.name : 'Bot') + ' joined your team — opening its chat…');
       onRefresh && onRefresh();
+      // Land in the new Bot's chat so hiring means you can start working with it.
+      if (b && b.id && onHired) onHired(b);
     } catch (e) { setMsg('Could not hire: ' + (e.message || e)); }
     setBusyId('');
   };

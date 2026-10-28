@@ -2,7 +2,7 @@
 // Authorization and setup pages open in an in-app overlay (WebView), closing
 // automatically when the platform hands control back to the ZerotheBot server.
 import React, { useCallback, useEffect, useState } from 'react';
-import { View, Text, TextInput, Pressable, ScrollView, Modal, StyleSheet, ActivityIndicator, Linking, Platform, AppState } from 'react-native';
+import { View, Text, TextInput, Pressable, ScrollView, Modal, StyleSheet, ActivityIndicator, Linking, Platform, AppState, Alert } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { WebView } from 'react-native-webview';
 import { api, API_BASE } from './session';
@@ -44,13 +44,21 @@ export default function Connect({ onBack, onMenu }) {
 // ------------------------------------------------------------ connectors
 function Connectors() {
   const [rows, setRows] = useState(null);
+  const [catalog, setCatalog] = useState([]);      // installable connectors (bundled + catalog URLs)
+  const [canInstall, setCanInstall] = useState(false);
+  const [gitUrl, setGitUrl] = useState('');
   const [msg, setMsg] = useState('');
   const [busyId, setBusyId] = useState('');
   const [overlay, setOverlay] = useState(null);   // {url, ptit, auto}
   // remember the last connect URL attempt for retry / debugging + external open
   const [externalUrl, setExternalUrl] = useState('');
   const load = useCallback(async () => {
-    try { const d = await api('/api/plugins'); setRows(d.plugins || []); } catch (e) { setMsg(String(e.message || e)); }
+    try {
+      const d = await api('/api/plugins');
+      setRows(d.plugins || []);
+      setCatalog(d.catalog || []);
+      setCanInstall(!!d.install_allowed);
+    } catch (e) { setMsg(String(e.message || e)); }
   }, []);
   useEffect(() => { load(); }, [load]);
   // Coming back from the system browser must refresh the list even when the deep
@@ -114,6 +122,56 @@ function Connectors() {
     } catch (e) { setMsg(pid + ': ' + (e.message || 'failed')); }
     setBusyId('');
   };
+  const installOne = async (c) => {
+    setBusyId('i:' + c.id); setMsg('');
+    try {
+      await api('/api/plugins/install', { method: 'POST', body: JSON.stringify({ source: c.source || ('bundled:plugins/' + c.id) }) });
+      setMsg((c.name || c.id) + ' installed ✓');
+      await load();
+    } catch (e) { setMsg((c.name || c.id) + ': ' + (e.message || 'could not install')); }
+    setBusyId('');
+  };
+  const installAll = async () => {
+    const list = (catalog || []).filter((c) => !c.installed);
+    if (!list.length) return;
+    setBusyId('i:all'); setMsg('Installing ' + list.length + ' connectors…');
+    let ok = 0;
+    for (const c of list) {
+      try {
+        await api('/api/plugins/install', { method: 'POST', body: JSON.stringify({ source: c.source || ('bundled:plugins/' + c.id) }) });
+        ok += 1;
+      } catch (e) { /* keep going: one bad manifest must not stop the rest */ }
+    }
+    setBusyId('');
+    setMsg(ok + ' of ' + list.length + ' connectors installed ✓');
+    await load();
+  };
+  const installGit = async () => {
+    const src = gitUrl.trim();
+    if (!src) return;
+    setBusyId('i:git'); setMsg('');
+    try {
+      const r = await api('/api/plugins/install', { method: 'POST', body: JSON.stringify({ source: src }) });
+      setMsg((r && r.name ? r.name : 'Plugin') + ' installed ✓');
+      setGitUrl('');
+      await load();
+    } catch (e) { setMsg('Install failed: ' + (e.message || e)); }
+    setBusyId('');
+  };
+  const removeOne = (p) => {
+    Alert.alert('Remove ' + p.name + '?', 'Its keys are deleted from this server. You can install it again any time.', [
+      { text: 'Cancel', style: 'cancel' },
+      {
+        text: 'Remove', style: 'destructive', onPress: async () => {
+          setBusyId('r:' + p.id);
+          try { await api('/api/plugins/' + p.id, { method: 'DELETE' }); setMsg(p.name + ' removed'); await load(); }
+          catch (e) { setMsg(p.name + ': ' + (e.message || 'could not remove')); }
+          setBusyId('');
+        },
+      },
+    ]);
+  };
+  const avail = (catalog || []).filter((c) => !c.installed);
   if (!rows) return <Text style={l.cap}>Loading connectors…</Text>;
   return (
     <View style={{ flex: 1 }}>
@@ -124,7 +182,40 @@ function Connectors() {
         </View>
       )}
       <ScrollView style={{ flex: 1 }} contentContainerStyle={st.list}>
-        {rows.map((p) => <Row key={p.id} p={p} act={act} busyId={busyId} onMsg={setMsg} />)}
+        {rows.map((p) => <Row key={p.id} p={p} act={act} busyId={busyId} onMsg={setMsg} onRemove={removeOne} />)}
+
+        {!!avail.length && (
+          <View style={st.card}>
+            <Text style={st.cardName}>Available connectors — {avail.length} not installed</Text>
+            <Text style={l.cap}>The full set that ships with ZerotheBot. Install one, tap Connect, then grant it to a Bot so it can use it.</Text>
+            <View style={{ gap: 8, marginTop: 8 }}>
+              {avail.map((c) => (
+                <View key={c.id} style={st.availRow}>
+                  <View style={{ flex: 1 }}>
+                    <Text style={st.availName} numberOfLines={1}>{c.name || c.id}</Text>
+                    <Text style={l.cap} numberOfLines={2}>{c.description}</Text>
+                  </View>
+                  <PBtn label={busyId === 'i:' + c.id ? '…' : 'Install'} onPress={() => installOne(c)} />
+                </View>
+              ))}
+            </View>
+            <Pressable onPress={installAll} disabled={busyId === 'i:all'} style={[l.btn, { backgroundColor: C.solid, marginTop: 10 }]}>
+              <Text style={l.btnT}>{busyId === 'i:all' ? 'Installing…' : '＋ Install all ' + avail.length}</Text>
+            </Pressable>
+          </View>
+        )}
+
+        {canInstall && (
+          <View style={st.card}>
+            <Text style={st.cardName}>Install from a git URL or folder</Text>
+            <Text style={l.cap}>Paste a repository URL (or a path on the server) whose top folder has a plugin.json.</Text>
+            <TextInput style={[l.inl, { marginTop: 8 }]} value={gitUrl} onChangeText={setGitUrl}
+              placeholder="https://github.com/you/zerothebot-plugin" placeholderTextColor={C.muted} autoCapitalize="none" autoCorrect={false} />
+            <View style={{ flexDirection: 'row', gap: 8, marginTop: 8 }}>
+              <PBtn label={busyId === 'i:git' ? 'installing…' : 'Install'} onPress={installGit} />
+            </View>
+          </View>
+        )}
         <Pressable onPress={load} style={[l.btn, { backgroundColor: C.panel2, borderWidth: 1, borderColor: C.line }]}><Text style={[l.btnT, { color: C.text }]}>↻ Refresh</Text></Pressable>
         {!!externalUrl && (
           <Pressable onPress={() => Linking.openURL(externalUrl).catch(()=>{})} style={[l.btn, { backgroundColor: '#111b21', borderWidth: 1, borderColor: C.line }]}>
@@ -193,7 +284,7 @@ export function AuthModal({ o, onClose, onUrl }) {
   );
 }
 
-function Row({ p, act, busyId, onMsg }) {
+function Row({ p, act, busyId, onMsg, onRemove }) {
   const [open, setOpen] = useState(false);
   const [vals, setVals] = useState({});
   const [saved, setSaved] = useState(false);
@@ -229,6 +320,7 @@ function Row({ p, act, busyId, onMsg }) {
         {!!p.setup_url && <PBtn label={p.setup_label || 'Open setup'} ghost onPress={() => act(p, 'setup')} />}
         <PBtn label={busyId === p.id + 'test' ? 'testing…' : 'Test'} ghost onPress={() => act(p.id, 'test')} />
         {hasFields ? <PBtn label={open ? 'Hide setup' : 'Key / details'} ghost onPress={() => setOpen(!open)} /> : null}
+        {p.removable ? <PBtn label="Remove" ghost onPress={() => onRemove && onRemove(p)} /> : null}
       </View>
       {open && hasFields && (
         <View style={st.form}>
@@ -349,6 +441,8 @@ const st = StyleSheet.create({
   cardName: { color: C.text, fontSize: 15.5, fontWeight: '700', flex: 1, marginRight: 8 },
   chip: { fontSize: 11.5, fontWeight: '700', borderWidth: 1, borderRadius: 999, paddingHorizontal: 8, paddingVertical: 3, overflow: 'hidden' },
   managed: { color: C.ok, fontSize: 12, lineHeight: 16, marginTop: 4 },
+  availRow: { flexDirection: 'row', alignItems: 'center', gap: 10, borderTopWidth: 1, borderColor: C.line, paddingTop: 8 },
+  availName: { color: C.text, fontSize: 14, fontWeight: '700', marginBottom: 1 },
   pb: { backgroundColor: C.panel2, borderRadius: 10, borderWidth: 1, borderColor: C.line, paddingVertical: 8, paddingHorizontal: 12 },
   pbOn: { backgroundColor: C.solid, borderColor: C.solid },
   pbT: { color: C.text, fontSize: 13.5, fontWeight: '600' },

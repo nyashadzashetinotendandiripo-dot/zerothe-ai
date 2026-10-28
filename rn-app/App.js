@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState, useCallback } from 'react';
 import { SafeAreaProvider, useSafeAreaInsets } from 'react-native-safe-area-context';
-import { Animated, Modal, View, Text, TextInput, Pressable, FlatList, StyleSheet, Linking } from 'react-native';
+import { Animated, Modal, View, Text, TextInput, Pressable, FlatList, StyleSheet, Linking, Alert, ScrollView } from 'react-native';
 import { StatusBar as ExpoStatus } from 'expo-status-bar';
 import { api, connectEvents, loadKey, saveConf, tryConf, clearConf, conf, cfgGet, K_SERVER, K_TOKEN, K_EMAIL, K_PASS, loginEmail, loginGoogle } from './src/session';
 import { C } from './src/theme';
@@ -81,6 +81,7 @@ function ZbRoot() {
   const [screen, setScreen] = useState('home');            // dash home chat market approvals plugins mcp routines files wallet set
   const [menuOpen, setMenuOpen] = useState(false);         // side drawer
   const [bots, setBots] = useState([]);
+  const [templates, setTemplates] = useState([]);
   const [busy, setBusy] = useState({});                    // bot_id -> {status, thread_id}
   const [apps, setApps] = useState([]);                    // pending approvals, server-wide
   const [noteBadge, setNoteBadge] = useState(0);           // unread notifications
@@ -138,6 +139,7 @@ function ZbRoot() {
     try {
       const d = await api('/api/bootstrap');
       setBots(d.bots || []);
+      setTemplates(d.templates || []);
       setApps(d.approvals || []);
       if (d.last_event > lastRef.current) lastRef.current = d.last_event;
       const b = {};
@@ -182,6 +184,20 @@ function ZbRoot() {
   const newBot = async (name, job, emoji) => {
     try { await api('/api/bots', { method: 'POST', body: JSON.stringify({ name, job, emoji }) }); await refresh(); }
     catch (e) { /* ignore */ }
+  };
+
+  // Hiring a template gives the Bot its job, instructions and the connectors it
+  // needs (Gmail, GitHub…), then drops you straight into its chat.
+  const hireBot = async (templateId, name) => {
+    try {
+      const b = await api('/api/bots/from_template', { method: 'POST', body: JSON.stringify({ template: templateId, name: name || undefined }) });
+      await refresh();
+      if (b && b.id) await openBot(b);
+      return b;
+    } catch (e) {
+      Alert.alert('Could not hire that Bot', String(e.message || e));
+      return null;
+    }
   };
 
   const decideApp = async (a, approve, remember, answer) => {
@@ -252,7 +268,7 @@ function ZbRoot() {
     );
     case 'market': return (
       <Shell upd={upd} onUpd={doUpdate} updState={updState}>
-        <MarketplaceScreen onMenu={() => setMenuOpen(true)} onRefresh={refresh} />
+        <MarketplaceScreen onMenu={() => setMenuOpen(true)} onRefresh={refresh} onHired={openBot} />
         {menuBlock}
       </Shell>
     );
@@ -298,7 +314,7 @@ function ZbRoot() {
 
   return (
     <Shell upd={upd} onUpd={doUpdate} updState={updState}>
-      <Home bots={bots} busy={busy} apps={apps} noteBadge={noteBadge} onOpen={openBot} onPlug={() => setScreen('plugins')} onBell={() => setNoteOpen(true)} onNew={newBot} onDecide={decideApp} onBotLong={setBotModal} onMenu={() => setMenuOpen(true)} />
+      <Home bots={bots} busy={busy} apps={apps} noteBadge={noteBadge} onOpen={openBot} onPlug={() => setScreen('plugins')} onBell={() => setNoteOpen(true)} onNew={newBot} onHire={hireBot} templates={templates} onDecide={decideApp} onBotLong={setBotModal} onMenu={() => setMenuOpen(true)} />
       <DragMenu onMenu={() => setMenuOpen(true)} />
       {!!botModal && <BotModal bot={botModal} onClose={() => setBotModal(null)} onCloseSaved={() => { setBotModal(null); refresh(); }} />}
       {noteOpen && <NotifSheet onClose={() => setNoteOpen(false)} onReadAll={() => setNoteBadge(0)} />}
@@ -527,7 +543,7 @@ function Login({ onDone }) {
 }
 
 // ----------------------------------------------------------------- home
-function Home({ bots, busy, apps, noteBadge, onOpen, onPlug, onBell, onNew, onDecide, onBotLong, onMenu }) {
+function Home({ bots, busy, apps, noteBadge, onOpen, onPlug, onBell, onNew, onHire, templates, onDecide, onBotLong, onMenu }) {
   const ins = useSafeAreaInsets();
   const [modal, setModal] = useState(null);
   const working = Object.keys(busy).length;
@@ -613,33 +629,76 @@ function Home({ bots, busy, apps, noteBadge, onOpen, onPlug, onBell, onNew, onDe
       <Pressable onPress={() => setModal({})} style={({ pressed }) => [n.fab, { bottom: 24 + (ins.bottom || 0) }, pressed && { opacity: .9 }]}>
         <Text style={n.fabT}>＋  New Bot</Text>
       </Pressable>
-      {!!modal && <NewBotModal onDone={(nm, j, em) => { setModal(null); nm && onNew(nm, j, em); }} />}
+      {!!modal && (
+        <NewBotModal
+          templates={templates}
+          onDone={(nm, j, em) => { setModal(null); nm && onNew(nm, j, em); }}
+          onHire={(tid, nm) => { setModal(null); onHire && onHire(tid, nm); }}
+        />
+      )}
     </View>
   );
 }
 
-function NewBotModal({ onDone }) {
+function NewBotModal({ onDone, onHire, templates }) {
   const [name, setName] = useState('');
   const [job, setJob] = useState('');
   const [em, setEm] = useState('🤖');
+  const [tpl, setTpl] = useState(null);
   const EMOJIS = ['🤖', '🧠', '📬', '🛍', '📊', '🧾', '🔍', '✍️', '📅', '🌐', '💼', '🧹'];
+  const picked = (templates || []).find((t) => t.id === tpl) || null;
+  const ready = picked ? true : !!name.trim();
   return (
     <View style={m.scrim}>
       <View style={m.modal}>
         <Text style={l.h2}>New Bot</Text>
-        <Text style={l.lbl}>Name</Text>
-        <TextInput style={l.inl} value={name} onChangeText={setName} placeholder="Inbox" placeholderTextColor={C.muted} />
-        <Text style={l.lbl}>What it does</Text>
-        <TextInput style={[l.inl, { minHeight: 60 }]} value={job} multiline onChangeText={setJob} placeholder="Triage email every morning" placeholderTextColor={C.muted} />
-        <Text style={[l.lbl, { marginTop: 4 }]}>Avatar</Text>
-        <View style={m.emojiRow}>
-          {EMOJIS.map((e) => (
-            <Pressable key={e} onPress={() => setEm(e)} style={[m.emojiB, e === em && m.emojiOn]}><Text style={{ fontSize: 20 }}>{e}</Text></Pressable>
+        <Text style={l.lbl}>Start from</Text>
+        <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 8, paddingVertical: 2, paddingRight: 8 }}>
+          <Pressable onPress={() => setTpl(null)} style={[m.chip, !tpl && m.chipOn]}>
+            <Text style={{ fontSize: 15 }}>✏️</Text>
+            <Text style={[m.chipT, !tpl && m.chipTOn]}>Blank</Text>
+          </Pressable>
+          {(templates || []).map((t) => (
+            <Pressable key={t.id} onPress={() => { setTpl(t.id); if (!name.trim()) setName(''); }} style={[m.chip, tpl === t.id && m.chipOn]}>
+              <Text style={{ fontSize: 15 }}>{t.emoji || '🤖'}</Text>
+              <Text style={[m.chipT, tpl === t.id && m.chipTOn]} numberOfLines={1}>{t.name}</Text>
+            </Pressable>
           ))}
-        </View>
+        </ScrollView>
+
+        {picked ? (
+          <ScrollView style={{ maxHeight: 240 }} nestedScrollEnabled>
+            <Text style={l.lbl}>Name (optional)</Text>
+            <TextInput style={l.inl} value={name} onChangeText={setName} placeholder={picked.name} placeholderTextColor={C.muted} />
+            <Text style={[l.cap, { marginTop: 8 }]}>{picked.blurb || picked.job}</Text>
+            {!!(picked.grants || []).length && (
+              <Text style={l.cap}>Asks for: {picked.grants.join(', ')} — connect them in the Plugins Hub, then grant them to this Bot.</Text>
+            )}
+            {!!(picked.skills || []).length && <Text style={l.cap}>Ships with skills: {picked.skills.join(', ')}</Text>}
+          </ScrollView>
+        ) : (
+          <>
+            <Text style={l.lbl}>Name</Text>
+            <TextInput style={l.inl} value={name} onChangeText={setName} placeholder="Inbox" placeholderTextColor={C.muted} />
+            <Text style={l.lbl}>What it does</Text>
+            <TextInput style={[l.inl, { minHeight: 60 }]} value={job} multiline onChangeText={setJob} placeholder="Triage email every morning" placeholderTextColor={C.muted} />
+            <Text style={[l.lbl, { marginTop: 4 }]}>Avatar</Text>
+            <View style={m.emojiRow}>
+              {EMOJIS.map((e) => (
+                <Pressable key={e} onPress={() => setEm(e)} style={[m.emojiB, e === em && m.emojiOn]}><Text style={{ fontSize: 20 }}>{e}</Text></Pressable>
+              ))}
+            </View>
+          </>
+        )}
+
         <View style={{ flexDirection: 'row', gap: 10, marginTop: 6 }}>
           <Pressable onPress={() => onDone(null)} style={[l.btn, { flex: 1, backgroundColor: C.panel2, borderWidth: 1, borderColor: C.line }]}><Text style={[l.btnT, { color: C.text }]}>Cancel</Text></Pressable>
-          <Pressable onPress={() => onDone(name.trim(), job.trim(), em)} disabled={!name.trim()} style={[l.btn, { flex: 1, opacity: name.trim() ? 1 : .5 }]}><Text style={l.btnT}>Create</Text></Pressable>
+          <Pressable
+            onPress={() => (picked ? onHire(picked.id, name.trim()) : onDone(name.trim(), job.trim(), em))}
+            disabled={!ready}
+            style={[l.btn, { flex: 1, opacity: ready ? 1 : .5 }]}>
+            <Text style={l.btnT}>{picked ? 'Hire' : 'Create'}</Text>
+          </Pressable>
         </View>
       </View>
     </View>
@@ -652,11 +711,46 @@ function BotModal({ bot, onClose, onCloseSaved }) {
   const [mems, setMems] = useState(null);
   const [memAdd, setMemAdd] = useState('');
   const [saving, setSaving] = useState(false);
+  const [grants, setGrants] = useState(null);          // ["plugin:gmail", "mcp:fs", …]
+  const [tools, setTools] = useState([]);             // {key,label,sub}
+  const [grantBusy, setGrantBusy] = useState('');
   const loadMem = useCallback(async () => {
     try { const d = await api('/api/bots/' + bot.id + '/memory'); setMems(Array.isArray(d) ? d : (d.items || [])); }
     catch (e) { setMems([]); }
   }, [bot.id]);
-  useEffect(() => { loadMem(); }, [loadMem]);
+  // A Bot only sees a connector's tools after it is granted to that Bot — the
+  // desktop has this switch, the phone used to skip it, so connected apps looked dead.
+  const loadTools = useCallback(async () => {
+    try {
+      const [b, pl, mc] = await Promise.all([
+        api('/api/bots/' + bot.id),
+        api('/api/plugins').catch(() => ({ plugins: [] })),
+        api('/api/mcp').catch(() => []),
+      ]);
+      setGrants(b.grants || []);
+      const rows = [];
+      for (const p of (pl.plugins || [])) {
+        if (p.allowed === false) continue;
+        rows.push({ key: 'plugin:' + p.id, label: p.name, sub: p.configured ? 'connected' : 'connect it first', ready: !!p.configured });
+      }
+      const servers = Array.isArray(mc) ? mc : (mc.servers || mc.items || []);
+      for (const s of servers) {
+        if (s.status !== 'connected') continue;
+        rows.push({ key: 'mcp:' + s.name, label: 'mcp:' + s.name, sub: (s.tool_count || 0) + ' tools', ready: true });
+      }
+      setTools(rows);
+    } catch (e) { setTools([]); setGrants([]); }
+  }, [bot.id]);
+  useEffect(() => { loadMem(); loadTools(); }, [loadMem, loadTools]);
+  const toggleGrant = async (key, ready) => {
+    if (!ready) return;
+    const cur = grants || [];
+    const next = cur.includes(key) ? cur.filter((k) => k !== key) : [...cur, key];
+    setGrants(next); setGrantBusy(key);
+    try { await api('/api/bots/' + bot.id, { method: 'PUT', body: JSON.stringify({ grants: next }) }); }
+    catch (e) { setGrants(cur); Alert.alert('Could not save', String(e.message || e)); }
+    setGrantBusy('');
+  };
   const EMOJIS = ['🤖', '🧠', '📬', '🛍', '📊', '🧾', '🔍', '✍️', '📅', '🌐', '💼', '🧹'];
   const save = async () => {
     setSaving(true);
@@ -678,7 +772,7 @@ function BotModal({ bot, onClose, onCloseSaved }) {
   const refreshMems = () => { setMems(null); loadMem(); };
   return (
     <View style={m.scrim}>
-      <View style={m.modal}>
+      <ScrollView style={m.modal} contentContainerStyle={{ gap: 8 }} showsVerticalScrollIndicator={false}>
         <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
           <View style={[n.av, { width: 40, height: 40, borderRadius: 20 }]}><Text style={{ fontSize: 19 }}>{em}</Text></View>
           <Text style={l.h2} numberOfLines={1}>{bot.name}</Text>
@@ -692,6 +786,27 @@ function BotModal({ bot, onClose, onCloseSaved }) {
           ))}
         </View>
         <Pressable onPress={save} disabled={saving} style={[l.btn, { opacity: saving ? .5 : 1 }]}><Text style={l.btnT}>Save avatar</Text></Pressable>
+        <Text style={[l.lbl, { marginTop: 6 }]}>Apps &amp; tools this Bot can use</Text>
+        <Text style={l.cap}>Connect an app in the Plugins Hub, then switch it on here — without this the Bot cannot use it.</Text>
+        <View style={m.memList}>
+          {grants === null ? <Text style={l.cap}>Loading…</Text> : (tools.length
+            ? tools.map((t) => {
+              const on = (grants || []).includes(t.key);
+              return (
+                <Pressable key={t.key} onPress={() => toggleGrant(t.key, t.ready)}
+                  style={[m.toolRow, on && m.toolOn, !t.ready && { opacity: .55 }]}>
+                  <View style={{ flex: 1 }}>
+                    <Text style={[l.cap, { marginBottom: 0, color: C.text }]} numberOfLines={1}>{t.label}</Text>
+                    <Text style={[l.cap, { marginBottom: 0, fontSize: 11 }]} numberOfLines={1}>{t.sub}</Text>
+                  </View>
+                  <Text style={{ color: on ? C.ok : C.muted, fontWeight: '800', fontSize: 12.5 }}>
+                    {grantBusy === t.key ? '…' : on ? 'ON' : 'OFF'}
+                  </Text>
+                </Pressable>
+              );
+            })
+            : <Text style={l.cap}>No connectors configured yet — open the Plugins Hub from the menu.</Text>)}
+        </View>
         <Text style={[l.lbl, { marginTop: 6 }]}>Memory — what it knows about you</Text>
         <View style={m.memList}>
           {mems === null ? <Text style={l.cap}>Loading…</Text> : (mems.length
@@ -708,7 +823,7 @@ function BotModal({ bot, onClose, onCloseSaved }) {
             placeholderTextColor={C.muted} onSubmitEditing={addMem} />
           <Pressable onPress={addMem} style={[n.hbtn, { backgroundColor: C.solid }]}><Text style={{ fontSize: 18, color: C.onSolid }}>＋</Text></Pressable>
         </View>
-      </View>
+      </ScrollView>
     </View>
   );
 }
@@ -840,6 +955,12 @@ const m = StyleSheet.create({
   emojiRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginTop: 4 },
   emojiB: { width: 40, height: 40, borderRadius: 12, borderWidth: 1, borderColor: C.line, backgroundColor: C.panel2, alignItems: 'center', justifyContent: 'center' },
   emojiOn: { borderColor: C.solid, backgroundColor: C.solid, opacity: .95 },
+  chip: { flexDirection: 'row', alignItems: 'center', gap: 6, borderRadius: 999, borderWidth: 1, borderColor: C.line, backgroundColor: C.panel2, paddingHorizontal: 12, paddingVertical: 8, maxWidth: 190 },
+  chipOn: { borderColor: C.solid, backgroundColor: C.solid },
+  chipT: { color: C.muted, fontSize: 13, fontWeight: '600', flexShrink: 1 },
+  chipTOn: { color: C.onSolid },
+  toolRow: { flexDirection: 'row', alignItems: 'center', gap: 10, backgroundColor: C.panel2, borderWidth: 1, borderColor: C.line, borderRadius: 12, paddingHorizontal: 10, paddingVertical: 8 },
+  toolOn: { borderColor: C.ok, backgroundColor: '#12261c' },
   memList: { gap: 4, maxWidth: '100%' },
   memRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
 });
