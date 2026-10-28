@@ -1,12 +1,40 @@
-// Self-update: the server publishes update.json next to the APK; the app compares
-// versionCode, downloads the new APK in-app and hands it to Android's installer.
+// Self-update, two layers:
+//  1. OTA (expo-updates): a new JS bundle is downloaded and the app reloads into
+//     it immediately — no APK, no "open it twice".
+//  2. APK fallback: the server also publishes update.json next to the APK, for
+//     changes that need new native code. The banner hands it to Android's
+//     installer.
 import { Linking } from 'react-native';
-import Constants from 'expo-constants';
+import { APP_CODE, APP_VERSION } from './build';
+
+export { APP_CODE, APP_VERSION };
 
 const UPD_URL = 'https://8888-agquljzsz7k42vgoenj7qr6fim.instabox.tech/update.json';
 
-export const APP_CODE = (Constants.expoConfig && Constants.expoConfig.android && Constants.expoConfig.android.versionCode) || 60;
-export const APP_VERSION = (Constants.expoConfig && Constants.expoConfig.version) || '1.7.0';
+let Updates = null;
+try { Updates = require('expo-updates'); } catch (e) { /* Expo Go / web */ }
+
+// Pull the published JS bundle and restart into it. Returns 'updated',
+// 'none' or 'error'. Safe to call on every launch: expo-updates only downloads
+// when the server has a newer bundle for this runtime version.
+export async function applyOta(onNote) {
+  if (!Updates) return 'none';
+  try {
+    if (!Updates.isEnabled) return 'none';
+    const chk = await Updates.checkForUpdateAsync();
+    if (!chk || !chk.isAvailable) return 'none';
+    if (onNote) onNote('Downloading the new version…');
+    const dl = await Updates.fetchUpdateAsync();
+    if (dl && dl.isNew) {
+      if (onNote) onNote('Restarting with the new version…');
+      setTimeout(() => { Updates.reloadAsync().catch(() => {}); }, 350);
+      return 'updated';
+    }
+  } catch (e) {
+    return 'error';
+  }
+  return 'none';
+}
 
 export async function checkUpdate() {
   try {

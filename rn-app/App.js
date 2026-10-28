@@ -4,7 +4,8 @@ import { Animated, Modal, View, Text, TextInput, Pressable, FlatList, StyleSheet
 import { StatusBar as ExpoStatus } from 'expo-status-bar';
 import { api, connectEvents, loadKey, saveConf, tryConf, clearConf, conf, cfgGet, K_SERVER, K_TOKEN, K_EMAIL, K_PASS, loginEmail, loginGoogle } from './src/session';
 import { C } from './src/theme';
-import { checkUpdate, installUpdate, APP_VERSION } from './src/updates';
+import { checkUpdate, installUpdate, applyOta, APP_VERSION } from './src/updates';
+import { BUILD_STAMP, OTA_CREATED } from './src/build';
 import Connect, { AuthModal } from './src/Connect';
 import Chat from './src/Chat';
 import { TopBar, DashboardScreen, MarketplaceScreen, ApprovalsScreen, McpScreen, RoutinesScreen, FilesScreen, WalletScreen } from './src/Screens';
@@ -102,6 +103,18 @@ function ZbRoot() {
   }, []);
 
   useEffect(() => { if (ready) runCheck(true); }, [ready, runCheck]);
+
+  // OTA first: a published JS bundle applies in this same launch (download,
+  // then reload), so a fix reaches the phone without installing an APK.
+  useEffect(() => {
+    let done = false;
+    const t = setTimeout(async () => {
+      if (done) return;
+      done = true;
+      await applyOta();
+    }, 1200);
+    return () => clearTimeout(t);
+  }, []);
 
   const doUpdate = useCallback(async () => {
     const u = upd || await runCheck(true);
@@ -837,8 +850,14 @@ function Settings({ onOut, onCheck, onPlug, onMenu }) {
   useEffect(() => { cfgGet(K_EMAIL).then((m) => setMail2(String(m || ''))).catch(() => {}); }, []);
   const check = async () => {
     setChecking(true); setUpdMsg('');
-    try { const u = await onCheck(true); setUpdMsg(u ? ('New version ' + u.version + ' is available — tap the banner to install it.') : 'You are up to date.'); }
-    catch (e) { setUpdMsg('Could not check: ' + (e.message || 'network')); }
+    try {
+      // OTA first: if a newer JS bundle is published, this downloads it and
+      // restarts straight into it (no APK, no second launch).
+      const ota = await applyOta(setUpdMsg);
+      if (ota === 'updated') { setChecking(false); return; }
+      const u = await onCheck(true);
+      setUpdMsg(u ? ('New app version ' + u.version + ' is available — tap the banner to install it.') : (ota === 'none' ? 'You are up to date.' : 'You are up to date (OTA check unavailable).'));
+    } catch (e) { setUpdMsg('Could not check: ' + (e.message || 'network')); }
     setChecking(false);
   };
   let host = '';
@@ -849,7 +868,7 @@ function Settings({ onOut, onCheck, onPlug, onMenu }) {
         <Pressable onPress={onMenu} hitSlop={8}><View style={n.hbtn}><Text style={{ fontSize: 16, color: C.text }}>☰</Text></View></Pressable>
         <View style={{ flex: 1 }}>
           <Text style={n.brand}>Settings</Text>
-          <Text style={n.sub}>app v{APP_VERSION}</Text>
+          <Text style={n.sub}>app v{BUILD_STAMP}</Text>
         </View>
       </View>
       <FlatList
@@ -867,7 +886,7 @@ function Settings({ onOut, onCheck, onPlug, onMenu }) {
               <View style={n.pill}><Text style={{ color: C.ok, fontSize: 11, fontWeight: '800' }}>● online</Text></View>
             </View>
             <Row icon="🧩" label="Connectors & MCP" sub="Gmail, Slack, GitHub, Notion, MCP servers…" onPress={onPlug} />
-            <Row icon="⬇️" label="Check for updates" sub={checking ? 'Checking…' : (updMsg || 'JS updates arrive silently on next launch')} onPress={check} />
+            <Row icon="⬇️" label="Check for updates" sub={checking ? 'Checking…' : (updMsg || (OTA_CREATED ? 'Bundle of ' + OTA_CREATED + ' · tap to check' : 'Tap to check for a new bundle'))} onPress={check} />
             <Row icon="🖥" label="Server" sub={host || conf().base} />
             <Pressable onPress={onOut} style={({ pressed }) => [n.row, { borderColor: '#5c2723' }, pressed && { opacity: .9 }]}>
               <View style={n.rowIc}><Text style={{ fontSize: 15 }}>🚪</Text></View>

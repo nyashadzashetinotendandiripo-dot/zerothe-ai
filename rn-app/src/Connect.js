@@ -182,7 +182,7 @@ function Connectors() {
         </View>
       )}
       <ScrollView style={{ flex: 1 }} contentContainerStyle={st.list}>
-        {rows.map((p) => <Row key={p.id} p={p} act={act} busyId={busyId} onMsg={setMsg} onRemove={removeOne} />)}
+        {rows.map((p) => <Row key={p.id} p={p} act={act} busyId={busyId} onMsg={setMsg} onRemove={removeOne} reload={load} />)}
 
         {!!avail.length && (
           <View style={st.card}>
@@ -284,10 +284,11 @@ export function AuthModal({ o, onClose, onUrl }) {
   );
 }
 
-function Row({ p, act, busyId, onMsg, onRemove }) {
+function Row({ p, act, busyId, onMsg, onRemove, reload }) {
   const [open, setOpen] = useState(false);
   const [vals, setVals] = useState({});
   const [saved, setSaved] = useState(false);
+  const [busyLocal, setBusyLocal] = useState(false);
   const save = async () => {
     const body = {}; for (const f of (p.fields || [])) if (String(vals[f.key] || '').trim()) body[f.key] = vals[f.key];
     if (!Object.keys(body).length) { setSaved(false); if (onMsg) onMsg(p.name + ': nothing to save yet.'); return; }
@@ -303,6 +304,28 @@ function Row({ p, act, busyId, onMsg, onRemove }) {
   };
   const chip = p.oauth && !p.connected ? ['not connected', C.warn] : p.configured ? ['ready', C.ok] : ['needs setup', C.warn];
   const hasFields = (p.fields || []).length > 0;
+  // One-field connectors (Notion, Linear, GitHub, Asana PAT, HubSpot private app,
+  // X bearer, Mouser, Onshape keys) should not need a hidden form: paste the token
+  // right on the card, save, and test it in one tap.
+  const tokenField = (p.fields || []).find((f) => ['token', 'api_key', 'bot_token'].includes(f.key));
+  const quick = tokenField && !p.oauth ? tokenField : null;
+  const quickSave = async () => {
+    const v = String(vals[quick.key] || '').trim();
+    if (!v) { if (onMsg) onMsg(p.name + ': paste the ' + quick.label.toLowerCase() + ' first.'); return; }
+    setBusyLocal(true);
+    try {
+      await api('/api/plugins/' + p.id + '/config', { method: 'PUT', body: JSON.stringify({ [quick.key]: v }) });
+      setVals((o) => ({ ...o, [quick.key]: '' }));
+      setSaved(true);
+      let t = '';
+      try { const r = await api('/api/plugins/' + p.id + '/test', { method: 'POST' }); t = r.message || ''; } catch (e) { t = e.message || ''; }
+      if (onMsg) onMsg(p.name + ': connected ✓' + (t ? ' — ' + t : ''));
+      if (reload) await reload();
+    } catch (e) {
+      if (onMsg) onMsg(p.name + ': ' + (e.message || 'could not save the token'));
+    }
+    setBusyLocal(false);
+  };
   return (
     <View style={st.card}>
       <View style={st.cardTop}>
@@ -312,6 +335,22 @@ function Row({ p, act, busyId, onMsg, onRemove }) {
       <Text style={l.cap} numberOfLines={2}>{p.description}</Text>
       {!!p.managed && (
         <Text style={st.managed}>Uses this server’s Google app — just tap Connect, nothing to paste.</Text>
+      )}
+      {quick && !p.configured && (
+        <View style={{ gap: 6, marginTop: 4 }}>
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+            <TextInput style={[l.inl, { flex: 1 }]} value={vals[quick.key] || ''}
+              onChangeText={(t) => setVals((o) => ({ ...o, [quick.key]: t }))}
+              placeholder={quick.label} placeholderTextColor={C.muted}
+              secureTextEntry={!!quick.secret} autoCapitalize="none" autoCorrect={false} />
+            <PBtn label={busyLocal ? '…' : 'Connect'} onPress={quickSave} />
+          </View>
+          {!!p.setup_url && (
+            <Pressable onPress={() => act(p, 'setup')} hitSlop={6}>
+              <Text style={[l.cap, { color: C.ok, marginBottom: 0 }]}>Get the {quick.label.toLowerCase()} ↗</Text>
+            </Pressable>
+          )}
+        </View>
       )}
       <View style={{ flexDirection: 'row', gap: 8, marginTop: 6, flexWrap: 'wrap' }}>
         {p.oauth ? (

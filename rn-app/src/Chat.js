@@ -57,10 +57,8 @@ function parseDate(it) {
 }
 
 const REACTS = ['👍', '❤️', '🎉', '😄', '🚀', '👀'];
-const EMOJI_SET = ['😀', '😂', '🙂', '😍', '😎', '🤔', '👍', '👏', '🙏', '🔥', '🎉', '❤️',
-  '😅', '😢', '😮', '🤝', '✅', '⚡', '🚀', '💡', '📌', '📊', '🛠', '🧠'];
 
-const TOOL_GLYPH = { running: '◌', ok: '✓', error: '✕', denied: '⛔', blocked: '⛔' };
+const TOOL_GLYPH = { running: '•', ok: '✓', error: '✕', denied: '⛔', blocked: '⛔' };
 
 // One assistant message can carry several rows (the text plus each tool call), and
 // they share the message id — so identity needs the type and the tool call id.
@@ -76,11 +74,9 @@ export default function Chat({ thread, threads, onSwitch, onBack, onEvent, onMen
   const [pick, setPick] = useState(null);            // bubble long-pressed for react/reply
   const [text, setText] = useState('');
   const [loading, setLoading] = useState(true);
-  const [reasonOpen, setReasonOpen] = useState(false);
   const [liveFull, setLiveFull] = useState(false);
   const [histOpen, setHistOpen] = useState(false);
   const [histQ, setHistQ] = useState('');
-  const [emojiOpen, setEmojiOpen] = useState(false);
   const [err, setErr] = useState('');
   const listRef = useRef(null);
   const fastRef = useRef(0);            // keep fast polling for a while after sending
@@ -91,10 +87,14 @@ export default function Chat({ thread, threads, onSwitch, onBack, onEvent, onMen
     const rows = d.items || [];
     setItems((prev) => {
       if (!quiet) return rows;
-      // Quiet polls only append what is new, so a streaming answer never flickers.
-      const known = new Set(prev.map(keyOf));
-      const extra = rows.filter((i) => !known.has(keyOf(i)));
-      return extra.length ? [...prev, ...extra] : prev;
+      // Merge by row identity instead of only appending: a streaming answer and
+      // a tool step keep the same id while their text/status change, so appending
+      // alone left the screen stuck on the first, empty version of the reply.
+      const prevByKey = new Map(prev.map((i) => [keyOf(i), i]));
+      const merged = rows.map((i) => prevByKey.get(keyOf(i)) || i);
+      const seen = new Set(rows.map(keyOf));
+      const keep = prev.filter((i) => !seen.has(keyOf(i)));
+      return [...merged, ...keep];
     });
     setApps(d.approvals || []);
     const running = !!(d.running && d.running.length);
@@ -118,7 +118,8 @@ export default function Chat({ thread, threads, onSwitch, onBack, onEvent, onMen
 
   // Safety net: the phone's SSE can be blocked by a proxy or killed by the OS, and
   // then the answer never appeared while the screen kept saying "working". Poll the
-  // thread as well — fast while a turn runs, slowly when idle.
+  // thread as well — every 1.5 s while a turn runs, every 3 s otherwise, so an
+  // answer shows up on its own even if the live stream is dead.
   useEffect(() => {
     let alive = true;
     let t = null;
@@ -126,9 +127,9 @@ export default function Chat({ thread, threads, onSwitch, onBack, onEvent, onMen
       await load(true);
       if (!alive) return;
       const fast = busyRef.current || Date.now() < fastRef.current;
-      t = setTimeout(tick, fast ? 2000 : 12000);
+      t = setTimeout(tick, fast ? 1500 : 3000);
     };
-    t = setTimeout(tick, ((busyRef.current || Date.now() < fastRef.current) ? 2000 : 12000));
+    t = setTimeout(tick, ((busyRef.current || Date.now() < fastRef.current) ? 1500 : 3000));
     return () => { alive = false; if (t) clearTimeout(t); };
   }, [load]);
 
@@ -200,7 +201,6 @@ export default function Chat({ thread, threads, onSwitch, onBack, onEvent, onMen
     );
     if (item.type === 'assistant') return (
       <Pressable onLongPress={() => item.id && setPick(item)} delayLongPress={350} style={st.rowIn}>
-        <Text style={st.who}>{(item.emoji ? item.emoji + '  ' : '') + (item.name || 'Bot')}</Text>
         <View style={st.answer}>
           {aiBody(String(item.text || ''), (t) => md(t, st.answerT), (r) => { setText(r); })}
         </View>
@@ -252,37 +252,19 @@ export default function Chat({ thread, threads, onSwitch, onBack, onEvent, onMen
 
   return (
     <KeyboardAvoidingView style={{ flex: 1, backgroundColor: BG }} behavior={Platform.OS === 'ios' ? 'padding' : undefined} keyboardVerticalOffset={0}>
-      {/* Grok-style top bar: menu · title/status · history */}
+      {/* WhatsApp-style top bar: menu · name/status (tap for chat history) */}
       <View style={[st.header, { paddingTop: (ins?.top || 0) + 6 }]}>
         <Pressable onPress={onMenu} hitSlop={10} style={st.hBtn}><Text style={st.hIcon}>☰</Text></Pressable>
         <Pressable style={{ flex: 1 }} onPress={() => { setHistQ(''); setHistOpen(true); }}>
           <Text style={st.htitle} numberOfLines={1}>{botName}</Text>
           <Text style={[st.hstatus, err && { color: '#e57373' }]} numberOfLines={1}>{status}</Text>
         </Pressable>
-        {!!acts.length && (
-          <Pressable onPress={() => setReasonOpen(!reasonOpen)} hitSlop={8} style={st.hBtn}>
-            <Text style={[st.hIconSm, reasonOpen && { color: ACCENT }]}>◔</Text>
-          </Pressable>
-        )}
-        <Pressable onPress={() => { setHistQ(''); setHistOpen(true); }} hitSlop={8} style={st.hBtn}><Text style={st.hIconSm}>🗂</Text></Pressable>
       </View>
 
       {!!err && (
         <Pressable style={st.errBar} onPress={() => load()}>
           <Text style={st.errT} numberOfLines={2}>{err} · tap to retry</Text>
         </Pressable>
-      )}
-
-      {reasonOpen && (
-        <ScrollView style={st.reasonBody} nestedScrollEnabled>
-          {acts.length ? [...acts].reverse().map((it, i) => (
-            <View key={i} style={st.reasonRow}>
-              <Text style={[st.reasonGlyph, { color: (TOOL_GLYPH[it.status] !== '✕' && it.status !== 'error' && it.status !== 'denied' && it.status !== 'blocked') ? '#6fcf97' : '#e57373' }]}>
-                {TOOL_GLYPH[it.status] || '•'}</Text>
-              <Text style={st.reasonTxt} numberOfLines={2}>{it.label || it.tool}</Text>
-            </View>
-          )) : <Text style={st.reasonEmpty}>No activity yet — the Bot's tool steps will stream here.</Text>}
-        </ScrollView>
       )}
 
       {!!busy && busy.status !== 'waiting_approval' && lastAct && (
@@ -311,7 +293,7 @@ export default function Chat({ thread, threads, onSwitch, onBack, onEvent, onMen
       {!!busy && (
         <View style={st.busyRow}>
           <Text style={{ color: busy.status === 'waiting_approval' ? '#e0a53a' : MUTED, fontSize: 12.5 }}>
-            {busy.status === 'waiting_approval' ? '⏸ waiting for your approval' : '● working…'}
+            {busy.status === 'waiting_approval' ? 'waiting for your approval' : 'typing…'}
           </Text>
           <View style={{ flex: 1 }} />
           <Pressable onPress={stop} hitSlop={8}><Text style={st.stop}>Stop</Text></Pressable>
@@ -351,27 +333,14 @@ export default function Chat({ thread, threads, onSwitch, onBack, onEvent, onMen
         </View>
       )}
 
-      {emojiOpen && (
-        <View style={st.emojiPanel}>
-          {EMOJI_SET.map((e) => (
-            <Pressable key={e} onPress={() => setText((t) => t + e)} hitSlop={4} style={st.emojiB}>
-              <Text style={{ fontSize: 23 }}>{e}</Text>
-            </Pressable>
-          ))}
-        </View>
-      )}
-
-      {/* Grok-style composer: + · input · send */}
+      {/* WhatsApp-style composer: input · round send */}
       <View style={[st.composerWrap, { paddingBottom: 8 + (ins?.bottom || 0) }]}>
         <View style={st.composer}>
-          <Pressable onPress={() => setEmojiOpen((v) => !v)} hitSlop={8} style={st.composerBtn}>
-            <Text style={[st.composerPlus, emojiOpen && { color: ACCENT }]}>＋</Text>
-          </Pressable>
           <TextInput
             style={st.input}
             value={text}
             onChangeText={setText}
-            placeholder="Ask anything"
+            placeholder="Message"
             placeholderTextColor={MUTED}
             multiline
             returnKeyType="send"
@@ -380,7 +349,7 @@ export default function Chat({ thread, threads, onSwitch, onBack, onEvent, onMen
           />
           <Pressable onPress={send} disabled={!text.trim()} hitSlop={6}
             style={[st.sendBtn, !text.trim() && st.sendBtnOff]}>
-            <Text style={[st.sendT, !text.trim() && { color: MUTED }]}>↑</Text>
+            <Text style={[st.sendT, !text.trim() && { color: MUTED }]}>➤</Text>
           </Pressable>
         </View>
       </View>
@@ -474,7 +443,7 @@ const st = StyleSheet.create({
   empty: { color: MUTED, fontSize: 15, textAlign: 'center', marginTop: 60 },
 
   rowOut: { alignItems: 'flex-end', marginTop: 10 },
-  bubbleOut: { backgroundColor: BUBBLE, borderRadius: 20, borderBottomRightRadius: 6, paddingHorizontal: 14, paddingVertical: 10, maxWidth: '84%' },
+  bubbleOut: { backgroundColor: '#005c4b', borderRadius: 14, borderTopRightRadius: 14, borderBottomRightRadius: 4, paddingHorizontal: 14, paddingVertical: 9, maxWidth: '84%' },
   bubbleOutT: { color: TEXT, fontSize: 15.5, lineHeight: 22 },
 
   rowIn: { marginTop: 14, paddingHorizontal: 2 },
@@ -509,13 +478,11 @@ const st = StyleSheet.create({
   replyX: { color: MUTED, fontSize: 15 },
 
   composerWrap: { paddingHorizontal: 10, paddingTop: 6, backgroundColor: BG },
-  composer: { flexDirection: 'row', alignItems: 'flex-end', gap: 6, backgroundColor: '#1c1c1c', borderWidth: 1, borderColor: '#2a2a2a', borderRadius: 26, paddingHorizontal: 6, paddingVertical: 6 },
-  composerBtn: { width: 36, height: 36, borderRadius: 18, alignItems: 'center', justifyContent: 'center' },
-  composerPlus: { color: MUTED, fontSize: 22, lineHeight: 24 },
-  input: { flex: 1, color: TEXT, fontSize: 15.5, lineHeight: 21, paddingHorizontal: 4, paddingTop: 8, paddingBottom: 8, maxHeight: 120 },
-  sendBtn: { width: 36, height: 36, borderRadius: 18, backgroundColor: ACCENT, alignItems: 'center', justifyContent: 'center', marginBottom: 1 },
+  composer: { flexDirection: 'row', alignItems: 'flex-end', gap: 6, backgroundColor: '#1c1c1c', borderWidth: 1, borderColor: '#2a2a2a', borderRadius: 24, paddingLeft: 14, paddingRight: 5, paddingVertical: 5 },
+  input: { flex: 1, color: TEXT, fontSize: 15.5, lineHeight: 21, paddingVertical: 9, maxHeight: 120 },
+  sendBtn: { width: 38, height: 38, borderRadius: 19, backgroundColor: '#00a884', alignItems: 'center', justifyContent: 'center' },
   sendBtnOff: { backgroundColor: '#2a2a2a' },
-  sendT: { color: '#0a0a0a', fontSize: 18, fontWeight: '800', lineHeight: 20 },
+  sendT: { color: '#ffffff', fontSize: 17, fontWeight: '800', lineHeight: 19, marginLeft: 1 },
 
   emojiPanel: { flexDirection: 'row', flexWrap: 'wrap', gap: 4, backgroundColor: BG, paddingHorizontal: 10, paddingTop: 8 },
   emojiB: { width: 40, height: 40, alignItems: 'center', justifyContent: 'center', borderRadius: 10 },

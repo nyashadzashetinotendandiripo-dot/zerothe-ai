@@ -1,6 +1,7 @@
 // ZerotheBot React-Native client — same REST + SSE API as the web app (service/server.py).
 import { useEffect, useMemo, useRef, useState } from 'react';
 import EventSource from 'react-native-sse';
+import { APP_VERSION, OTA_ID } from './build';
 
 // ------------------------------------------------------------ secure config
 let SecureStore = null;
@@ -49,6 +50,10 @@ export async function api(path, opts = {}) {
     headers: {
       'Authorization': 'Bearer ' + TOKEN,
       'Content-Type': 'application/json',
+      // Lets the server log which bundle the phone is really running, so
+      // "I updated but nothing changed" is answerable from the server side.
+      'X-ZB-App': APP_VERSION,
+      'X-ZB-Ota': OTA_ID || 'embedded',
       ...(opts.headers || {}),
     },
   });

@@ -219,7 +219,8 @@ def create_app(engine: Engine, token: str) -> FastAPI:
         return {"ok": True}
 
     @app.get("/api/bootstrap", dependencies=[api])
-    def bootstrap() -> dict:
+    def bootstrap(request: Request) -> dict:
+        _note_app(request)
         bots = eng.bots.list()
         return {"bots": bots, "groups": eng.messaging.list_groups(), "status": eng.status(), "approvals": eng.approvals.list("pending"),
                 "profiles": _profiles(), "templates": TEMPLATES, "settings": _public_settings(), "last_event": eng.events.last_id(),
@@ -839,6 +840,29 @@ def create_app(engine: Engine, token: str) -> FastAPI:
                 fh.write(line + "\n")
         except Exception:
             pass
+
+    def _note_app(request: Request) -> None:
+        """Which bundle is the phone actually running? The app sends its version
+        and expo-updates id on every API call; log only when it changes, so the
+        answer to "I updated but nothing changed" is in one file."""
+        try:
+            app = request.headers.get("x-zb-app", "")
+            ota = request.headers.get("x-zb-ota", "")
+            if not app and not ota:
+                return
+            key = app + "|" + ota
+            if _note_app.last == key:
+                return
+            _note_app.last = key
+            line = " ".join([time.strftime("%Y-%m-%d %H:%M:%S"), "app", (request.client.host if request.client else "-"),
+                             "version=" + (app or "-"), "ota=" + (ota or "-")[:8],
+                             "ua=" + (request.headers.get("user-agent", "-") or "-")[:40]])
+            _updates_dir.mkdir(parents=True, exist_ok=True)
+            with open(_updates_dir / "requests.log", "a", encoding="utf-8") as fh:
+                fh.write(line + "\n")
+        except Exception:
+            pass
+    _note_app.last = ""
 
     @app.get("/updates/manifest")
     def updates_manifest(request: Request) -> Response:
