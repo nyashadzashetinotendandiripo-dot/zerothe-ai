@@ -1,37 +1,38 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { View, Text, TextInput, Pressable, FlatList, StyleSheet, KeyboardAvoidingView, Platform, Image, ActivityIndicator, ScrollView } from 'react-native';
-import Svg, { Defs, Pattern, Rect, Circle } from 'react-native-svg';
 import { api, API_BASE } from './session';
 import md from './md';
-import { aiBody, uiPlain } from './widgets';
-import { C } from './theme';
+import { aiBody, uiPlain, uiStreamText } from './widgets';
 
-const IN_BG = '#202c33';     // incoming bubble
-const OUT_BG = '#005c4b';    // outgoing bubble (WhatsApp dark green)
-const WALL = '#0b141a';      // wallpaper base
-const WA_GREEN = '#075E54';  // WhatsApp header green
-const WA_GREEN_LIGHT = '#128C7E';
-const FAINT = 'rgba(233,237,238,.55)';
+// Grok-style chat: near-black canvas, assistant answers as plain full-width text,
+// user messages as compact right-aligned bubbles, floating pill composer.
+const BG = '#0a0a0a';
+const PANEL = '#121212';
+const BUBBLE = '#2b2b2b';
+const TEXT = '#ececec';
+const MUTED = '#8f8f8f';
+const LINE = '#1f1f1f';
+const ACCENT = '#ffffff';
 
 function AnsRow({ onSend, placeholder }) {
   const [v, setV] = useState('');
   const go = () => { const t = v.trim(); if (t) { onSend(t); setV(''); } };
   return (
-    <View style={{ flexDirection: 'row', gap: 8, marginTop: 6 }}>
+    <View style={{ flexDirection: 'row', gap: 8, marginTop: 8 }}>
       <TextInput
         value={v}
         onChangeText={setV}
         placeholder={placeholder}
-        placeholderTextColor="#8696a0"
-        style={{ flex: 1, color: '#e9edef', fontSize: 13, borderWidth: 1, borderColor: '#4d4122', borderRadius: 10, paddingHorizontal: 10, paddingVertical: 7 }}
+        placeholderTextColor={MUTED}
+        style={st.ansIn}
         autoCapitalize="none"
         autoCorrect={false}
         returnKeyType="send"
         onSubmitEditing={go}
       />
-      <Pressable onPress={go} style={({ pressed }) => [st.appBtn, pressed && { opacity: 0.85 }]}>
-        <Text style={st.appOk}>Send</Text>
+      <Pressable onPress={go} style={({ pressed }) => [st.ansBtn, pressed && { opacity: 0.85 }]}>
+        <Text style={st.ansBtnT}>Send</Text>
       </Pressable>
     </View>
   );
@@ -59,26 +60,7 @@ const REACTS = ['👍', '❤️', '🎉', '😄', '🚀', '👀'];
 const EMOJI_SET = ['😀', '😂', '🙂', '😍', '😎', '🤔', '👍', '👏', '🙏', '🔥', '🎉', '❤️',
   '😅', '😢', '😮', '🤝', '✅', '⚡', '🚀', '💡', '📌', '📊', '🛠', '🧠'];
 
-const TOOL_GLYPH = { running: '●', ok: '✓', error: '✕', denied: '⛔', blocked: '⛔' };
-
-function Wallpaper() {
-  return (
-    <View pointerEvents="none" style={{ ...StyleSheet.absoluteFillObject, opacity: 0.06 }}>
-      <Svg width="100%" height="100%">
-        <Defs>
-          <Pattern id="wa" width="120" height="120" patternUnits="userSpaceOnUse" patternTransform="rotate(12)">
-            <Circle cx="20" cy="20" r="1.3" fill="#fff" />
-            <Circle cx="60" cy="10" r="1" fill="#fff" />
-            <Circle cx="90" cy="50" r="1.2" fill="#fff" />
-            <Circle cx="40" cy="80" r="1" fill="#fff" />
-            <Circle cx="10" cy="90" r="1.1" fill="#fff" />
-          </Pattern>
-        </Defs>
-        <Rect width="100%" height="100%" fill="url(#wa)" />
-      </Svg>
-    </View>
-  );
-}
+const TOOL_GLYPH = { running: '◌', ok: '✓', error: '✕', denied: '⛔', blocked: '⛔' };
 
 export default function Chat({ thread, threads, onSwitch, onBack, onEvent, onMenu }) {
   const ins = useSafeAreaInsets();
@@ -95,20 +77,56 @@ export default function Chat({ thread, threads, onSwitch, onBack, onEvent, onMen
   const [histOpen, setHistOpen] = useState(false);
   const [histQ, setHistQ] = useState('');
   const [emojiOpen, setEmojiOpen] = useState(false);
+  const [err, setErr] = useState('');
   const listRef = useRef(null);
+  const fastRef = useRef(0);            // keep fast polling for a while after sending
+  const busyRef = useRef(null);
+  busyRef.current = busy;
 
-  const load = useCallback(async () => {
+  const apply = useCallback((d, quiet) => {
+    const rows = d.items || [];
+    setItems((prev) => {
+      if (!quiet) return rows;
+      // Quiet polls only append what is new, so a streaming answer never flickers.
+      const known = new Set(prev.map((i) => i.id));
+      const extra = rows.filter((i) => !known.has(i.id));
+      return extra.length ? [...prev, ...extra] : prev;
+    });
+    setApps(d.approvals || []);
+    const running = !!(d.running && d.running.length);
+    if (!running) setStreams({});
+    const next = running ? 'running' : ((d.approvals || []).length ? 'waiting_approval' : null);
+    setBusy((prev) => ((prev && prev.status === next) ? prev : (next ? { status: next } : null)));
+    setErr('');
+  }, []);
+
+  const load = useCallback(async (quiet) => {
     try {
       const d = await api('/api/threads/' + thread.id);
-      setItems(d.items || []);
-      setApps(d.approvals || []);
-      setStreams({});
-      setBusy(d.running && d.running.length ? { status: 'running' } : null);
-    } catch (e) { /* offline */ }
+      apply(d, !!quiet);
+    } catch (e) {
+      if (!quiet) setErr(String(e.message || e));
+    }
     setLoading(false);
-  }, [thread.id]);
+  }, [thread.id, apply]);
 
-  useEffect(() => { setItems([]); setLoading(true); setReplyTo(null); load(); }, [thread.id, load]);
+  useEffect(() => { setItems([]); setLoading(true); setReplyTo(null); setErr(''); load(); }, [thread.id, load]);
+
+  // Safety net: the phone's SSE can be blocked by a proxy or killed by the OS, and
+  // then the answer never appeared while the screen kept saying "working". Poll the
+  // thread as well — fast while a turn runs, slowly when idle.
+  useEffect(() => {
+    let alive = true;
+    let t = null;
+    const tick = async () => {
+      await load(true);
+      if (!alive) return;
+      const fast = busyRef.current || Date.now() < fastRef.current;
+      t = setTimeout(tick, fast ? 2000 : 12000);
+    };
+    t = setTimeout(tick, ((busyRef.current || Date.now() < fastRef.current) ? 2000 : 12000));
+    return () => { alive = false; if (t) clearTimeout(t); };
+  }, [load]);
 
   useEffect(() => {
     onEvent.current = (ev) => {
@@ -116,11 +134,12 @@ export default function Chat({ thread, threads, onSwitch, onBack, onEvent, onMen
       if (ev.type === 'message' && Array.isArray(ev.items)) {
         setItems((prev) => {
           const known = new Set(prev.map((i) => i.id));
-          return [...prev, ...ev.items.filter((i) => !known.has(i.id))];
+          const add = ev.items.filter((i) => !known.has(i.id));
+          return add.length ? [...prev, ...add] : prev;
         });
         setStreams({});
       } else if (ev.type === 'delta') {
-        setStreams((s) => ({ ...s, [ev.stream_id]: (s[ev.stream_id] || '') + ev.text }));
+        setStreams((s) => ({ ...s, [ev.stream_id]: (ev.text || '') }));
       } else if (ev.type === 'delta_reset') {
         setStreams((s) => { const o = { ...s }; delete o[ev.stream_id]; return o; });
       } else if (ev.type === 'turn') {
@@ -137,16 +156,22 @@ export default function Chat({ thread, threads, onSwitch, onBack, onEvent, onMen
     if (!thread?.id) return;
     const pid = replyTo ? replyTo.id : 0;
     const snapshot = t;
-    setText(''); setReplyTo(null);
+    setText(''); setReplyTo(null); setErr('');
+    fastRef.current = Date.now() + 120000;     // poll fast until the answer lands
+    setBusy({ status: 'running' });            // show "working" at once, start fast polling
     try {
       await api('/api/threads/' + thread.id + '/messages', { method: 'POST', body: JSON.stringify({ text: snapshot, images: [], parent_id: pid }) });
-      await load();                      // show it immediately even if SSE lags
+      await load();                            // show it immediately even if SSE lags
     } catch (e) {
-      // restore on failure so the user doesn't lose their message
-      setText(snapshot);
+      setText(snapshot);                       // never lose the message
+      setBusy(null);
+      setErr(String(e.message || e));
     }
   };
-  const stop = async () => { try { await api('/api/threads/' + thread.id + '/stop', { method: 'POST', body: '{}' }); } catch (e) { /* already done */ } };
+  const stop = async () => {
+    try { await api('/api/threads/' + thread.id + '/stop', { method: 'POST', body: '{}' }); } catch (e) { /* already done */ }
+    setTimeout(() => load(), 600);
+  };
   const react = async (mid, emoji) => { try { await api('/api/messages/' + mid + '/reactions', { method: 'POST', body: JSON.stringify({ emoji, author: 'user' }) }); load(); } catch (e) { /* ignore */ } };
   const decide = async (a, approve, remember, answer) => {
     setApps((cur) => cur.filter((x) => x.id !== a.id));
@@ -157,21 +182,25 @@ export default function Chat({ thread, threads, onSwitch, onBack, onEvent, onMen
   };
 
   const renderItem = ({ item }) => {
-    if (item.day) return <View style={st.dayWrap}><View style={st.dayChip}><Text style={st.dayT}>{item.label}</Text></View></View>;
-    if (item.typing) return <View style={st.msg}><Text style={st.typingT}>● ● ●</Text></View>;
+    if (item.day) return <View style={st.dayWrap}><Text style={st.dayT}>{item.label}</Text></View>;
+    if (item.typing) return (
+      <View style={st.typingWrap}><Text style={st.typingT}>●  ●  ●</Text></View>
+    );
     if (item.type === 'user') return (
-      <Pressable onLongPress={() => item.id && setPick(item)} delayLongPress={350} style={[st.msg, st.msgMe]}>
-        <Text selectable style={st.msgTOut}>{String(item.text || '')}</Text>
-        <MsgFoot it={item} time={fmtT(item)} outgoing />
-        <View style={st.tailOut} />
-      </Pressable>
+      <View style={st.rowOut}>
+        <Pressable onLongPress={() => item.id && setPick(item)} delayLongPress={350} style={st.bubbleOut}>
+          <Text selectable style={st.bubbleOutT}>{String(item.text || '')}</Text>
+          <MsgFoot it={item} time={fmtT(item)} outgoing />
+        </Pressable>
+      </View>
     );
     if (item.type === 'assistant') return (
-      <Pressable onLongPress={() => item.id && setPick(item)} delayLongPress={350} style={[st.msg]}>
-        {!!item.name && !item.eq && <Text style={st.who}>{item.emoji || ''} {item.name}</Text>}
-        {aiBody(String(item.text || ''), (t) => md(t, st.msgT), (r) => { setText(r); })}
+      <Pressable onLongPress={() => item.id && setPick(item)} delayLongPress={350} style={st.rowIn}>
+        <Text style={st.who}>{(item.emoji ? item.emoji + '  ' : '') + (item.name || 'Bot')}</Text>
+        <View style={st.answer}>
+          {aiBody(String(item.text || ''), (t) => md(t, st.answerT), (r) => { setText(r); })}
+        </View>
         <MsgFoot it={item} time={fmtT(item)} />
-        <View style={st.tailIn} />
       </Pressable>
     );
     if (item.type === 'tool') {
@@ -179,7 +208,7 @@ export default function Chat({ thread, threads, onSwitch, onBack, onEvent, onMen
       const okk = item.status === 'ok' || item.status === 'running';
       return (
         <View style={st.toolWrap}>
-          <Text style={[st.toolIc, { color: okk ? '#66d9a3' : '#f15c6d' }]}>{g}</Text>
+          <Text style={[st.toolIc, { color: okk ? '#6fcf97' : '#e57373' }]}>{g}</Text>
           <Text style={st.toolT} numberOfLines={2}>{item.label || item.tool}</Text>
           {(item.images || []).map((n, i) => <Image key={i} style={st.shot}
             source={{ uri: API_BASE + '/api/files/shots/' + encodeURIComponent(n) }} />)}
@@ -211,95 +240,113 @@ export default function Chat({ thread, threads, onSwitch, onBack, onEvent, onMen
       }
       disp.push(it);
     }); }
-  const HEADER = (
-    <Pressable style={{ flex: 1 }} onPress={() => { setHistQ(''); setHistOpen(true); }}>
-      <Text style={st.htitle} numberOfLines={1}>{(threads && threads.find(t=>t.id===thread.id)?.title) || 'ZerotheBot'}</Text>
-      <Text style={st.hstatus} numberOfLines={1}>{!!busy ? (busy.status === 'waiting_approval' ? 'needs your approval • tap to respond' : 'typing…') : ((threads || []).length > 1 ? ((threads || []).length + ' chats • tap for history') : 'online')}</Text>
-    </Pressable>
-  );
+
+  const botName = (threads && threads.find((t) => t.id === thread.id)?.title) || 'ZerotheBot';
+  const status = busy
+    ? (busy.status === 'waiting_approval' ? 'Needs your approval' : 'Working…')
+    : (err ? 'Offline — tap to retry' : ((threads || []).length > 1 ? (threads || []).length + ' chats' : 'Online'));
+
   return (
-    <KeyboardAvoidingView style={{ flex: 1, backgroundColor: WALL }} behavior={Platform.OS === 'ios' ? 'padding' : undefined} keyboardVerticalOffset={0}>
-      {/* WhatsApp-style header */}
-      <View style={[st.header, { paddingTop: (ins?.top || 0) + 6, backgroundColor: WA_GREEN }]}>
-        <Pressable onPress={onBack} hitSlop={10} style={st.backBtn}><Text style={st.back}>‹</Text></Pressable>
-        <View style={st.av}><Text style={{ fontSize: 16 }}>🤖</Text></View>
-        {HEADER}
-        <Pressable onPress={() => { setHistQ(''); setHistOpen(true); }} hitSlop={8} style={st.hIconBtn}><Text style={st.hIcon}>🗂</Text></Pressable>
-        <Pressable onPress={onMenu} hitSlop={8} style={st.hIconBtn}><Text style={st.hIcon}>☰</Text></Pressable>
-        <Pressable onPress={() => setReasonOpen(!reasonOpen)} hitSlop={8}>
-          <Text style={[st.hbtn, reasonOpen && st.hbtnOn]}>⋮</Text>
+    <KeyboardAvoidingView style={{ flex: 1, backgroundColor: BG }} behavior={Platform.OS === 'ios' ? 'padding' : undefined} keyboardVerticalOffset={0}>
+      {/* Grok-style top bar: menu · title/status · history */}
+      <View style={[st.header, { paddingTop: (ins?.top || 0) + 6 }]}>
+        <Pressable onPress={onMenu} hitSlop={10} style={st.hBtn}><Text style={st.hIcon}>☰</Text></Pressable>
+        <Pressable style={{ flex: 1 }} onPress={() => { setHistQ(''); setHistOpen(true); }}>
+          <Text style={st.htitle} numberOfLines={1}>{botName}</Text>
+          <Text style={[st.hstatus, err && { color: '#e57373' }]} numberOfLines={1}>{status}</Text>
         </Pressable>
+        {!!acts.length && (
+          <Pressable onPress={() => setReasonOpen(!reasonOpen)} hitSlop={8} style={st.hBtn}>
+            <Text style={[st.hIconSm, reasonOpen && { color: ACCENT }]}>◔</Text>
+          </Pressable>
+        )}
+        <Pressable onPress={() => { setHistQ(''); setHistOpen(true); }} hitSlop={8} style={st.hBtn}><Text style={st.hIconSm}>🗂</Text></Pressable>
       </View>
-      {/* header bottom strip like WhatsApp */}
-      <View style={{ height: 1, backgroundColor: 'rgba(0,0,0,0.12)' }} />
+
+      {!!err && (
+        <Pressable style={st.errBar} onPress={() => load()}>
+          <Text style={st.errT} numberOfLines={2}>{err} · tap to retry</Text>
+        </Pressable>
+      )}
+
       {reasonOpen && (
         <ScrollView style={st.reasonBody} nestedScrollEnabled>
           {acts.length ? [...acts].reverse().map((it, i) => (
             <View key={i} style={st.reasonRow}>
-              <Text style={[st.reasonGlyph, { color: (TOOL_GLYPH[it.status] !== '✕' && it.status !== 'error' && it.status !== 'denied' && it.status !== 'blocked') ? C.ok : C.bad }]}>
+              <Text style={[st.reasonGlyph, { color: (TOOL_GLYPH[it.status] !== '✕' && it.status !== 'error' && it.status !== 'denied' && it.status !== 'blocked') ? '#6fcf97' : '#e57373' }]}>
                 {TOOL_GLYPH[it.status] || '•'}</Text>
               <Text style={st.reasonTxt} numberOfLines={2}>{it.label || it.tool}</Text>
             </View>
           )) : <Text style={st.reasonEmpty}>No activity yet — the Bot's tool steps will stream here.</Text>}
         </ScrollView>
       )}
+
       {!!busy && busy.status !== 'waiting_approval' && lastAct && (
         <Pressable style={st.live} onPress={() => (shotUri ? setLiveFull(true) : null)}>
-          <View style={st.liveHead}>
-            <Text style={st.liveLbl} numberOfLines={1}>🖥 live on the screen{lastAct.label ? ' — ' + lastAct.label : ''}{shotUri ? '  ·  tap to watch' : ''}</Text>
-          </View>
+          <Text style={st.liveLbl} numberOfLines={1}>🖥 {lastAct.label || 'Working on the screen'}{shotUri ? '  ·  tap to watch' : ''}</Text>
           {!!shotUri && <Image style={st.liveImgSm} source={{ uri: shotUri }} resizeMode="contain" />}
         </Pressable>
       )}
-      <View style={{ flex: 1, backgroundColor: WALL }}>
-        <Wallpaper />
-      {loading ? <ActivityIndicator style={{ marginTop: 24 }} color={C.muted} /> : (
-        <FlatList
-          ref={listRef}
-          data={[...disp, ...streamRows.map(([sid, t]) => ({ id: 's' + sid, stream: t })), ...((busy && busy.status !== 'waiting_approval' && !streamRows.length) ? [{ id: 'typing', typing: true }] : [])]}
-          keyExtractor={(i) => String(i.id)}
-          renderItem={renderStreamAware(renderItem)}
-          contentContainerStyle={[st.list, { paddingBottom: 12 }]}
-          keyboardShouldPersistTaps="handled"
-          onContentSizeChange={() => listRef.current && listRef.current.scrollToEnd({ animated: false })}
-          onLayout={() => listRef.current && listRef.current.scrollToEnd({ animated: false })}
-        />
-      )}
+
+      <View style={{ flex: 1, backgroundColor: BG }}>
+        {loading ? <ActivityIndicator style={{ marginTop: 28 }} color={MUTED} /> : (
+          <FlatList
+            ref={listRef}
+            data={[...disp, ...streamRows.map(([sid, t]) => ({ id: 's' + sid, stream: t })), ...((busy && busy.status !== 'waiting_approval' && !streamRows.length) ? [{ id: 'typing', typing: true }] : [])]}
+            keyExtractor={(i) => String(i.id)}
+            renderItem={renderStreamAware(renderItem)}
+            contentContainerStyle={[st.list, { paddingBottom: 16 }]}
+            keyboardShouldPersistTaps="handled"
+            onContentSizeChange={() => listRef.current && listRef.current.scrollToEnd({ animated: false })}
+            onLayout={() => listRef.current && listRef.current.scrollToEnd({ animated: false })}
+            ListEmptyComponent={!busy ? <Text style={st.empty}>Ask {botName} anything.</Text> : null}
+          />
+        )}
       </View>
+
       {!!busy && (
         <View style={st.busyRow}>
-          <Text style={{ color: busy.status === 'waiting_approval' ? '#f0b232' : '#00a884' }}>{busy.status === 'waiting_approval' ? '⏸ waiting for your approval' : '● working…'}</Text>
+          <Text style={{ color: busy.status === 'waiting_approval' ? '#e0a53a' : MUTED, fontSize: 12.5 }}>
+            {busy.status === 'waiting_approval' ? '⏸ waiting for your approval' : '● working…'}
+          </Text>
+          <View style={{ flex: 1 }} />
           <Pressable onPress={stop} hitSlop={8}><Text style={st.stop}>Stop</Text></Pressable>
         </View>
       )}
+
       {!!apps.length && (
         <View style={st.appCard}>
           {apps.map((a, i) => {
             const isAsk = a.category === 'question' || a.tool === 'ask_code';
             return (
-            <View key={a.id || i} style={st.appRow}>
-              <Text style={st.appT}>{(a.category || '').toUpperCase()}{a.tool ? ' · ' + a.tool : ''}{a.summary ? '\n' + a.summary : ''}</Text>
-              {isAsk ? <AnsRow onSend={(t) => decide(a, true, false, t)} placeholder={a.tool === 'ask_code' ? 'Paste the code' : 'Type an answer'} /> : null}
-              <View style={st.appBtns}>
-                {!isAsk && (
-                  <>
-                    <Pressable onPress={() => decide(a, true, true)} style={st.appBtn}><Text style={st.appOk}>✅ Always</Text></Pressable>
-                    <Pressable onPress={() => decide(a, true, false)} style={st.appBtn}><Text style={st.appOk}>Approve</Text></Pressable>
-                  </>
-                )}
-                <Pressable onPress={() => decide(a, false, false)} style={st.appBtn}><Text style={st.appNo}>{isAsk ? "Can't do it" : 'Deny'}</Text></Pressable>
+              <View key={a.id || i} style={st.appRow}>
+                <Text style={st.appT}>{(a.category || '').toUpperCase()}{a.tool ? ' · ' + a.tool : ''}{a.summary ? '\n' + a.summary : ''}</Text>
+                {isAsk ? <AnsRow onSend={(t) => decide(a, true, false, t)} placeholder={a.tool === 'ask_code' ? 'Paste the code' : 'Type an answer'} /> : null}
+                <View style={st.appBtns}>
+                  {!isAsk && (
+                    <>
+                      <Pressable onPress={() => decide(a, true, true)} style={st.appBtn}><Text style={st.appOk}>✅ Always</Text></Pressable>
+                      <Pressable onPress={() => decide(a, true, false)} style={st.appBtn}><Text style={st.appOk}>Approve</Text></Pressable>
+                    </>
+                  )}
+                  <Pressable onPress={() => decide(a, false, false)} style={st.appBtn}><Text style={st.appNo}>{isAsk ? "Can't do it" : 'Deny'}</Text></Pressable>
+                </View>
               </View>
-            </View>
             );
           })}
         </View>
       )}
+
       {!!replyTo && (
         <View style={st.replyBar}>
-          <Text numberOfLines={1} style={st.replyTxt}><Text style={{ fontWeight: '700' }}>{replyTo.type === 'user' ? 'You' : (replyTo.name || 'Bot')}</Text>{' '}{String(uiPlain(replyTo.text || '') || replyTo.text).slice(0, 80)}</Text>
+          <View style={{ flex: 1 }}>
+            <Text style={st.replyWho}>{replyTo.type === 'user' ? 'You' : (replyTo.name || 'Bot')}</Text>
+            <Text numberOfLines={1} style={st.replyTxt}>{String(uiPlain(replyTo.text || '') || replyTo.text).slice(0, 80)}</Text>
+          </View>
           <Pressable onPress={() => setReplyTo(null)} hitSlop={8}><Text style={st.replyX}>✕</Text></Pressable>
         </View>
       )}
+
       {emojiOpen && (
         <View style={st.emojiPanel}>
           {EMOJI_SET.map((e) => (
@@ -309,44 +356,46 @@ export default function Chat({ thread, threads, onSwitch, onBack, onEvent, onMen
           ))}
         </View>
       )}
-      {/* WhatsApp-style composer */}
-      <View style={[st.inputRow, { paddingBottom: 8 + (ins?.bottom || 0), backgroundColor: '#111b21' }]}>
-        <View style={st.inputWrapWA}>
-          <Pressable onPress={() => setEmojiOpen((v) => !v)} hitSlop={8} style={st.inputIconBtn}>
-            <Text style={[st.inputIcon, emojiOpen && { color: '#00a884' }]}>😊</Text>
+
+      {/* Grok-style composer: + · input · send */}
+      <View style={[st.composerWrap, { paddingBottom: 8 + (ins?.bottom || 0) }]}>
+        <View style={st.composer}>
+          <Pressable onPress={() => setEmojiOpen((v) => !v)} hitSlop={8} style={st.composerBtn}>
+            <Text style={[st.composerPlus, emojiOpen && { color: ACCENT }]}>＋</Text>
           </Pressable>
           <TextInput
-            style={st.inputWA}
+            style={st.input}
             value={text}
             onChangeText={setText}
-            placeholder="Message"
-            placeholderTextColor="#8696a0"
+            placeholder="Ask anything"
+            placeholderTextColor={MUTED}
             multiline
             returnKeyType="send"
             onSubmitEditing={send}
             blurOnSubmit={false}
           />
+          <Pressable onPress={send} disabled={!text.trim()} hitSlop={6}
+            style={[st.sendBtn, !text.trim() && st.sendBtnOff]}>
+            <Text style={[st.sendT, !text.trim() && { color: MUTED }]}>↑</Text>
+          </Pressable>
         </View>
-        <Pressable onPress={send} disabled={!text.trim()} hitSlop={6}
-          style={[st.sendBtn, !text.trim() && { backgroundColor: '#202c33', opacity: 0.9 }]}>
-          <Text style={st.sendT}>{text.trim() ? '➤' : '🎤'}</Text>
-        </Pressable>
       </View>
 
       {!!pick && (
         <View style={st.scrimM} onStartShouldSetResponder={() => true}>
           <View style={[st.sheet, { paddingBottom: 16 + (ins?.bottom || 0) }]}>
-            <Text style={st.sheetT}>{pick.type === 'user' ? 'Your message' : (pick.name || 'Bot')}'s message</Text>
+            <View style={st.grabber} />
+            <Text style={st.sheetT}>{pick.type === 'user' ? 'Your message' : (pick.name || 'Bot')}</Text>
             <Text numberOfLines={3} style={st.sheetSub}>{String(pick.text || '').slice(0, 140)}</Text>
-            <View style={{ flexDirection: 'row', gap: 12, marginTop: 10, flexWrap: 'wrap' }}>
+            <View style={{ flexDirection: 'row', gap: 14, marginTop: 12, flexWrap: 'wrap' }}>
               {REACTS.map((e) => (
                 <Pressable key={e} onPress={() => { react(pick.id, e); setPick(null); }} hitSlop={4}>
                   <Text style={{ fontSize: 26 }}>{e}</Text>
                 </Pressable>
               ))}
             </View>
-            <Pressable onPress={() => { setReplyTo(pick); setPick(null); }} style={st.sheetBtn}><Text style={[st.sheetBtnT, { color: C.text }]}>↩  Reply to this</Text></Pressable>
-            <Pressable onPress={() => setPick(null)} style={st.sheetBtn}><Text style={st.sheetBtnT}>Cancel</Text></Pressable>
+            <Pressable onPress={() => { setReplyTo(pick); setPick(null); }} style={st.sheetBtn}><Text style={st.sheetBtnT}>↩  Reply</Text></Pressable>
+            <Pressable onPress={() => setPick(null)} style={[st.sheetBtn, { backgroundColor: 'transparent' }]}><Text style={[st.sheetBtnT, { color: MUTED }]}>Cancel</Text></Pressable>
           </View>
         </View>
       )}
@@ -354,10 +403,11 @@ export default function Chat({ thread, threads, onSwitch, onBack, onEvent, onMen
       {histOpen && (
         <View style={st.scrimM}>
           <View style={[st.sheet, { paddingBottom: 16 + (ins?.bottom || 0) }]}>
-            <TextInput style={st.histIn} value={histQ} onChangeText={setHistQ} placeholder="Search chats" placeholderTextColor="#8696a0" autoCorrect={false} />
+            <View style={st.grabber} />
+            <TextInput style={st.histIn} value={histQ} onChangeText={setHistQ} placeholder="Search chats" placeholderTextColor={MUTED} autoCorrect={false} />
             <ScrollView style={{ maxHeight: 320 }} nestedScrollEnabled>
               {(threads || []).filter((t) => !histQ.trim() || String(t.title || '').toLowerCase().includes(histQ.trim().toLowerCase())).map((t) => (
-                <Pressable key={t.id} onPress={() => { onSwitch(t.id); setHistOpen(false); }} style={st.histRow}>
+                <Pressable key={t.id} onPress={() => { onSwitch(t.id); setHistOpen(false); }} style={[st.histRow, t.id === thread.id && { backgroundColor: PANEL }]}>
                   <Text style={{ fontSize: 15 }}>{t.main ? '🏠' : '💬'}</Text>
                   <Text style={st.histT} numberOfLines={1}>{t.main ? 'Main' : t.title || 'Chat'}</Text>
                 </Pressable>
@@ -385,8 +435,10 @@ export default function Chat({ thread, threads, onSwitch, onBack, onEvent, onMen
 function renderStreamAware(fn) {
   return ({ item }) => {
     if (item.stream != null) return (
-      <View style={[st.msg, { opacity: .9 }]}>
-        {md(uiStreamText(item.stream), st.msgT)}
+      <View style={st.rowIn}>
+        <View style={st.answer}>
+          {md(uiStreamText(item.stream) || '…', st.answerT)}
+        </View>
       </View>
     );
     return fn({ item });
@@ -395,98 +447,108 @@ function renderStreamAware(fn) {
 
 function MsgFoot({ it, time, outgoing }) {
   const rx = it.reactions || [];
-  const showTicks = !!outgoing;
   return (
-    <View style={st.foot}>
+    <View style={[st.foot, outgoing && { justifyContent: 'flex-end' }]}>
       {rx.map((r, i) => <Text key={i} style={st.rx}>{r.emoji}{r.count > 1 ? ' ' + r.count : ''}</Text>)}
-      <View style={st.gap} />
       {!!time && <Text style={st.time}>{time}</Text>}
-      {!!showTicks && <Text style={st.ticks}>✓✓</Text>}
     </View>
   );
 }
 
 const st = StyleSheet.create({
-  header: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: 10, paddingTop: 8, paddingBottom: 8, borderBottomWidth: 1, borderColor: '#111b21' },
-  back: { color: '#fff', fontSize: 28, fontWeight: '600', width: 26, textAlign: 'center' },
-  backBtn: { width: 30, alignItems: 'center', justifyContent: 'center' },
-  av: { width: 38, height: 38, borderRadius: 19, backgroundColor: '#2a3942', alignItems: 'center', justifyContent: 'center' },
-  htitle: { color: '#fff', fontSize: 16, fontWeight: '700' },
-  hstatus: { color: 'rgba(255,255,255,0.78)', fontSize: 12, marginTop: 1 },
-  hIconBtn: { width: 36, height: 36, borderRadius: 18, alignItems: 'center', justifyContent: 'center' },
-  hIcon: { color: '#fff', fontSize: 16 },
-  hbtn: { fontSize: 20, color: '#fff', opacity: 0.95, paddingHorizontal: 6 },
-  hbtnOn: { opacity: 1 },
-  chipRow: { backgroundColor: IN_BG, paddingBottom: 8, paddingTop: 2, borderBottomWidth: 1, borderColor: '#111b21' },
-  chip: { color: '#8696a0', fontSize: 12.5, backgroundColor: '#2a3942', borderRadius: 999, paddingHorizontal: 12, paddingVertical: 5, overflow: 'hidden' },
-  chipOn: { color: '#e9edef', backgroundColor: OUT_BG, fontWeight: '700' },
-  list: { padding: 10, paddingBottom: 16, gap: 3 },
-  msg: { alignSelf: 'flex-start', backgroundColor: IN_BG, borderRadius: 8, borderTopLeftRadius: 8, borderTopRightRadius: 8, borderBottomLeftRadius: 8, borderBottomRightRadius: 8, paddingVertical: 6, paddingHorizontal: 9, maxWidth: '78%', elevation: 1, overflow: 'visible' },
-  msgMe: { alignSelf: 'flex-end', backgroundColor: OUT_BG },
-  msgT: { color: C.text, fontSize: 15, lineHeight: 20 },
-  msgTOut: { color: '#e9edef', fontSize: 15, lineHeight: 20 },
-  who: { color: '#53bdeb', fontSize: 12.5, fontWeight: '700', marginBottom: 2 },
-  foot: { flexDirection: 'row', alignItems: 'center', gap: 4, marginTop: 4 },
-  gap: { flex: 1 },
-  time: { color: FAINT, fontSize: 10.5 },
-  ticks: { color: '#53bdeb', fontSize: 11, fontWeight: '700', marginLeft: 2 },
-  tailIn: { position: 'absolute', left: -5, bottom: 0, width: 10, height: 10, backgroundColor: IN_BG, transform: [{ rotate: '45deg' }], borderBottomLeftRadius: 2 },
-  tailOut: { position: 'absolute', right: -5, bottom: 0, width: 10, height: 10, backgroundColor: OUT_BG, transform: [{ rotate: '45deg' }], borderBottomRightRadius: 2 },
-  rx: { color: '#8696a0', fontSize: 12 },
-  rxBtn: { color: '#8696a0', fontSize: 13, paddingHorizontal: 2 },
-  toolWrap: { alignSelf: 'center', flexDirection: 'row', alignItems: 'center', gap: 6, backgroundColor: '#182229', borderRadius: 999, paddingHorizontal: 10, paddingVertical: 3, marginVertical: 1, flexWrap: 'wrap' },
-  toolIc: { fontSize: 12, width: 12, textAlign: 'center' },
-  toolT: { color: '#8696a0', fontSize: 11, maxWidth: 260 },
-  shot: { width: 110, height: 70, borderRadius: 8, borderWidth: 1, borderColor: '#111b21' },
-  cmdNote: { backgroundColor: IN_BG, borderRadius: 10, padding: 8, alignSelf: 'center' },
-  noteT: { color: '#8696a0', fontSize: 12.5, lineHeight: 18, textAlign: 'center' },
-  busyRow: { flexDirection: 'row', alignItems: 'center', gap: 12, paddingHorizontal: 14, paddingBottom: 4 },
-  stop: { color: '#f15c6d', fontWeight: '700' },
-  replyBar: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: 14, paddingVertical: 5, backgroundColor: IN_BG, borderTopWidth: 1, borderColor: '#111b21' },
-  replyTxt: { color: '#8696a0', fontSize: 12.5, flex: 1 },
-  replyX: { color: '#8696a0', fontSize: 15 },
-  inputRow: { flexDirection: 'row', alignItems: 'flex-end', gap: 8, padding: 6, paddingHorizontal: 8, backgroundColor: '#111b21' },
-  inputWrap: { flex: 1, backgroundColor: IN_BG, borderRadius: 22, flexDirection: 'row', alignItems: 'flex-end' },
-  inputWrapWA: { flex: 1, backgroundColor: '#202c33', borderRadius: 24, flexDirection: 'row', alignItems: 'flex-end', paddingHorizontal: 4, paddingVertical: 4, gap: 2 },
-  input: { flex: 1, color: C.text, fontSize: 15.5, paddingHorizontal: 14, paddingTop: 10, paddingBottom: 8, maxHeight: 110 },
-  inputWA: { flex: 1, color: '#e9edef', fontSize: 15.5, paddingHorizontal: 8, paddingTop: 8, paddingBottom: 8, maxHeight: 110, textAlignVertical: 'center' },
-  inputIconBtn: { width: 34, height: 34, borderRadius: 17, alignItems: 'center', justifyContent: 'center' },
-  inputIcon: { fontSize: 18, color: '#8696a0' },
-  emojiPanel: { flexDirection: 'row', flexWrap: 'wrap', gap: 4, backgroundColor: '#111b21', paddingHorizontal: 10, paddingTop: 8, borderTopWidth: 1, borderColor: '#202c33' },
+  header: { flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 10, paddingBottom: 8, backgroundColor: BG },
+  hBtn: { width: 40, height: 40, borderRadius: 20, alignItems: 'center', justifyContent: 'center' },
+  hIcon: { color: TEXT, fontSize: 19 },
+  hIconSm: { color: MUTED, fontSize: 17 },
+  htitle: { color: TEXT, fontSize: 16, fontWeight: '700', textAlign: 'center' },
+  hstatus: { color: MUTED, fontSize: 11.5, marginTop: 1, textAlign: 'center' },
+
+  errBar: { backgroundColor: '#2a1414', borderTopWidth: 1, borderBottomWidth: 1, borderColor: '#3a1a1a', paddingHorizontal: 14, paddingVertical: 8 },
+  errT: { color: '#f0a0a0', fontSize: 12.5 },
+
+  list: { paddingHorizontal: 14, paddingTop: 8, gap: 2 },
+  empty: { color: MUTED, fontSize: 15, textAlign: 'center', marginTop: 60 },
+
+  rowOut: { alignItems: 'flex-end', marginTop: 10 },
+  bubbleOut: { backgroundColor: BUBBLE, borderRadius: 20, borderBottomRightRadius: 6, paddingHorizontal: 14, paddingVertical: 10, maxWidth: '84%' },
+  bubbleOutT: { color: TEXT, fontSize: 15.5, lineHeight: 22 },
+
+  rowIn: { marginTop: 14, paddingHorizontal: 2 },
+  who: { color: MUTED, fontSize: 12, fontWeight: '700', marginBottom: 4, letterSpacing: 0.2 },
+  answer: { marginTop: 1 },
+  answerT: { color: TEXT, fontSize: 15.5, lineHeight: 23 },
+
+  foot: { flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 4 },
+  time: { color: MUTED, fontSize: 10.5 },
+  rx: { color: MUTED, fontSize: 12 },
+
+  typingWrap: { marginTop: 14, paddingHorizontal: 2 },
+  typingT: { color: MUTED, fontSize: 11, letterSpacing: 3 },
+
+  toolWrap: { alignSelf: 'center', flexDirection: 'row', alignItems: 'center', gap: 6, backgroundColor: PANEL, borderWidth: 1, borderColor: LINE, borderRadius: 999, paddingHorizontal: 11, paddingVertical: 4, marginVertical: 4, flexWrap: 'wrap' },
+  toolIc: { fontSize: 11, width: 12, textAlign: 'center' },
+  toolT: { color: MUTED, fontSize: 11.5, maxWidth: 270 },
+  shot: { width: 110, height: 70, borderRadius: 8, borderWidth: 1, borderColor: LINE },
+
+  cmdNote: { backgroundColor: PANEL, borderRadius: 12, padding: 10, alignSelf: 'center', marginVertical: 4 },
+  noteT: { color: MUTED, fontSize: 12.5, lineHeight: 18, textAlign: 'center', marginVertical: 6 },
+
+  dayWrap: { alignItems: 'center', paddingVertical: 10 },
+  dayT: { color: MUTED, fontSize: 11, fontWeight: '600' },
+
+  busyRow: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingHorizontal: 16, paddingBottom: 2 },
+  stop: { color: '#e57373', fontWeight: '700', fontSize: 13 },
+
+  replyBar: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingHorizontal: 14, paddingVertical: 7, backgroundColor: PANEL, borderTopWidth: 1, borderColor: LINE },
+  replyWho: { color: ACCENT, fontSize: 12, fontWeight: '700' },
+  replyTxt: { color: MUTED, fontSize: 12.5 },
+  replyX: { color: MUTED, fontSize: 15 },
+
+  composerWrap: { paddingHorizontal: 10, paddingTop: 6, backgroundColor: BG },
+  composer: { flexDirection: 'row', alignItems: 'flex-end', gap: 6, backgroundColor: '#1c1c1c', borderWidth: 1, borderColor: '#2a2a2a', borderRadius: 26, paddingHorizontal: 6, paddingVertical: 6 },
+  composerBtn: { width: 36, height: 36, borderRadius: 18, alignItems: 'center', justifyContent: 'center' },
+  composerPlus: { color: MUTED, fontSize: 22, lineHeight: 24 },
+  input: { flex: 1, color: TEXT, fontSize: 15.5, lineHeight: 21, paddingHorizontal: 4, paddingTop: 8, paddingBottom: 8, maxHeight: 120 },
+  sendBtn: { width: 36, height: 36, borderRadius: 18, backgroundColor: ACCENT, alignItems: 'center', justifyContent: 'center', marginBottom: 1 },
+  sendBtnOff: { backgroundColor: '#2a2a2a' },
+  sendT: { color: '#0a0a0a', fontSize: 18, fontWeight: '800', lineHeight: 20 },
+
+  emojiPanel: { flexDirection: 'row', flexWrap: 'wrap', gap: 4, backgroundColor: BG, paddingHorizontal: 10, paddingTop: 8 },
   emojiB: { width: 40, height: 40, alignItems: 'center', justifyContent: 'center', borderRadius: 10 },
-  sendBtn: { width: 46, height: 46, borderRadius: 23, backgroundColor: '#00a884', alignItems: 'center', justifyContent: 'center', elevation: 2 },
-  sendT: { color: '#fff', fontSize: 18, fontWeight: '700' },
-  reasonBody: { maxHeight: 190, backgroundColor: WALL, paddingHorizontal: 14, paddingVertical: 6, borderBottomWidth: 1, borderColor: '#111b21' },
-  reasonRow: { flexDirection: 'row', gap: 8, alignItems: 'center', paddingVertical: 2 },
+
+  reasonBody: { maxHeight: 190, backgroundColor: PANEL, paddingHorizontal: 14, paddingVertical: 6, borderTopWidth: 1, borderBottomWidth: 1, borderColor: LINE },
+  reasonRow: { flexDirection: 'row', gap: 8, alignItems: 'center', paddingVertical: 3 },
   reasonGlyph: { fontSize: 12, width: 14, textAlign: 'center' },
-  reasonTxt: { color: C.text, fontSize: 13, flex: 1 },
-  reasonEmpty: { color: '#8696a0', fontSize: 12.5, paddingVertical: 4 },
-  live: { backgroundColor: '#111b21', borderBottomWidth: 1, borderColor: '#111b21' },
-  liveHead: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 14, paddingTop: 7, paddingBottom: 3 },
-  liveLbl: { color: '#00a884', fontSize: 12.5, fontWeight: '600', flex: 1 },
-  liveIcon: { color: '#8696a0', fontSize: 13, paddingLeft: 8 },
+  reasonTxt: { color: TEXT, fontSize: 13, flex: 1 },
+  reasonEmpty: { color: MUTED, fontSize: 12.5, paddingVertical: 4 },
+
+  live: { backgroundColor: PANEL, borderBottomWidth: 1, borderColor: LINE },
+  liveLbl: { color: '#9ad3b0', fontSize: 12.5, fontWeight: '600', paddingHorizontal: 14, paddingTop: 7, paddingBottom: 4 },
   liveImgSm: { width: '100%', height: 90 },
-  dayWrap: { alignItems: 'center', paddingVertical: 5 },
-  dayChip: { backgroundColor: '#182229', borderRadius: 999, paddingHorizontal: 10, paddingVertical: 3 },
-  dayT: { color: '#8696a0', fontSize: 11, fontWeight: '700' },
-  typingT: { color: '#8696a0', fontSize: 12, letterSpacing: 2 },
-  appCard: { backgroundColor: '#2a2318', borderTopWidth: 1, borderColor: '#4d4122' },
-  appRow: { paddingHorizontal: 14, paddingVertical: 8, gap: 8 },
-  appT: { color: '#f0d999', fontSize: 13, lineHeight: 18 },
+
+  appCard: { backgroundColor: '#1a1710', borderTopWidth: 1, borderColor: '#332a16' },
+  appRow: { paddingHorizontal: 14, paddingVertical: 10, gap: 8 },
+  appT: { color: '#e6d3a3', fontSize: 13, lineHeight: 18 },
   appBtns: { flexDirection: 'row', gap: 8 },
-  appBtn: { backgroundColor: '#3c3218', borderRadius: 999, paddingHorizontal: 12, paddingVertical: 7 },
-  appOk: { color: '#7ee2a8', fontSize: 13, fontWeight: '800' },
-  appNo: { color: '#f15c6d', fontSize: 13, fontWeight: '800' },
-  scrimM: { position: 'absolute', inset: 0, backgroundColor: 'rgba(0,0,0,.6)', alignItems: 'center', justifyContent: 'flex-end' },
-  sheet: { width: '100%', backgroundColor: '#233138', borderTopLeftRadius: 20, borderTopRightRadius: 20, padding: 16, gap: 6 },
-  sheetT: { color: C.text, fontSize: 13, fontWeight: '700' },
-  sheetSub: { color: '#8696a0', fontSize: 13, lineHeight: 18 },
-  sheetBtn: { borderRadius: 12, padding: 12, alignItems: 'center', backgroundColor: '#2a3942', marginTop: 6 },
-  sheetBtnT: { color: '#8696a0', fontSize: 14, fontWeight: '700' },
-  histIn: { backgroundColor: '#2a3942', borderRadius: 999, color: C.text, paddingHorizontal: 14, paddingVertical: 9, fontSize: 14, marginBottom: 6 },
-  histRow: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingVertical: 10, borderBottomWidth: 1, borderColor: '#182229' },
-  histT: { color: C.text, fontSize: 14.5, flex: 1 },
-  fullScr: { position: 'absolute', inset: 0, backgroundColor: 'black' },
-  fullBar: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 14, paddingTop: 40, paddingBottom: 8, backgroundColor: '#111b21' },
-  fullX: { color: C.text, fontSize: 15, fontWeight: '700' },
+  appBtn: { backgroundColor: '#2a2415', borderRadius: 999, paddingHorizontal: 14, paddingVertical: 8 },
+  appOk: { color: '#9ad3b0', fontSize: 13, fontWeight: '800' },
+  appNo: { color: '#e57373', fontSize: 13, fontWeight: '800' },
+  ansIn: { flex: 1, color: TEXT, fontSize: 14, borderWidth: 1, borderColor: '#3a3120', borderRadius: 12, paddingHorizontal: 10, paddingVertical: 8 },
+  ansBtn: { backgroundColor: '#2a2415', borderRadius: 12, paddingHorizontal: 14, justifyContent: 'center' },
+  ansBtnT: { color: '#e6d3a3', fontSize: 13, fontWeight: '800' },
+
+  scrimM: { position: 'absolute', inset: 0, backgroundColor: 'rgba(0,0,0,.66)', alignItems: 'center', justifyContent: 'flex-end' },
+  sheet: { width: '100%', backgroundColor: '#161616', borderTopLeftRadius: 22, borderTopRightRadius: 22, padding: 16, gap: 6, borderTopWidth: 1, borderColor: '#2a2a2a' },
+  grabber: { alignSelf: 'center', width: 38, height: 4, borderRadius: 2, backgroundColor: '#333', marginBottom: 8 },
+  sheetT: { color: TEXT, fontSize: 13, fontWeight: '700' },
+  sheetSub: { color: MUTED, fontSize: 13, lineHeight: 18 },
+  sheetBtn: { borderRadius: 14, padding: 13, alignItems: 'center', backgroundColor: '#222', marginTop: 6 },
+  sheetBtnT: { color: TEXT, fontSize: 14, fontWeight: '700' },
+  histIn: { backgroundColor: '#222', borderRadius: 999, color: TEXT, paddingHorizontal: 14, paddingVertical: 10, fontSize: 14, marginBottom: 8 },
+  histRow: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingVertical: 12, paddingHorizontal: 8, borderRadius: 10 },
+  histT: { color: TEXT, fontSize: 14.5, flex: 1 },
+
+  fullScr: { position: 'absolute', inset: 0, backgroundColor: '#000' },
+  fullBar: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 14, paddingTop: 40, paddingBottom: 8, backgroundColor: BG },
+  fullX: { color: TEXT, fontSize: 15, fontWeight: '700' },
 });
