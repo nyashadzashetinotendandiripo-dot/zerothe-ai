@@ -93,7 +93,8 @@ export default function Chat({ thread, threads, onSwitch, onBack, onEvent, onMen
       const prevByKey = new Map(prev.map((i) => [keyOf(i), i]));
       const merged = rows.map((i) => prevByKey.get(keyOf(i)) || i);
       const seen = new Set(rows.map(keyOf));
-      const keep = prev.filter((i) => !seen.has(keyOf(i)));
+      // Optimistic bubbles are only a placeholder for the server's copy.
+      const keep = prev.filter((i) => !i.pending && !seen.has(keyOf(i)));
       return [...merged, ...keep];
     });
     setApps(d.approvals || []);
@@ -164,6 +165,9 @@ export default function Chat({ thread, threads, onSwitch, onBack, onEvent, onMen
     setText(''); setReplyTo(null); setErr('');
     fastRef.current = Date.now() + 120000;     // poll fast until the answer lands
     setBusy({ status: 'running' });            // show "working" at once, start fast polling
+    // Show the message immediately (WhatsApp does), then replace it with the
+    // server's row as soon as the POST returns or a poll sees it.
+    setItems((prev) => [...prev, { id: 'tmp' + Date.now(), type: 'user', text: snapshot, ts: Date.now() / 1000, pending: true }]);
     try {
       await api('/api/threads/' + thread.id + '/messages', { method: 'POST', body: JSON.stringify({ text: snapshot, images: [], parent_id: pid }) });
       await load();                            // show it immediately even if SSE lags
@@ -247,8 +251,8 @@ export default function Chat({ thread, threads, onSwitch, onBack, onEvent, onMen
 
   const botName = (threads && threads.find((t) => t.id === thread.id)?.title) || 'ZerotheBot';
   const status = busy
-    ? (busy.status === 'waiting_approval' ? 'Needs your approval' : 'Working…')
-    : (err ? 'Offline — tap to retry' : ((threads || []).length > 1 ? (threads || []).length + ' chats' : 'Online'));
+    ? (busy.status === 'waiting_approval' ? 'needs your approval' : 'typing…')
+    : (err ? 'offline — tap to retry' : 'online');
 
   return (
     <KeyboardAvoidingView style={{ flex: 1, backgroundColor: BG }} behavior={Platform.OS === 'ios' ? 'padding' : undefined} keyboardVerticalOffset={0}>
@@ -278,7 +282,7 @@ export default function Chat({ thread, threads, onSwitch, onBack, onEvent, onMen
         {loading ? <ActivityIndicator style={{ marginTop: 28 }} color={MUTED} /> : (
           <FlatList
             ref={listRef}
-            data={[...disp, ...streamRows.map(([sid, t]) => ({ id: 's' + sid, stream: t })), ...((busy && busy.status !== 'waiting_approval' && !streamRows.length) ? [{ id: 'typing', typing: true }] : [])]}
+            data={[...disp, ...streamRows.map(([sid, t]) => ({ id: 's' + sid, stream: t }))]}
             keyExtractor={keyOf}
             renderItem={renderStreamAware(renderItem)}
             contentContainerStyle={[st.list, { paddingBottom: 16 }]}
@@ -293,7 +297,7 @@ export default function Chat({ thread, threads, onSwitch, onBack, onEvent, onMen
       {!!busy && (
         <View style={st.busyRow}>
           <Text style={{ color: busy.status === 'waiting_approval' ? '#e0a53a' : MUTED, fontSize: 12.5 }}>
-            {busy.status === 'waiting_approval' ? 'waiting for your approval' : 'typing…'}
+            {busy.status === 'waiting_approval' ? 'waiting for your approval' : ''}
           </Text>
           <View style={{ flex: 1 }} />
           <Pressable onPress={stop} hitSlop={8}><Text style={st.stop}>Stop</Text></Pressable>
