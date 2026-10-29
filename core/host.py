@@ -382,7 +382,8 @@ def register_webhook(url: str, events: list[str] | None = None) -> dict:
     org = orgs[0]["id"]
     events = events or ["sandbox.started", "sandbox.suspended", "sandbox.stopped",
                         "sandbox.error", "sandbox.deleted"]
-    for w in (_get(f"/v1/orgs/{org}/webhooks").get("webhooks") or []):
+    listed = _get(f"/v1/orgs/{org}/webhooks")
+    for w in (listed.get("webhooks") or listed.get("items") or []):
         if (w.get("url") or "") == url:
             return {"ok": True, "existing": True, "id": w.get("id"), "url": url}
     created = _post(f"/v1/orgs/{org}/webhooks", {"url": url, "events": events})
