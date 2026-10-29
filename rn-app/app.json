@@ -21,7 +21,7 @@
     "web": {
       "favicon": "./assets/favicon.png"
     },
-    "runtimeVersion": "1",
+    "runtimeVersion": "2",
     "updates": {
       "url": "https://8765-agquljzsz7k42vgoenj7qr6fim.instabox.tech/updates/manifest",
       "checkAutomatically": "ON_LOAD",
