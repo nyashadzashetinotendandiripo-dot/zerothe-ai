@@ -1264,13 +1264,13 @@ google.accounts.id.renderButton(document.getElementById('gbtn'),
     @app.post("/api/host/webhook/register", dependencies=[api])
     def host_webhook_register() -> dict:
         try:
-            return host_mod.register_webhook(host_mod.public_url() + "/api/hooks/instabox")
+            return host_mod.register_webhook(host_mod.public_url() + "/api/instabox/events")
         except host_mod.HostError as e:
             raise HTTPException(400, str(e))
 
     _hook_seen: dict[str, float] = {}
 
-    @app.post("/api/hooks/instabox")
+    @app.post("/api/instabox/events")
     async def instabox_hook(request: Request) -> dict:
         """Signed platform events: the machine paused, stopped, errored or woke.
 
