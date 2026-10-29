@@ -2,6 +2,7 @@ import React, { useEffect, useRef, useState, useCallback } from 'react';
 import { SafeAreaProvider, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Animated, Modal, View, Text, TextInput, Pressable, FlatList, StyleSheet, Linking, Alert, ScrollView } from 'react-native';
 import { StatusBar as ExpoStatus } from 'expo-status-bar';
+import { WebView } from 'react-native-webview';
 import { api, connectEvents, loadKey, saveConf, tryConf, clearConf, conf, cfgGet, K_SERVER, K_TOKEN, K_EMAIL, K_PASS, loginEmail, loginGoogle } from './src/session';
 import { C } from './src/theme';
 import { checkUpdate, installUpdate, applyOta, APP_VERSION } from './src/updates';
@@ -842,12 +843,135 @@ function BotModal({ bot, onClose, onCloseSaved }) {
 }
 
 // ----------------------------------------------------------------- settings
+function fmtB(n) {
+  n = Number(n) || 0;
+  if (n >= 1e9) return (n / 1e9).toFixed(1) + ' GB';
+  if (n >= 1e6) return (n / 1e6).toFixed(0) + ' MB';
+  if (n >= 1e3) return (n / 1e3).toFixed(0) + ' KB';
+  return n + ' B';
+}
+
+// The machine the Bots live on. Everything here comes from Instabox's own API
+// (CPU/RAM, console log, OOM kills, ports), so "it went offline" is answerable
+// from the phone instead of guessing.
+function HostCard({ onLive, liveBusy }) {
+  const [d, setD] = useState(null);
+  const [busy, setBusy] = useState('');
+  const [open, setOpen] = useState(false);
+  const load = useCallback(async (refresh) => {
+    try { setD(await api('/api/host' + (refresh ? '?refresh=1' : ''))); }
+    catch (e) { setD({ configured: true, error: String(e.message || e) }); }
+  }, []);
+  useEffect(() => {
+    load(false);
+    const t = setInterval(() => load(false), 20000);
+    return () => clearInterval(t);
+  }, [load]);
+  const wake = async () => {
+    setBusy('wake');
+    try { await api('/api/host/wake', { method: 'POST', body: '{}' }); await load(true); }
+    catch (e) { setD((p) => ({ ...(p || {}), configured: true, error: String(e.message || e) })); }
+    setBusy('');
+  };
+  const m = (d && d.machine) || {};
+  const st = m.state || (d && d.configured ? 'unknown' : 'off');
+  const tone = st === 'running' ? C.ok : (st === 'suspended' || st === 'paused' ? C.warn : C.bad);
+  const cpu = (d && d.cpu && d.cpu.pct) || 0;
+  const mem = (d && d.memory) || {};
+  const disk = (d && d.disk) || {};
+  const bar = (pct, color) => (
+    <View style={{ height: 5, borderRadius: 3, backgroundColor: C.panel2, overflow: 'hidden', marginTop: 4 }}>
+      <View style={{ height: 5, width: Math.max(2, Math.min(100, Number(pct) || 0)) + '%', backgroundColor: color }} />
+    </View>
+  );
+  return (
+    <View style={[n.row, { alignItems: 'stretch', flexDirection: 'column', gap: 8 }]}>
+      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
+        <View style={n.rowIc}><Text style={{ fontSize: 15 }}>🖥️</Text></View>
+        <View style={{ flex: 1 }}>
+          <Text style={n.rowL}>Server</Text>
+          <Text style={n.rowS} numberOfLines={1}>{m.name || 'Instabox machine'}{m.template ? ' · ' + m.template + ' ' + (m.template_version || '') : ''}</Text>
+        </View>
+        <View style={[n.pill, { borderColor: tone, backgroundColor: 'transparent' }]}>
+          <Text style={{ color: tone, fontSize: 11, fontWeight: '800' }}>{st}</Text>
+        </View>
+      </View>
+      {!d ? <Text style={n.rowS}>Checking…</Text> : !d.configured ? (
+        <Text style={n.rowS}>{d.hint || 'Instabox is not connected on the server.'}</Text>
+      ) : (
+        <>
+          {!!d.error && <Text style={[n.rowS, { color: C.bad }]}>{d.error}</Text>}
+          <View style={{ flexDirection: 'row', gap: 14 }}>
+            <View style={{ flex: 1 }}>
+              <Text style={n.rowS}>CPU {Math.round(cpu)}%</Text>
+              {bar(cpu, C.ok)}
+            </View>
+            <View style={{ flex: 1 }}>
+              <Text style={n.rowS}>RAM {Math.round(mem.pct || 0)}% · {fmtB(mem.used)} / {fmtB(mem.total)}</Text>
+              {bar(mem.pct, (mem.pct || 0) > 85 ? C.bad : C.ok)}
+            </View>
+          </View>
+          <View>
+            <Text style={n.rowS}>Disk {Math.round(disk.pct || 0)}% · {fmtB(disk.used)} / {fmtB(disk.total)}</Text>
+            {bar(disk.pct, (disk.pct || 0) > 85 ? C.bad : C.ok)}
+          </View>
+          <Text style={n.rowS} numberOfLines={1}>
+            {(d.processes ? d.processes.count + ' processes' : '')}
+            {m.oom_kills ? ' · ' + m.oom_kills + ' OOM kills' : ' · no OOM kills'}
+            {m.auto_suspend_seconds ? ' · pauses after ' + Math.round(m.auto_suspend_seconds / 60) + ' min idle' : ''}
+          </Text>
+          {!!(d.ports || []).length && (d.ports || []).map((p) => (
+            <Pressable key={p.port} onPress={() => Linking.openURL(p.url).catch(() => {})} hitSlop={4}>
+              <Text style={[n.rowS, { color: C.ok }]} numberOfLines={1}>:{p.port} {p.name || ''} ↗</Text>
+            </Pressable>
+          ))}
+          {open && (
+            <View style={{ gap: 2 }}>
+              {(d.operations || []).slice().reverse().map((o, i) => (
+                <Text key={'o' + i} style={n.rowS} numberOfLines={1}>{o.type} · {o.state}{o.trigger ? ' · ' + o.trigger : ''}</Text>
+              ))}
+              {(d.logs || []).slice(-4).map((l, i) => (
+                <Text key={'l' + i} style={[n.rowS, { fontSize: 10.5 }]} numberOfLines={1}>{l}</Text>
+              ))}
+            </View>
+          )}
+          <View style={{ flexDirection: 'row', gap: 8, flexWrap: 'wrap' }}>
+            <Pressable onPress={() => load(true)} style={n.appB}><Text style={n.appOk}>Refresh</Text></Pressable>
+            {st !== 'running' && <Pressable onPress={wake} style={n.appB}><Text style={n.appOk}>{busy === 'wake' ? 'Waking…' : 'Wake'}</Text></Pressable>}
+            <Pressable onPress={onLive} style={n.appB}><Text style={n.appOk}>{liveBusy ? 'Starting…' : 'Watch screen'}</Text></Pressable>
+            <Pressable onPress={() => setOpen((v) => !v)} style={n.appB}><Text style={n.appOk}>{open ? 'Hide details' : 'Details'}</Text></Pressable>
+          </View>
+        </>
+      )}
+    </View>
+  );
+}
+
 function Settings({ onOut, onCheck, onPlug, onMenu }) {
   const ins = useSafeAreaInsets();
   const [mail2, setMail2] = useState('');
   const [updMsg, setUpdMsg] = useState('');
   const [checking, setChecking] = useState(false);
+  const [liveOpen, setLiveOpen] = useState(false);
+  const [liveUrl, setLiveUrl] = useState('');
+  const [liveBusy, setLiveBusy] = useState(false);
+  const [liveErr, setLiveErr] = useState('');
   useEffect(() => { cfgGet(K_EMAIL).then((m) => setMail2(String(m || ''))).catch(() => {}); }, []);
+  const openLive = async () => {
+    setLiveErr(''); setLiveBusy(true); setLiveOpen(true);
+    try {
+      const d = await api('/api/host/desktop', { method: 'POST', body: JSON.stringify({ viewOnly: true, ttl: 3600 }) });
+      if (!d || !d.url) throw new Error('The server did not return a link.');
+      setLiveUrl(d.url);
+    } catch (e) {
+      setLiveErr(String(e.message || e));
+    }
+    setLiveBusy(false);
+  };
+  const closeLive = () => {
+    setLiveOpen(false); setLiveUrl('');
+    api('/api/host/desktop', { method: 'DELETE' }).catch(() => {});
+  };
   const check = async () => {
     setChecking(true); setUpdMsg('');
     try {
@@ -887,7 +1011,8 @@ function Settings({ onOut, onCheck, onPlug, onMenu }) {
             </View>
             <Row icon="🧩" label="Connectors & MCP" sub="Gmail, Slack, GitHub, Notion, MCP servers…" onPress={onPlug} />
             <Row icon="⬇️" label="Check for updates" sub={checking ? 'Checking…' : (updMsg || (OTA_CREATED ? 'Bundle of ' + OTA_CREATED + ' · tap to check' : 'Tap to check for a new bundle'))} onPress={check} />
-            <Row icon="🖥" label="Server" sub={host || conf().base} />
+            <HostCard onLive={openLive} liveBusy={liveBusy} />
+            <Row icon="🔗" label="API address" sub={host || conf().base} />
             <Pressable onPress={onOut} style={({ pressed }) => [n.row, { borderColor: '#5c2723' }, pressed && { opacity: .9 }]}>
               <View style={n.rowIc}><Text style={{ fontSize: 15 }}>🚪</Text></View>
               <View style={{ flex: 1 }}><Text style={[n.rowL, { color: C.bad }]}>Sign out</Text><Text style={n.rowS}>Clears this phone's saved sign-in</Text></View>
@@ -896,6 +1021,36 @@ function Settings({ onOut, onCheck, onPlug, onMenu }) {
           </View>
         }
       />
+
+      <Modal visible={liveOpen} animationType="slide" onRequestClose={closeLive}>
+        <View style={{ flex: 1, backgroundColor: '#000' }}>
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10, paddingTop: (ins.top || 0) + 10, paddingHorizontal: 14, paddingBottom: 10, backgroundColor: '#111' }}>
+            <Text style={{ color: '#fff', fontSize: 15, fontWeight: '800', flex: 1 }}>Live server screen</Text>
+            <Pressable onPress={closeLive} hitSlop={8}><Text style={{ color: '#e57373', fontSize: 13, fontWeight: '800' }}>Close</Text></Pressable>
+          </View>
+          {!!liveErr ? (
+            <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center', padding: 24, gap: 10 }}>
+              <Text style={{ color: '#e57373', textAlign: 'center' }}>{liveErr}</Text>
+              <Pressable onPress={openLive} style={n.appB}><Text style={n.appOk}>Try again</Text></Pressable>
+            </View>
+          ) : !liveUrl ? (
+            <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center', gap: 8 }}>
+              <Text style={{ color: '#9ad3b0' }}>Starting the desktop…</Text>
+              <Text style={{ color: '#8f8f8f', fontSize: 12 }}>First start can take a few seconds.</Text>
+            </View>
+          ) : (
+            <WebView
+              source={{ uri: liveUrl }}
+              style={{ flex: 1, backgroundColor: '#000' }}
+              javaScriptEnabled
+              domStorageEnabled
+              allowsInlineMediaPlayback
+              setSupportMultipleWindows={false}
+              onError={() => setLiveErr('The live view could not connect. Tap Close and try again.')}
+            />
+          )}
+        </View>
+      </Modal>
     </View>
   );
 }

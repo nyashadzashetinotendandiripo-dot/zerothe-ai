@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { View, Text, TextInput, Pressable, FlatList, StyleSheet, KeyboardAvoidingView, Platform, Image, ActivityIndicator, ScrollView } from 'react-native';
+import { WebView } from 'react-native-webview';
 import { api, API_BASE } from './session';
 import md from './md';
 import { aiBody, uiPlain, uiStreamText } from './widgets';
@@ -75,6 +76,9 @@ export default function Chat({ thread, threads, onSwitch, onBack, onEvent, onMen
   const [text, setText] = useState('');
   const [loading, setLoading] = useState(true);
   const [liveFull, setLiveFull] = useState(false);
+  const [liveUrl, setLiveUrl] = useState('');
+  const [liveBusy, setLiveBusy] = useState(false);
+  const [liveErr, setLiveErr] = useState('');
   const [histOpen, setHistOpen] = useState(false);
   const [histQ, setHistQ] = useState('');
   const [err, setErr] = useState('');
@@ -181,6 +185,25 @@ export default function Chat({ thread, threads, onSwitch, onBack, onEvent, onMen
     try { await api('/api/threads/' + thread.id + '/stop', { method: 'POST', body: '{}' }); } catch (e) { /* already done */ }
     setTimeout(() => load(), 600);
   };
+  // A real live view of the machine's desktop (Instabox VNC link in a WebView)
+  // instead of a still screenshot. View-only, short-lived, revoked on close.
+  const openLive = async () => {
+    setLiveFull(true); setLiveErr('');
+    if (liveUrl) return;
+    setLiveBusy(true);
+    try {
+      const d = await api('/api/host/desktop', { method: 'POST', body: JSON.stringify({ viewOnly: true, ttl: 3600 }) });
+      if (!d || !d.url) throw new Error('The server did not return a live link.');
+      setLiveUrl(d.url);
+    } catch (e) {
+      setLiveErr(String(e.message || e));
+    }
+    setLiveBusy(false);
+  };
+  const closeLive = () => {
+    setLiveFull(false); setLiveUrl('');
+    api('/api/host/desktop', { method: 'DELETE' }).catch(() => {});
+  };
   const react = async (mid, emoji) => { try { await api('/api/messages/' + mid + '/reactions', { method: 'POST', body: JSON.stringify({ emoji, author: 'user' }) }); load(); } catch (e) { /* ignore */ } };
   const decide = async (a, approve, remember, answer) => {
     setApps((cur) => cur.filter((x) => x.id !== a.id));
@@ -272,8 +295,8 @@ export default function Chat({ thread, threads, onSwitch, onBack, onEvent, onMen
       )}
 
       {!!busy && busy.status !== 'waiting_approval' && lastAct && (
-        <Pressable style={st.live} onPress={() => (shotUri ? setLiveFull(true) : null)}>
-          <Text style={st.liveLbl} numberOfLines={1}>🖥 {lastAct.label || 'Working on the screen'}{shotUri ? '  ·  tap to watch' : ''}</Text>
+        <Pressable style={st.live} onPress={openLive}>
+          <Text style={st.liveLbl} numberOfLines={1}>🖥 {lastAct.label || 'Working on the screen'}  ·  tap to watch live</Text>
           {!!shotUri && <Image style={st.liveImgSm} source={{ uri: shotUri }} resizeMode="contain" />}
         </Pressable>
       )}
@@ -396,13 +419,36 @@ export default function Chat({ thread, threads, onSwitch, onBack, onEvent, onMen
         </View>
       )}
 
-      {liveFull && !!shotUri && (
+      {liveFull && (
         <View style={st.fullScr}>
           <View style={[st.fullBar, { paddingTop: (ins?.top || 0) + 8 }]}>
-            <Pressable onPress={() => setLiveFull(false)} hitSlop={8}><Text style={st.fullX}>✕ Close</Text></Pressable>
+            <Text style={st.fullT}>Live screen</Text>
+            <View style={{ flex: 1 }} />
             <Pressable onPress={stop} hitSlop={8}><Text style={st.stop}>■ Stop bot</Text></Pressable>
+            <Pressable onPress={closeLive} hitSlop={8}><Text style={st.fullX}>✕ Close</Text></Pressable>
           </View>
-          <Image style={{ flex: 1 }} source={{ uri: shotUri }} resizeMode="contain" />
+          {!!liveErr ? (
+            <View style={st.fullErr}>
+              <Text style={st.fullErrT}>{liveErr}</Text>
+              {!!shotUri && <Image style={{ flex: 1, width: '100%' }} source={{ uri: shotUri }} resizeMode="contain" />}
+            </View>
+          ) : liveUrl ? (
+            <WebView
+              source={{ uri: liveUrl }}
+              style={{ flex: 1, backgroundColor: '#000' }}
+              javaScriptEnabled
+              domStorageEnabled
+              allowsInlineMediaPlayback
+              setSupportMultipleWindows={false}
+              onError={() => setLiveErr('The live view could not connect. Close and try again.')}
+            />
+          ) : (
+            <View style={st.fullErr}>
+              <ActivityIndicator color={MUTED} />
+              <Text style={st.fullErrT}>{liveBusy ? 'Starting the desktop…' : 'Connecting…'}</Text>
+              <Text style={st.fullErrS}>First start can take a few seconds.</Text>
+            </View>
+          )}
         </View>
       )}
     </KeyboardAvoidingView>
@@ -524,6 +570,10 @@ const st = StyleSheet.create({
   histT: { color: TEXT, fontSize: 14.5, flex: 1 },
 
   fullScr: { position: 'absolute', inset: 0, backgroundColor: '#000' },
-  fullBar: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 14, paddingTop: 40, paddingBottom: 8, backgroundColor: BG },
+  fullBar: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 14, paddingTop: 40, paddingBottom: 8, backgroundColor: BG, gap: 12 },
+  fullT: { color: TEXT, fontSize: 15, fontWeight: '800' },
   fullX: { color: TEXT, fontSize: 15, fontWeight: '700' },
+  fullErr: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: 20, gap: 8 },
+  fullErrT: { color: '#e57373', fontSize: 13.5, textAlign: 'center' },
+  fullErrS: { color: MUTED, fontSize: 12 },
 });

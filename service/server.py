@@ -12,6 +12,7 @@ import os
 import queue
 import re
 import socket
+import threading
 import time
 from urllib.parse import urlencode, quote
 from pathlib import Path
@@ -22,6 +23,7 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Redirect
 
 from core import APP_NAME, VERSION, backup as backup_mod, commands, packages, paths, secrets, skills as skills_mod
 from core import auth as auth_mod
+from core import host as host_mod
 from core.browser import BrowserError
 from core.bots import BotError
 from core.computer import ComputerError
@@ -362,6 +364,9 @@ def create_app(engine: Engine, token: str) -> FastAPI:
 
     @app.post("/api/threads/{tid}/messages", dependencies=[api])
     def thread_post(tid: str, body: dict = Body(...)) -> dict:
+        # A turn is about to run: hold the VM awake for it (renews at most every
+        # five minutes, fire-and-forget, never blocks the send).
+        host_mod.lease_soon(900)
         paths_: list[str] = []
         for im in (body.get("images") or [])[:6]:
             raw = base64.b64decode(im.get("data", ""))
@@ -1195,6 +1200,123 @@ google.accounts.id.renderButton(document.getElementById('gbtn'),
         data, mime, name = eng.actions.export(bot_id, format)
         return Response(data, media_type=mime, headers={"Content-Disposition": f'attachment; filename="{name}"'})
 
+    # --------------------------------------------------------- instabox host
+    # The machine this service runs on: live CPU/RAM, console log, OOM kills,
+    # ports, the desktop and the platform's own state. The phone gets one
+    # compact snapshot so "the bot is offline" has an answer.
+    @app.get("/api/host", dependencies=[api])
+    def host_health(refresh: bool = False) -> dict:
+        return host_mod.health(refresh=refresh)
+
+    @app.post("/api/host/wake", dependencies=[api])
+    def host_wake() -> dict:
+        try:
+            return host_mod.wake()
+        except host_mod.HostError as e:
+            raise HTTPException(400, str(e))
+
+    @app.post("/api/host/lease", dependencies=[api])
+    def host_lease(body: dict = Body(default={})) -> dict:
+        try:
+            return host_mod.lease(int(body.get("ttl") or 900))
+        except host_mod.HostError as e:
+            raise HTTPException(400, str(e))
+
+    @app.post("/api/host/desktop", dependencies=[api])
+    def host_desktop(body: dict = Body(default={})) -> dict:
+        """Start the machine's desktop if needed, then mint a short-lived link.
+
+        The link is view-only by default and expires; it is not an API key and
+        cannot call the API, so it is safe to hand to the phone's WebView.
+        """
+        try:
+            host_mod.desktop_start()
+            link = host_mod.desktop_link(bool(body.get("viewOnly", True)), int(body.get("ttl") or 3600))
+        except host_mod.HostError as e:
+            raise HTTPException(400, str(e))
+        return {"ok": True, **link}
+
+    @app.delete("/api/host/desktop", dependencies=[api])
+    def host_desktop_revoke() -> dict:
+        try:
+            return host_mod.desktop_revoke()
+        except host_mod.HostError as e:
+            raise HTTPException(400, str(e))
+
+    @app.get("/api/host/files", dependencies=[api])
+    def host_files(path: str = "/data/home") -> dict:
+        """Absolute-path browsing through Instabox (the workspace has its own,
+        faster endpoints; this one reaches logs, builds and /data)."""
+        try:
+            return host_mod.list_files(path)
+        except host_mod.HostError as e:
+            raise HTTPException(400, str(e))
+
+    @app.post("/api/host/upload-url", dependencies=[api])
+    def host_upload_url(body: dict = Body(...)) -> dict:
+        """A signed URL the phone can PUT a large file to, without proxying it
+        through this server."""
+        try:
+            return host_mod.upload_url(body["path"], int(body.get("expires") or 900))
+        except host_mod.HostError as e:
+            raise HTTPException(400, str(e))
+
+    @app.post("/api/host/webhook/register", dependencies=[api])
+    def host_webhook_register() -> dict:
+        try:
+            return host_mod.register_webhook(host_mod.public_url() + "/api/hooks/instabox")
+        except host_mod.HostError as e:
+            raise HTTPException(400, str(e))
+
+    _hook_seen: dict[str, float] = {}
+
+    @app.post("/api/hooks/instabox")
+    async def instabox_hook(request: Request) -> dict:
+        """Signed platform events: the machine paused, stopped, errored or woke.
+
+        This is the one API route without the app token: Instabox proves itself
+        with a Standard Webhooks signature instead.
+        """
+        raw = await request.body()
+        try:
+            evt = host_mod.verify_webhook(request.headers, raw)
+        except host_mod.HostError as e:
+            raise HTTPException(401, str(e))
+        eid = str(evt.get("id") or "")
+        now = time.time()
+        for k, t in list(_hook_seen.items()):
+            if now - t > 3600:
+                _hook_seen.pop(k, None)
+        if eid and eid in _hook_seen:
+            return {"ok": True, "duplicate": True}
+        if eid:
+            _hook_seen[eid] = now
+        kind = str(evt.get("type") or "")
+        data = evt.get("data") or {}
+        sb = data.get("sandbox") or {}
+        reason = evt.get("reason") or data.get("reason") or ""
+        name = sb.get("name") or "ZerotheBot server"
+        title = body = ""
+        urgent = False
+        if kind == "sandbox.suspended":
+            title, body = "Server paused", f"{name} paused ({reason or 'idle'}). It wakes on the next message."
+        elif kind == "sandbox.stopped":
+            title, body, urgent = "Server stopped", f"{name} stopped ({reason or 'unknown'}).", True
+        elif kind == "sandbox.error":
+            title, body, urgent = "Server error", f"{name} is in an error state.", True
+        elif kind == "sandbox.started":
+            title, body = "Server awake", f"{name} is running again."
+        elif kind == "sandbox.deleted":
+            title, body, urgent = "Server deleted", f"{name} was deleted.", True
+        if title:
+            eng.notify("host", None, None, title, body, urgent=urgent)
+        if kind in ("sandbox.error", "sandbox.stopped"):
+            try:
+                host_mod.wake()
+            except Exception:  # noqa: BLE001
+                pass
+        return {"ok": True}
+
     # --------------------------------------------------------- notifications
     @app.get("/api/notifications", dependencies=[api])
     def notifications(limit: int = 50, after: int = 0, unread_only: bool = False) -> list[dict]:
@@ -1298,5 +1420,19 @@ google.accounts.id.renderButton(document.getElementById('gbtn'),
         if not name or not f.is_file() or not f.is_relative_to(web.resolve()):
             raise HTTPException(404)
         return FileResponse(f, headers={"Cache-Control": "no-cache"})
+
+    # While any Bot turn is running, renew the activity lease so a long answer
+    # or a slow tool is never cut off by the platform's idle pause.
+    def _lease_loop() -> None:
+        while True:
+            try:
+                if host_mod.configured() and eng.turns.active():
+                    host_mod.lease(900)
+            except Exception:  # noqa: BLE001
+                pass
+            time.sleep(120)
+
+    if host_mod.configured():
+        threading.Thread(target=_lease_loop, daemon=True, name="host-lease").start()
 
     return app
