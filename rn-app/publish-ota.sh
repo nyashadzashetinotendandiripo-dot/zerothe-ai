@@ -12,6 +12,7 @@ node - "$PWD/dist-ota" "$UPD" "$BASE" <<'NODE'
 const fs = require('fs'), path = require('path'), crypto = require('crypto');
 const [dir, out, base] = process.argv.slice(2);
 const md = JSON.parse(fs.readFileSync(path.join(dir, 'metadata.json'), 'utf8'));
+const app = JSON.parse(fs.readFileSync(path.join(process.cwd(), 'app.json'), 'utf8'));
 const fm = (md.fileMetadata && md.fileMetadata.android) || {};
 if (!fm.bundle) throw new Error('metadata.json has no android bundle');
 const sha = (p) => crypto.createHash('sha256').update(fs.readFileSync(p)).digest('base64url');
@@ -33,7 +34,7 @@ const assets = (fm.assets || []).map((a) => {
     fileExtension: '.' + r.ext, url: `${base}/updates/assets/${r.name}` };
 });
 const manifest = {
-  id: crypto.randomUUID(), createdAt: new Date().toISOString(), runtimeVersion: '1',
+  id: crypto.randomUUID(), createdAt: new Date().toISOString(), runtimeVersion: app.expo.runtimeVersion || '1',
   launchAsset: { key: 'bundle', contentType: 'application/javascript', fileExtension: '.' + bundle.ext,
     url: `${base}/updates/assets/${bundle.name}` },
   assets, metadata: {},
@@ -45,4 +46,4 @@ fs.writeFileSync(path.join(out, 'manifest.json'), JSON.stringify(manifest, null,
 console.log(`OTA ${manifest.id.slice(0, 8)} bundle=${bundle.name} assets=${assets.length}`);
 NODE
 echo "manifest: $BASE/updates/manifest"
-curl -s -o /dev/null -w 'manifest http %{http_code}\n' "$BASE/updates/manifest" -H 'expo-platform: android' -H 'expo-runtime-version: 1' -H 'expo-protocol-version: 1'
+curl -s -o /dev/null -w 'manifest http %{http_code}\n' "$BASE/updates/manifest" -H 'expo-platform: android' -H "expo-runtime-version: $(node -p "require('./app.json').expo.runtimeVersion || '1'")" -H 'expo-protocol-version: 1'
