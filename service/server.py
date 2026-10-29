@@ -1252,6 +1252,30 @@ google.accounts.id.renderButton(document.getElementById('gbtn'),
         except host_mod.HostError as e:
             raise HTTPException(400, str(e))
 
+    @app.get("/api/host/file", dependencies=[api])
+    def host_file(path: str, download: bool = True) -> Response:
+        """One file from the machine's disk, straight from Instabox.
+
+        `download=0` returns text for the in-app preview; otherwise the bytes
+        are streamed with a filename so Android saves them.
+        """
+        if not path.startswith("/"):
+            raise HTTPException(400, "Use an absolute path.")
+        try:
+            raw = host_mod.read_bytes(path)
+        except host_mod.HostError as e:
+            raise HTTPException(400, str(e))
+        name = path.rstrip("/").rsplit("/", 1)[-1] or "file"
+        if download:
+            return Response(raw, media_type="application/octet-stream",
+                            headers={"Content-Disposition": f'attachment; filename="{name}"'})
+        try:
+            text = raw.decode("utf-8")
+        except UnicodeDecodeError:
+            raise HTTPException(415, "That file is not text; download it instead.")
+        return JSONResponse({"path": path, "content": text[:400_000],
+                             "truncated": len(text) > 400_000})
+
     @app.post("/api/host/upload-url", dependencies=[api])
     def host_upload_url(body: dict = Body(...)) -> dict:
         """A signed URL the phone can PUT a large file to, without proxying it

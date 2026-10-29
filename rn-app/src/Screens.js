@@ -322,42 +322,81 @@ export function RoutinesScreen({ onMenu }) {
 
 // ---------------------------------------------------------------- workspace 9: files
 export function FilesScreen({ onMenu }) {
+  const [mode, setMode] = useState('workspace');   // workspace (Bots' files) | server (whole machine)
   const [path, setPath] = useState('.');
   const [items, setItems] = useState(null);
   const [err, setErr] = useState('');
-  const load = useCallback((p) => {
+  const load = useCallback((p, m) => {
+    const kind = m || mode;
+    const target = p === undefined || p === null ? (kind === 'server' ? '/data/home' : '.') : p;
     setErr('');
-    api('/api/computer/files?path=' + encodeURIComponent(p || '.'))
-      .then((d) => { setPath(d.path || p || '.'); setItems(d.items || []); })
-      .catch((e) => { setErr(e.message || 'Could not open folder.'); setItems([]); });
-  }, []);
-  useEffect(() => { load(path); }, []);
+    const req = kind === 'server'
+      ? api('/api/host/files?path=' + encodeURIComponent(target))
+      : api('/api/computer/files?path=' + encodeURIComponent(target));
+    req.then((d) => {
+      const rows = kind === 'server'
+        ? (d.entries || []).map((e) => ({ name: e.name, dir: e.type === 'dir', size: e.size, mode: e.mode, ts: e.modTime }))
+        : (d.items || []);
+      setPath(d.path || target);
+      setItems(rows);
+    }).catch((e) => { setErr(e.message || 'Could not open folder.'); setItems([]); });
+  }, [mode]);
+  useEffect(() => { load(mode === 'server' ? '/data/home' : '.', mode); }, [mode]);
+  const join = (name) => {
+    const base = path === '.' ? '' : path.replace(/\/+$/, '');
+    if (mode === 'server') return (base || '') + '/' + name;
+    return base ? base + '/' + name : name;
+  };
   const open = (it) => {
-    if (it.dir) { load(path === '.' ? it.name : path.replace(/\/+$/, '') + '/' + it.name); return; }
+    if (it.dir) { load(join(it.name)); return; }
     const { base, token } = conf();
-    const url = base + '/api/computer/file?path=' + encodeURIComponent(path === '.' ? it.name : path + '/' + it.name)
+    const p = join(it.name);
+    const url = base + (mode === 'server' ? '/api/host/file?path=' : '/api/computer/file?path=') + encodeURIComponent(p)
       + '&download=1&token=' + encodeURIComponent(token);
     // open in the browser so Android downloads it; share is the fallback
     Linking.openURL(url).catch(() => Share.share({ message: url }));
   };
-  const up = () => { if (path && path !== '.') { const parts = path.split('/').filter(Boolean); parts.pop(); load(parts.join('/') || '.'); } };
+  const up = () => {
+    if (mode === 'server') {
+      const p = path.replace(/\/+$/, '');
+      if (!p || p === '/') return;
+      const parts = p.split('/').filter(Boolean);
+      parts.pop();
+      load('/' + parts.join('/'));
+      return;
+    }
+    if (path && path !== '.') { const parts = path.split('/').filter(Boolean); parts.pop(); load(parts.join('/') || '.'); }
+  };
+  const seg = (id, label) => (
+    <Pressable onPress={() => setMode(id)} style={[s0.btn, mode === id && { borderColor: C.ok, backgroundColor: C.panel2 }]}>
+      <Text style={[s0.btnT, { color: mode === id ? C.ok : C.muted }]}>{label}</Text>
+    </Pressable>
+  );
+  const atRoot = mode === 'server' ? (path === '/' || path === '/data/home') : (path === '.');
   return (
     <View style={s0.screen}>
-      <TopBar title="File Vault" subtitle={(path === '.' ? 'workspace root' : path) + (items ? ' · ' + items.length + ' items' : '')}
-        onMenu={onMenu} right={<Pressable onPress={up} hitSlop={8}><Text style={s0.btnT}>↑</Text></Pressable>} />
+      <TopBar title="Files" subtitle={(mode === 'server' ? path : (path === '.' ? 'workspace root' : path)) + (items ? ' · ' + items.length + ' items' : '')}
+        onMenu={onMenu} right={<Pressable onPress={up} disabled={atRoot} hitSlop={8}><Text style={[s0.btnT, atRoot && { opacity: .35 }]}>↑</Text></Pressable>} />
+      <View style={{ flexDirection: 'row', gap: 8, paddingHorizontal: 14, paddingTop: 10 }}>
+        {seg('workspace', 'Workspace')}
+        {seg('server', 'Whole server')}
+      </View>
       <FlatList
         data={items || []}
         keyExtractor={(it) => it.name}
         contentContainerStyle={s0.pad}
         ListEmptyComponent={
-          <Text style={s0.rowS}>{err || (items === null ? 'loading…' : 'Empty folder. Files Bots create and download (PDFs, reports, exports) appear here.')}</Text>
+          <Text style={s0.rowS}>{err || (items === null ? 'loading…'
+            : mode === 'server'
+              ? 'Empty folder. "Whole server" browses every path on the machine — logs, builds, /data.'
+              : 'Empty folder. Files Bots create and download (PDFs, reports, exports) appear here.')}</Text>
         }
         renderItem={({ item: it }) => (
           <Pressable onPress={() => open(it)} style={({ pressed }) => [s0.row, pressed && { opacity: .9 }]}>
             <View style={s0.rowIc}><Text style={{ fontSize: 16 }}>{it.dir ? '📁' : '📄'}</Text></View>
             <View style={{ flex: 1 }}>
               <Text style={s0.rowL} numberOfLines={1}>{it.name}</Text>
-              <Text style={s0.rowS}>{it.dir ? 'folder' : fmtSize(it.size)}</Text>
+              <Text style={s0.rowS}>{it.dir ? 'folder' : fmtSize(it.size)}{it.mode ? ' · ' + it.mode : ''}</Text>
             </View>
             {!it.dir && <Text style={s0.chevS}>share ↗</Text>}
           </Pressable>
