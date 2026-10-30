@@ -891,6 +891,48 @@ def create_app(engine: Engine, token: str) -> FastAPI:
             raise HTTPException(404, "No such asset.")
         return FileResponse(f, headers={"Cache-Control": "public, max-age=31536000, immutable"})
 
+    # ------------------------------------------------------ phone diagnostics
+    # A release build has no console, so a crash on a handset is invisible from
+    # here. The app posts its stack trace to this endpoint; Settings →
+    # Diagnostics shows the same records, and they land in logs/client.log.
+    @app.post("/api/client-log", dependencies=[api])
+    def client_log_post(request: Request, body: dict = Body(default={})) -> dict:
+        try:
+            d = paths.logs_dir()
+            d.mkdir(parents=True, exist_ok=True)
+            rec = {
+                "ts": time.strftime("%Y-%m-%d %H:%M:%S"),
+                "ip": (request.client.host if request.client else "-"),
+                "kind": str(body.get("kind") or "error")[:40],
+                "app": str(body.get("app") or "")[:40],
+                "code": body.get("code") or 0,
+                "ota": str(body.get("ota") or "")[:40],
+                "message": str(body.get("message") or "")[:1200],
+                "stack": str(body.get("stack") or "")[:8000],
+                "extra": body.get("extra") or "",
+                "crumbs": body.get("crumbs") if isinstance(body.get("crumbs"), list) else [],
+            }
+            with open(d / "client.log", "a", encoding="utf-8") as fh:
+                fh.write(json.dumps(rec, ensure_ascii=False) + "\n")
+        except Exception:  # noqa: BLE001 - diagnostics must never fail the app
+            pass
+        return {"ok": True}
+
+    @app.get("/api/client-log", dependencies=[api])
+    def client_log_get(limit: int = 40) -> dict:
+        items: list[dict] = []
+        try:
+            f = paths.logs_dir() / "client.log"
+            if f.is_file():
+                for line in f.read_text(encoding="utf-8").splitlines()[-max(1, min(limit, 500)):]:
+                    try:
+                        items.append(json.loads(line))
+                    except Exception:  # noqa: BLE001
+                        pass
+        except Exception:  # noqa: BLE001
+            pass
+        return {"items": items}
+
     @app.get("/oauth/callback", response_class=HTMLResponse)
     def oauth_callback(code: str = "", state: str = "", error: str = "") -> str:
         if error or not code:

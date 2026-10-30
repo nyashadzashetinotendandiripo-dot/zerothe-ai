@@ -45,22 +45,40 @@ export function conf() { return { base: API_BASE, token: TOKEN }; }
 
 // ------------------------------------------------------------ api
 export async function api(path, opts = {}) {
-  const r = await fetch(API_BASE + path, {
-    ...opts,
-    headers: {
-      'Authorization': 'Bearer ' + TOKEN,
-      'Content-Type': 'application/json',
-      // Lets the server log which bundle the phone is really running, so
-      // "I updated but nothing changed" is answerable from the server side.
-      'X-ZB-App': APP_VERSION,
-      'X-ZB-Ota': OTA_ID || 'embedded',
-      ...(opts.headers || {}),
-    },
-  });
-  if (r.status === 401) throw new Error('Not authorized');
-  const data = await r.json().catch(() => ({}));
-  if (!r.ok) throw new Error(data.error || data.detail || ('HTTP ' + r.status));
-  return data;
+  // A request that never answers must not leave a screen waiting forever: the
+  // caller can pass { timeout: ms } and get a normal network error instead.
+  const { timeout, ...rest } = opts;
+  let ctl = null, timer = null;
+  if (timeout && typeof AbortController !== 'undefined') {
+    ctl = new AbortController();
+    timer = setTimeout(() => { try { ctl.abort(); } catch (e) { /* ignore */ } }, timeout);
+  }
+  try {
+    const r = await fetch(API_BASE + path, {
+      ...rest,
+      signal: ctl ? ctl.signal : undefined,
+      headers: {
+        'Authorization': 'Bearer ' + TOKEN,
+        'Content-Type': 'application/json',
+        // Lets the server log which bundle the phone is really running, so
+        // "I updated but nothing changed" is answerable from the server side.
+        'X-ZB-App': APP_VERSION,
+        'X-ZB-Ota': OTA_ID || 'embedded',
+        ...(rest.headers || {}),
+      },
+    });
+    if (r.status === 401) throw new Error('Not authorized');
+    const data = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(data.error || data.detail || ('HTTP ' + r.status));
+    return data;
+  } catch (e) {
+    if (e && (e.name === 'AbortError' || /abort/i.test(String(e.message || '')))) {
+      throw new Error('The server took too long to answer.');
+    }
+    throw e;
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
 }
 
 export async function tryConf(base, token) {          // validate before saving

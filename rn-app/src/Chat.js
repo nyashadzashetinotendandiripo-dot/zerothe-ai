@@ -5,6 +5,7 @@ import { WebView } from 'react-native-webview';
 import { api, API_BASE } from './session';
 import md from './md';
 import { aiBody, uiPlain, uiStreamText } from './widgets';
+import { breadcrumb, note } from './diag';
 
 // Grok-style chat: near-black canvas, assistant answers as plain full-width text,
 // user messages as compact right-aligned bubbles, floating pill composer.
@@ -63,9 +64,40 @@ const TOOL_GLYPH = { running: '•', ok: '✓', error: '✕', denied: '⛔', blo
 
 // One assistant message can carry several rows (the text plus each tool call), and
 // they share the message id — so identity needs the type and the tool call id.
-const keyOf = (i) => i.id + '|' + (i.type || '') + '|' + (i.call_id || '');
+// Never index-based: keys must stay stable across polls or the list re-mounts.
+const asText = (v) => (v == null ? '' : (typeof v === 'string' ? v : (typeof v === 'number' ? String(v) : '')));
+const asList = (v) => (Array.isArray(v) ? v : []);
+const keyOf = (i) => asText(i && i.id) + '|' + asText(i && i.type) + '|' + asText(i && i.call_id);
 
-export default function Chat({ thread, threads, onSwitch, onBack, onEvent, onMenu }) {
+export default function Chat(props) {
+  return <ChatBoundary><ChatScreen {...props} /></ChatBoundary>;
+}
+
+// A chat that cannot draw one message must not take the whole app with it: show
+// a reload button and stay signed in.
+class ChatBoundary extends React.Component {
+  constructor(props) { super(props); this.state = { err: null }; }
+  static getDerivedStateFromError(err) { return { err }; }
+  componentDidCatch(err, info) { note('render', err, 'chat screen'); }
+  render() {
+    if (this.state.err) {
+      return (
+        <View style={{ flex: 1, backgroundColor: BG, alignItems: 'center', justifyContent: 'center', padding: 26, gap: 10 }}>
+          <Text style={{ fontSize: 34 }}>🛠</Text>
+          <Text style={{ color: TEXT, fontSize: 17, fontWeight: '800' }}>This chat hit a snag</Text>
+          <Text style={{ color: MUTED, fontSize: 13, textAlign: 'center' }}>{String((this.state.err && this.state.err.message) || 'Unknown error')}</Text>
+          <Pressable onPress={() => this.setState({ err: null })} style={{ backgroundColor: '#00a884', borderRadius: 999, paddingHorizontal: 22, paddingVertical: 11, marginTop: 6 }}>
+            <Text style={{ color: '#fff', fontWeight: '800' }}>Reload the chat</Text>
+          </Pressable>
+          <Text style={{ color: MUTED, fontSize: 11.5, textAlign: 'center' }}>Your Bots keep running on the server — nothing was lost.</Text>
+        </View>
+      );
+    }
+    return this.props.children;
+  }
+}
+
+function ChatScreen({ thread, threads, onSwitch, onBack, onEvent, onMenu }) {
   const ins = useSafeAreaInsets();
   const [items, setItems] = useState([]);
   const [apps, setApps] = useState([]);              // pending approvals on this thread
@@ -86,9 +118,14 @@ export default function Chat({ thread, threads, onSwitch, onBack, onEvent, onMen
   const fastRef = useRef(0);            // keep fast polling for a while after sending
   const busyRef = useRef(null);
   busyRef.current = busy;
+  // scrollToEnd can throw when the list has no rows yet (or is mid-measure), and
+  // that throw happens in a native callback where React cannot catch it.
+  const scrollEnd = useCallback(() => {
+    try { if (listRef.current) listRef.current.scrollToEnd({ animated: false }); } catch (e) { /* not laid out yet */ }
+  }, []);
 
   const apply = useCallback((d, quiet) => {
-    const rows = d.items || [];
+    const rows = asList(d && d.items);
     setItems((prev) => {
       if (!quiet) return rows;
       // Merge by row identity instead of only appending: a streaming answer and
@@ -101,17 +138,17 @@ export default function Chat({ thread, threads, onSwitch, onBack, onEvent, onMen
       const keep = prev.filter((i) => !i.pending && !seen.has(keyOf(i)));
       return [...merged, ...keep];
     });
-    setApps(d.approvals || []);
-    const running = !!(d.running && d.running.length);
+    setApps(asList(d && d.approvals));
+    const running = !!(d && d.running && d.running.length);
     if (!running) setStreams({});
-    const next = running ? 'running' : ((d.approvals || []).length ? 'waiting_approval' : null);
+    const next = running ? 'running' : ((asList(d && d.approvals).length) ? 'waiting_approval' : null);
     setBusy((prev) => ((prev && prev.status === next) ? prev : (next ? { status: next } : null)));
     setErr('');
   }, []);
 
   const load = useCallback(async (quiet) => {
     try {
-      const d = await api('/api/threads/' + thread.id);
+      const d = await api('/api/threads/' + thread.id, { timeout: 25000 });
       apply(d, !!quiet);
     } catch (e) {
       if (!quiet) setErr(String(e.message || e));
@@ -140,21 +177,28 @@ export default function Chat({ thread, threads, onSwitch, onBack, onEvent, onMen
 
   useEffect(() => {
     onEvent.current = (ev) => {
-      if (ev.thread_id && ev.thread_id !== thread.id) return;
-      if (ev.type === 'message' && Array.isArray(ev.items)) {
-        setItems((prev) => {
-          const known = new Set(prev.map(keyOf));
-          const add = ev.items.filter((i) => !known.has(keyOf(i)));
-          return add.length ? [...prev, ...add] : prev;
-        });
-        setStreams({});
-      } else if (ev.type === 'delta') {
-        setStreams((s) => ({ ...s, [ev.stream_id]: (ev.text || '') }));
-      } else if (ev.type === 'delta_reset') {
-        setStreams((s) => { const o = { ...s }; delete o[ev.stream_id]; return o; });
-      } else if (ev.type === 'turn') {
-        if (['done', 'stopped', 'error', 'limit', 'skipped'].includes(ev.status)) { setBusy(null); load(); }
-        else setBusy({ status: ev.status, steps: ev.steps });
+      // This runs from a socket callback, outside React: an exception here is
+      // uncaught and used to close the app. Keep it contained.
+      try {
+        if (!ev || typeof ev !== 'object') return;
+        if (ev.thread_id && ev.thread_id !== thread.id) return;
+        if (ev.type === 'message' && Array.isArray(ev.items)) {
+          setItems((prev) => {
+            const known = new Set(prev.map(keyOf));
+            const add = ev.items.filter((i) => !known.has(keyOf(i)));
+            return add.length ? [...prev, ...add] : prev;
+          });
+          setStreams({});
+        } else if (ev.type === 'delta') {
+          setStreams((s) => ({ ...s, [ev.stream_id]: asText(ev.text) }));
+        } else if (ev.type === 'delta_reset') {
+          setStreams((s) => { const o = { ...s }; delete o[ev.stream_id]; return o; });
+        } else if (ev.type === 'turn') {
+          if (['done', 'stopped', 'error', 'limit', 'skipped'].includes(ev.status)) { setBusy(null); load(); }
+          else setBusy({ status: ev.status, steps: ev.steps });
+        }
+      } catch (e) {
+        note('event', e, 'chat event ' + asText(ev && ev.type));
       }
     };
     return () => { onEvent.current = null; };
@@ -166,19 +210,27 @@ export default function Chat({ thread, threads, onSwitch, onBack, onEvent, onMen
     if (!thread?.id) return;
     const pid = replyTo ? replyTo.id : 0;
     const snapshot = t;
+    breadcrumb('send', snapshot.slice(0, 80));
     setText(''); setReplyTo(null); setErr('');
     fastRef.current = Date.now() + 120000;     // poll fast until the answer lands
     setBusy({ status: 'running' });            // show "working" at once, start fast polling
     // Show the message immediately (WhatsApp does), then replace it with the
     // server's row as soon as the POST returns or a poll sees it.
-    setItems((prev) => [...prev, { id: 'tmp' + Date.now(), type: 'user', text: snapshot, ts: Date.now() / 1000, pending: true }]);
+    const tmp = 'tmp' + Date.now() + Math.random().toString(36).slice(2, 6);
+    setItems((prev) => [...prev, { id: tmp, type: 'user', text: snapshot, ts: Date.now() / 1000, pending: true }]);
     try {
-      await api('/api/threads/' + thread.id + '/messages', { method: 'POST', body: JSON.stringify({ text: snapshot, images: [], parent_id: pid }) });
+      // The POST is the one call that must not hang: a stuck request used to
+      // leave the bubble saying "sending" with no way out.
+      await api('/api/threads/' + thread.id + '/messages', { method: 'POST', timeout: 30000, body: JSON.stringify({ text: snapshot, images: [], parent_id: pid }) });
+      breadcrumb('send:ok', snapshot.slice(0, 40));
       await load();                            // show it immediately even if SSE lags
     } catch (e) {
+      breadcrumb('send:fail', String(e && e.message || e));
+      note('send', e, 'thread ' + thread.id);
       setText(snapshot);                       // never lose the message
       setBusy(null);
       setErr(String(e.message || e));
+      setItems((prev) => prev.filter((i) => i.id !== tmp));
     }
   };
   const stop = async () => {
@@ -213,15 +265,16 @@ export default function Chat({ thread, threads, onSwitch, onBack, onEvent, onMen
     load();
   };
 
-  const renderItem = ({ item }) => {
-    if (item.day) return <View style={st.dayWrap}><Text style={st.dayT}>{item.label}</Text></View>;
+  const renderRow = ({ item }) => {
+    if (!item || typeof item !== 'object') return null;
+    if (item.day) return <View style={st.dayWrap}><Text style={st.dayT}>{asText(item.label)}</Text></View>;
     if (item.typing) return (
       <View style={st.typingWrap}><Text style={st.typingT}>●  ●  ●</Text></View>
     );
     if (item.type === 'user') return (
       <View style={st.rowOut}>
         <Pressable onLongPress={() => item.id && setPick(item)} delayLongPress={350} style={st.bubbleOut}>
-          <Text selectable style={st.bubbleOutT}>{String(item.text || '')}</Text>
+          <Text selectable style={st.bubbleOutT}>{asText(item.text)}</Text>
           <MsgFoot it={item} time={fmtT(item)} outgoing />
         </Pressable>
       </View>
@@ -229,7 +282,7 @@ export default function Chat({ thread, threads, onSwitch, onBack, onEvent, onMen
     if (item.type === 'assistant') return (
       <Pressable onLongPress={() => item.id && setPick(item)} delayLongPress={350} style={st.rowIn}>
         <View style={st.answer}>
-          {aiBody(String(item.text || ''), (t) => md(t, st.answerT), (r) => { setText(r); })}
+          {aiBody(asText(item.text), (t) => md(t, st.answerT), (r) => { setText(r); })}
         </View>
         <MsgFoot it={item} time={fmtT(item)} />
       </Pressable>
@@ -240,17 +293,32 @@ export default function Chat({ thread, threads, onSwitch, onBack, onEvent, onMen
       return (
         <View style={st.toolWrap}>
           <Text style={[st.toolIc, { color: okk ? '#6fcf97' : '#e57373' }]}>{g}</Text>
-          <Text style={st.toolT} numberOfLines={2}>{item.label || item.tool}</Text>
-          {(item.images || []).map((n, i) => <Image key={i} style={st.shot}
-            source={{ uri: API_BASE + '/api/files/shots/' + encodeURIComponent(n) }} />)}
+          <Text style={st.toolT} numberOfLines={2}>{asText(item.label) || asText(item.tool)}</Text>
+          {asList(item.images).map((n, i) => <Image key={i} style={st.shot}
+            source={{ uri: API_BASE + '/api/files/shots/' + encodeURIComponent(asText(n)) }} />)}
         </View>
       );
     }
     if (item.type === 'notice') return item.level === 'cmd'
-      ? <View style={st.cmdNote}>{md(item.text || '', st.noteT)}</View>
-      : <Text style={st.noteT}>{String(item.text || '')}</Text>;
-    if (item.type === 'system_note') return <Text style={st.noteT}>{String(item.text || '').slice(0, 200)}</Text>;
+      ? <View style={st.cmdNote}>{md(asText(item.text), st.noteT)}</View>
+      : <Text style={st.noteT}>{asText(item.text)}</Text>;
+    if (item.type === 'system_note') return <Text style={st.noteT}>{asText(item.text).slice(0, 200)}</Text>;
     return null;
+  };
+
+  // A single unrenderable row (bad widget, odd markup) must not take the screen
+  // down with it — report it and draw a placeholder instead.
+  const renderItem = (args) => {
+    try {
+      return renderRow(args);
+    } catch (e) {
+      note('render', e, 'chat row type=' + asText(args && args.item && args.item.type));
+      return (
+        <View style={st.rowIn}>
+          <Text style={st.noteT}>This message could not be drawn. Pull the chat again to reload it.</Text>
+        </View>
+      );
+    }
   };
 
   const streamRows = Object.entries(streams).filter(([, t]) => t);
@@ -310,8 +378,8 @@ export default function Chat({ thread, threads, onSwitch, onBack, onEvent, onMen
             renderItem={renderStreamAware(renderItem)}
             contentContainerStyle={[st.list, { paddingBottom: 16 }]}
             keyboardShouldPersistTaps="handled"
-            onContentSizeChange={() => listRef.current && listRef.current.scrollToEnd({ animated: false })}
-            onLayout={() => listRef.current && listRef.current.scrollToEnd({ animated: false })}
+            onContentSizeChange={scrollEnd}
+            onLayout={scrollEnd}
             ListEmptyComponent={!busy ? <Text style={st.empty}>Ask {botName} anything.</Text> : null}
           />
         )}
@@ -333,7 +401,7 @@ export default function Chat({ thread, threads, onSwitch, onBack, onEvent, onMen
             const isAsk = a.category === 'question' || a.tool === 'ask_code';
             return (
               <View key={a.id || i} style={st.appRow}>
-                <Text style={st.appT}>{(a.category || '').toUpperCase()}{a.tool ? ' · ' + a.tool : ''}{a.summary ? '\n' + a.summary : ''}</Text>
+                <Text style={st.appT}>{asText(a.category).toUpperCase()}{a.tool ? ' · ' + asText(a.tool) : ''}{a.summary ? '\n' + asText(a.summary) : ''}</Text>
                 {isAsk ? <AnsRow onSend={(t) => decide(a, true, false, t)} placeholder={a.tool === 'ask_code' ? 'Paste the code' : 'Type an answer'} /> : null}
                 <View style={st.appBtns}>
                   {!isAsk && (
@@ -353,8 +421,8 @@ export default function Chat({ thread, threads, onSwitch, onBack, onEvent, onMen
       {!!replyTo && (
         <View style={st.replyBar}>
           <View style={{ flex: 1 }}>
-            <Text style={st.replyWho}>{replyTo.type === 'user' ? 'You' : (replyTo.name || 'Bot')}</Text>
-            <Text numberOfLines={1} style={st.replyTxt}>{String(uiPlain(replyTo.text || '') || replyTo.text).slice(0, 80)}</Text>
+            <Text style={st.replyWho}>{replyTo.type === 'user' ? 'You' : (asText(replyTo.name) || 'Bot')}</Text>
+            <Text numberOfLines={1} style={st.replyTxt}>{asText(uiPlain(replyTo.text || '') || replyTo.text).slice(0, 80)}</Text>
           </View>
           <Pressable onPress={() => setReplyTo(null)} hitSlop={8}><Text style={st.replyX}>✕</Text></Pressable>
         </View>
@@ -385,8 +453,8 @@ export default function Chat({ thread, threads, onSwitch, onBack, onEvent, onMen
         <View style={st.scrimM} onStartShouldSetResponder={() => true}>
           <View style={[st.sheet, { paddingBottom: 16 + (ins?.bottom || 0) }]}>
             <View style={st.grabber} />
-            <Text style={st.sheetT}>{pick.type === 'user' ? 'Your message' : (pick.name || 'Bot')}</Text>
-            <Text numberOfLines={3} style={st.sheetSub}>{String(pick.text || '').slice(0, 140)}</Text>
+            <Text style={st.sheetT}>{pick.type === 'user' ? 'Your message' : (asText(pick.name) || 'Bot')}</Text>
+            <Text numberOfLines={3} style={st.sheetSub}>{asText(pick.text).slice(0, 140)}</Text>
             <View style={{ flexDirection: 'row', gap: 14, marginTop: 12, flexWrap: 'wrap' }}>
               {REACTS.map((e) => (
                 <Pressable key={e} onPress={() => { react(pick.id, e); setPick(null); }} hitSlop={4}>
@@ -409,7 +477,7 @@ export default function Chat({ thread, threads, onSwitch, onBack, onEvent, onMen
               {(threads || []).filter((t) => !histQ.trim() || String(t.title || '').toLowerCase().includes(histQ.trim().toLowerCase())).map((t) => (
                 <Pressable key={t.id} onPress={() => { onSwitch(t.id); setHistOpen(false); }} style={[st.histRow, t.id === thread.id && { backgroundColor: PANEL }]}>
                   <Text style={{ fontSize: 15 }}>{t.main ? '🏠' : '💬'}</Text>
-                  <Text style={st.histT} numberOfLines={1}>{t.main ? 'Main' : t.title || 'Chat'}</Text>
+                  <Text style={st.histT} numberOfLines={1}>{t.main ? 'Main' : (asText(t.title) || 'Chat')}</Text>
                 </Pressable>
               ))}
               {!(threads || []).length && <Text style={st.noteT}>No other chats yet.</Text>}
@@ -457,23 +525,34 @@ export default function Chat({ thread, threads, onSwitch, onBack, onEvent, onMen
 
 function renderStreamAware(fn) {
   return ({ item }) => {
-    if (item.stream != null) return (
-      <View style={st.rowIn}>
-        <View style={st.answer}>
-          {md(uiStreamText(item.stream) || '…', st.answerT)}
-        </View>
-      </View>
-    );
+    if (item && item.stream != null) {
+      try {
+        return (
+          <View style={st.rowIn}>
+            <View style={st.answer}>
+              {md(uiStreamText(item.stream) || '…', st.answerT)}
+            </View>
+          </View>
+        );
+      } catch (e) {
+        note('render', e, 'stream');
+        return (
+          <View style={st.rowIn}>
+            <Text style={st.noteT}>{asText(item.stream)}</Text>
+          </View>
+        );
+      }
+    }
     return fn({ item });
   };
 }
 
 function MsgFoot({ it, time, outgoing }) {
-  const rx = it.reactions || [];
+  const rx = asList(it && it.reactions);
   return (
     <View style={[st.foot, outgoing && { justifyContent: 'flex-end' }]}>
-      {rx.map((r, i) => <Text key={i} style={st.rx}>{r.emoji}{r.count > 1 ? ' ' + r.count : ''}</Text>)}
-      {!!time && <Text style={st.time}>{time}</Text>}
+      {rx.map((r, i) => <Text key={i} style={st.rx}>{asText(r && r.emoji)}{r && r.count > 1 ? ' ' + r.count : ''}</Text>)}
+      {!!time && <Text style={st.time}>{asText(time)}</Text>}
     </View>
   );
 }

@@ -4,8 +4,9 @@ import { Animated, Modal, View, Text, TextInput, Pressable, FlatList, StyleSheet
 import { StatusBar as ExpoStatus } from 'expo-status-bar';
 import { api, connectEvents, loadKey, saveConf, tryConf, clearConf, conf, cfgGet, K_SERVER, K_TOKEN, K_EMAIL, K_PASS, loginEmail, loginGoogle } from './src/session';
 import { C } from './src/theme';
-import { checkUpdate, installUpdate, applyOta, APP_VERSION } from './src/updates';
-import { BUILD_STAMP, OTA_CREATED } from './src/build';
+import { checkUpdate, installUpdate, applyOta, APP_VERSION, APP_CODE } from './src/updates';
+import { lastError, send as reportNow, note, breadcrumb } from './src/diag';
+import { BUILD_STAMP, OTA_CREATED, OTA_ID } from './src/build';
 import Connect, { AuthModal } from './src/Connect';
 import Chat from './src/Chat';
 import ServerScreen from './src/ServerScreen';
@@ -126,6 +127,7 @@ function ZbRoot() {
   }, [upd, runCheck]);
 
   useEffect(() => { (async () => {
+    breadcrumb('boot', APP_VERSION + ' ' + (OTA_ID || 'embedded'));
     await loadKey();
     const saved = await cfgGet(K_SERVER), tok = await cfgGet(K_TOKEN);
     const mail = await cfgGet(K_EMAIL), pass = await cfgGet(K_PASS);
@@ -163,18 +165,25 @@ function ZbRoot() {
   }, []);
 
   const onEvent = useCallback((ev) => {
-    if (ev.id && ev.id > lastRef.current) lastRef.current = ev.id;
-    if (ev.type === 'turn') {
-      setBusy((prev) => {
-        const o = { ...prev };
-        if (['done', 'stopped', 'error', 'limit', 'skipped'].includes(ev.status)) delete o[ev.bot_id];
-        else o[ev.bot_id] = { status: ev.status, thread_id: ev.thread_id };
-        return o;
-      });
+    // Socket callbacks are outside React: a throw here is uncaught and closes
+    // the app, so keep the whole handler contained.
+    try {
+      if (!ev || typeof ev !== 'object') return;
+      if (ev.id && ev.id > lastRef.current) lastRef.current = ev.id;
+      if (ev.type === 'turn') {
+        setBusy((prev) => {
+          const o = { ...prev };
+          if (['done', 'stopped', 'error', 'limit', 'skipped'].includes(ev.status)) delete o[ev.bot_id];
+          else o[ev.bot_id] = { status: ev.status, thread_id: ev.thread_id };
+          return o;
+        });
+      }
+      if (ev.type === 'bots' || ev.type === 'groups' || ev.type === 'approval') refresh();
+      if (ev.type === 'notification') { setNoteBadge((b) => b + 1); refresh(); }
+      if (['message', 'delta', 'delta_reset', 'turn', 'approval'].includes(ev.type)) chatHandler.current && chatHandler.current(ev);
+    } catch (e) {
+      note('event', e, 'app event ' + String(ev && ev.type));
     }
-    if (ev.type === 'bots' || ev.type === 'groups' || ev.type === 'approval') refresh();
-    if (ev.type === 'notification') { setNoteBadge((b) => b + 1); refresh(); }
-    if (['message', 'delta', 'delta_reset', 'turn', 'approval'].includes(ev.type)) chatHandler.current && chatHandler.current(ev);
   }, [refresh, chatHandler]);
 
   // one live connection for the whole app
@@ -926,11 +935,85 @@ function HostCard({ onManage }) {
   );
 }
 
+// "It crashed" is not a bug report. This screen shows exactly which build is
+// running, the last error the app caught, and what the server has received —
+// so a crash on a handset becomes something that can be fixed.
+function DiagModal({ onClose }) {
+  const ins = useSafeAreaInsets();
+  const [srv, setSrv] = useState(null);
+  const [busy, setBusy] = useState('');
+  const [msg, setMsg] = useState('');
+  const load = async () => {
+    try { setSrv(await api('/api/client-log?limit=15')); }
+    catch (e) { setSrv({ error: String(e.message || e) }); }
+  };
+  useEffect(() => { load(); }, []);
+  const le = lastError();
+  const rows = (srv && srv.items) || [];
+  const sendTest = async () => {
+    setBusy('send'); setMsg('');
+    const ok = await reportNow('manual', new Error('Diagnostics test from the phone'), 'settings');
+    setBusy('');
+    setMsg(ok ? 'Sent — the server has it.' : 'Could not send (check the connection).');
+    load();
+  };
+  return (
+    <Modal transparent visible animationType="slide" onRequestClose={onClose}>
+      <View style={{ flex: 1, backgroundColor: 'rgba(0,0,0,.6)', justifyContent: 'flex-end' }}>
+        <View style={{ backgroundColor: C.bg, borderTopLeftRadius: 22, borderTopRightRadius: 22, padding: 16, paddingBottom: 16 + (ins.bottom || 0), maxHeight: '88%' }}>
+          <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 8 }}>
+            <Text style={{ color: C.text, fontSize: 17, fontWeight: '800', flex: 1 }}>Diagnostics</Text>
+            <Pressable onPress={onClose} hitSlop={8}><Text style={{ color: C.muted, fontSize: 14, fontWeight: '700' }}>Close</Text></Pressable>
+          </View>
+          <ScrollView style={{ maxHeight: 460 }}>
+            <Text style={l.lbl}>This phone</Text>
+            <Text style={[l.cap, { marginTop: 2 }]}>Version {APP_VERSION} (code {APP_CODE})</Text>
+            <Text style={l.cap}>Bundle {OTA_ID ? String(OTA_ID).slice(0, 12) : 'built-in'}{OTA_CREATED ? ' · ' + OTA_CREATED : ''}</Text>
+            <Text style={l.cap}>Server {conf().base || '—'}</Text>
+
+            <Text style={[l.lbl, { marginTop: 12 }]}>Last error on this phone</Text>
+            {le ? (
+              <View style={{ backgroundColor: C.panel, borderRadius: 12, padding: 10, marginTop: 4, gap: 3 }}>
+                <Text style={{ color: C.bad, fontSize: 12.5, fontWeight: '700' }}>{le.kind} · {le.t}</Text>
+                <Text style={{ color: C.text, fontSize: 12.5 }} selectable>{le.message}</Text>
+                {!!le.extra && <Text style={{ color: C.muted, fontSize: 11 }} selectable>{le.extra}</Text>}
+                {!!le.stack && <Text style={{ color: C.muted, fontSize: 10.5 }} selectable numberOfLines={8}>{le.stack}</Text>}
+              </View>
+            ) : (
+              <Text style={l.cap}>None caught since this launch.</Text>
+            )}
+
+            <Text style={[l.lbl, { marginTop: 12 }]}>Reported to the server</Text>
+            {!srv ? <Text style={l.cap}>Loading…</Text> : srv.error ? (
+              <Text style={[l.cap, { color: C.bad }]}>{srv.error}</Text>
+            ) : !rows.length ? <Text style={l.cap}>Nothing reported yet.</Text> : rows.slice().reverse().map((r, i) => (
+              <View key={i} style={{ borderTopWidth: 1, borderColor: C.line, paddingVertical: 6 }}>
+                <Text style={{ color: C.muted, fontSize: 11 }}>{r.ts} · {r.kind} · v{r.app} · {String(r.ota || '').slice(0, 8)}</Text>
+                <Text style={{ color: C.text, fontSize: 12.5 }} numberOfLines={3}>{r.message}</Text>
+              </View>
+            ))}
+          </ScrollView>
+          <View style={{ flexDirection: 'row', gap: 8, marginTop: 12 }}>
+            <Pressable onPress={sendTest} disabled={busy === 'send'} style={[n.appB, { flex: 1, alignItems: 'center' }]}>
+              <Text style={n.appOk}>{busy === 'send' ? 'Sending…' : 'Send a test report'}</Text>
+            </Pressable>
+            <Pressable onPress={load} style={[n.appB, { flex: 1, alignItems: 'center' }]}>
+              <Text style={n.appOk}>Refresh</Text>
+            </Pressable>
+          </View>
+          {!!msg && <Text style={[l.cap, { marginTop: 8, marginBottom: 0 }]}>{msg}</Text>}
+        </View>
+      </View>
+    </Modal>
+  );
+}
+
 function Settings({ onOut, onCheck, onPlug, onMenu, onServer }) {
   const ins = useSafeAreaInsets();
   const [mail2, setMail2] = useState('');
   const [updMsg, setUpdMsg] = useState('');
   const [checking, setChecking] = useState(false);
+  const [diagOpen, setDiagOpen] = useState(false);
   useEffect(() => { cfgGet(K_EMAIL).then((m) => setMail2(String(m || ''))).catch(() => {}); }, []);
   const check = async () => {
     setChecking(true); setUpdMsg('');
@@ -972,6 +1055,7 @@ function Settings({ onOut, onCheck, onPlug, onMenu, onServer }) {
             <Row icon="🧩" label="Connectors & MCP" sub="Gmail, Slack, GitHub, Notion, MCP servers…" onPress={onPlug} />
             <Row icon="⬇️" label="Check for updates" sub={checking ? 'Checking…' : (updMsg || (OTA_CREATED ? 'Bundle of ' + OTA_CREATED + ' · tap to check' : 'Tap to check for a new bundle'))} onPress={check} />
             <HostCard onManage={onServer} />
+            <Row icon="🩺" label="Diagnostics" sub="Which build is running, and the last error it caught" onPress={() => setDiagOpen(true)} />
             <Row icon="🔗" label="API address" sub={host || conf().base} />
             <Pressable onPress={onOut} style={({ pressed }) => [n.row, { borderColor: '#5c2723' }, pressed && { opacity: .9 }]}>
               <View style={n.rowIc}><Text style={{ fontSize: 15 }}>🚪</Text></View>
@@ -981,6 +1065,7 @@ function Settings({ onOut, onCheck, onPlug, onMenu, onServer }) {
           </View>
         }
       />
+      {diagOpen && <DiagModal onClose={() => setDiagOpen(false)} />}
     </View>
   );
 }
