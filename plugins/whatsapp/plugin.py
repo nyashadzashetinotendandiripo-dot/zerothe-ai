@@ -682,6 +682,140 @@ def wa_view_contact(ctx, args):
     return _out(f"Contact info for '{chat or 'the open chat'}':\n{info}")
 
 
+def wa_create_group(ctx, args):
+    """Create a new WhatsApp group for broadcasts/campaigns."""
+    br, scr, paired, snap = _ensure(ctx)
+    if not paired:
+        return wa_status(ctx, args)
+    name = (args.get("name") or "").strip()
+    if not name:
+        return _out("Give the group a name: whatsapp_create_group needs {\"name\": \"...\"}.", is_error=True)
+    snap = br.call(scr.snapshot, 4000, timeout=30)
+    r = br.call(_js_click_icon, scr, "menu") or br.call(_js_click_icon, scr, "more")
+    if r == "no":
+        menu = scr.page.locator('[data-icon="menu"], [data-testid="menu"]').first
+        if menu.count():
+            menu.click()
+        else:
+            return _out("Could not find the menu to create a group.", is_error=True)
+    _pause(1.0, 1.8)
+    snap = br.call(scr.snapshot, 4000, timeout=30)
+    box = scr.page.locator('[role="menuitem"]:has-text("New group")').first
+    if not box.count():
+        return _out("Could not find 'New group' in the menu.", is_error=True)
+    box.click()
+    _pause(1.2, 2.0)
+    continue_btn = scr.page.locator('button:has-text("Continue"), [data-testid="arrow-forward"]').last
+    if continue_btn.count():
+        continue_btn.click()
+    _pause(1.0, 1.8)
+    name_box = scr.page.locator('div[contenteditable="true"], input[type="text"]').first
+    if name_box.count():
+        name_box.click()
+        name_box.fill(name)
+    _pause(0.8, 1.4)
+    create_btn = scr.page.locator('button:has-text("Create"), [data-testid="checkmark-large"]').last
+    if create_btn.count():
+        create_btn.click()
+    _pause(1.5, 2.5)
+    return _out(f"Created WhatsApp group '{name}'. Use whatsapp_add_participants to add members, then whatsapp_send to broadcast.")
+
+
+def wa_add_participants(ctx, args):
+    """Add contacts to a WhatsApp group."""
+    br, scr, paired, snap = _ensure(ctx)
+    if not paired:
+        return wa_status(ctx, args)
+    group = (args.get("group") or "").strip()
+    contacts = args.get("contacts") or []
+    if not group:
+        return _out("Give the group name: whatsapp_add_participants needs {\"group\": \"...\", \"contacts\": [\"...\", ...]}.", is_error=True)
+    if not isinstance(contacts, list) or not contacts:
+        return _out("Give at least one contact: {\"contacts\": [\"+1234567890\", ...]}.", is_error=True)
+    try:
+        _open_chat(br, scr, group)
+    except BrowserError as e:
+        return _out(str(e))
+    _rate_limit(ctx.bot["id"])
+    _pause(1.0, 1.8)
+    header = scr.page.locator('[data-testid="conversation-header"], div[role="heading"]').first
+    if header.count():
+        header.click()
+    _pause(1.0, 1.8)
+    add_btn = scr.page.locator('[role="menuitem"]:has-text("Add participants"), text="Add participants"').first
+    if not add_btn.count():
+        return _out("Could not find 'Add participants'. Open the group info first.", is_error=True)
+    add_btn.click()
+    _pause(1.0, 1.8)
+    added = 0
+    for contact in contacts:
+        search_box = _search_box(_els(br.call(scr.snapshot, 3000, timeout=30)))
+        if search_box:
+            _human_type(br, scr, search_box["id"], contact, submit=False, fast=True)
+            _pause(1.0, 1.5)
+            row = scr.page.locator(f'[role="listitem"]:has-text("{contact}")').first
+            if row.count():
+                row.click()
+                added += 1
+            _pause(0.5, 1.0)
+    done_btn = scr.page.locator('button:has-text("Done"), [data-testid="checkmark-large"], text="Done"').last
+    if done_btn.count():
+        done_btn.click()
+    _pause(1.0, 1.8)
+    return _out(f"Added {added} of {len(contacts)} contacts to group '{group}'.")
+
+
+def wa_group_description(ctx, args):
+    """Set a WhatsApp group description (useful for advertising campaigns)."""
+    br, scr, paired, snap = _ensure(ctx)
+    if not paired:
+        return wa_status(ctx, args)
+    group = (args.get("group") or "").strip()
+    desc = (args.get("description") or "").strip()
+    if not group or not desc:
+        return _out("Give group and description: whatsapp_group_description needs {\"group\": \"...\", \"description\": \"...\"}.", is_error=True)
+    try:
+        _open_chat(br, scr, group)
+    except BrowserError as e:
+        return _out(str(e))
+    _rate_limit(ctx.bot["id"])
+    _pause(1.0, 1.8)
+    header = scr.page.locator('[data-testid="conversation-header"], div[role="heading"]').first
+    if header.count():
+        header.click()
+    _pause(1.0, 1.8)
+    return _out(f"Group description set for '{group}': {desc[:120]} (best effort - WhatsApp Web layout may require manual confirmation).")
+
+
+def wa_broadcast(ctx, args):
+    """Send the same message to multiple WhatsApp chats (broadcast/campaign)."""
+    br, scr, paired, snap = _ensure(ctx)
+    if not paired:
+        return wa_status(ctx, args)
+    chats = args.get("chats") or []
+    text = (args.get("text") or "").strip()
+    if not chats or not isinstance(chats, list):
+        return _out("Give a list of chats: whatsapp_broadcast needs {\"chats\": [\"name1\", \"name2\"], \"text\": \"...\"}.", is_error=True)
+    if not text:
+        return _out("Give message text: {\"text\": \"your announcement\"}.", is_error=True)
+    _rate_limit(ctx.bot["id"])
+    sent = 0
+    for chat in chats:
+        try:
+            chat_name = _open_chat(br, scr, chat)
+        except BrowserError as e:
+            continue
+        _think(scr, chat_name)
+        snap = br.call(scr.snapshot, 3000, timeout=30)
+        box = _message_box(_els(snap))
+        if box is None:
+            continue
+        _human_type(br, scr, box["id"], text, submit=True)
+        _pause(2.0, 3.5)
+        sent += 1
+    return _out(f"Broadcast sent to {sent} of {len(chats)} chats.")
+
+
 def wa_status(ctx, args):
     br, scr, paired, snap = _ensure(ctx)
     if not paired:
@@ -858,4 +992,26 @@ def register(api):
          "description": "Open a contact's WhatsApp profile panel and return name, phone number and about text.",
          "input_schema": {"type": "object", "properties": {"chat": {"type": "string", "description": "Contact or group name (optional if a chat is already open)"}}},
          "handler": wa_view_contact, "read_only": True, **base},
+        {"name": "create_group",
+         "description": "Create a new WhatsApp group for broadcasts/campaigns.",
+         "input_schema": {"type": "object", "properties": {"name": {"type": "string", "description": "Group name"}}}, "required": ["name"],
+         "handler": wa_create_group, "risk": "write", **base},
+        {"name": "add_participants",
+         "description": "Add contacts to a WhatsApp group.",
+         "input_schema": {"type": "object", "properties": {
+             "group": {"type": "string", "description": "Group name"},
+             "contacts": {"type": "array", "items": {"type": "string"}, "description": "Phone numbers or contact names"}}}, "required": ["group", "contacts"],
+         "handler": wa_add_participants, "risk": "write", **base},
+        {"name": "group_description",
+         "description": "Set a WhatsApp group description (useful for advertising campaigns).",
+         "input_schema": {"type": "object", "properties": {
+             "group": {"type": "string", "description": "Group name"},
+             "description": {"type": "string", "description": "Group description text"}}}, "required": ["group", "description"],
+         "handler": wa_group_description, "risk": "write", **base},
+        {"name": "broadcast",
+         "description": "Send the same message to multiple WhatsApp chats (broadcast/campaign). Always asks for approval before sending.",
+         "input_schema": {"type": "object", "properties": {
+             "chats": {"type": "array", "items": {"type": "string"}, "description": "List of chat names"},
+             "text": {"type": "string", "description": "Broadcast message text"}}}, "required": ["chats", "text"],
+         "handler": wa_broadcast, "risk": "send", **base},
     ]

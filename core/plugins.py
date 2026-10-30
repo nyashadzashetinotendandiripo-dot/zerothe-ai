@@ -434,7 +434,16 @@ def build_gmail(c: Conn) -> list[ToolSpec]:
         return "Labels updated."
 
     def delete_email(ctx, a):
-        c.http(ctx, "DELETE", f"{base}/messages/{a['message_id']}", headers=H())
+        try:
+            c.http(ctx, "DELETE", f"{base}/messages/{a['message_id']}", headers=H())
+        except ConnectorError as e:
+            if "403" in str(e) or "insufficientPermissions" in str(e):
+                raise ConnectorError(
+                    "Gmail delete failed (403 insufficient permissions). Your Gmail connection "
+                    "was authorized before delete permission was added. "
+                    "Go to Plugins Hub → Gmail → Disconnect, then Connect again to re-authorize with full modify/delete scope."
+                )
+            raise
         return "Email deleted."
 
     mail_props = {"to": s("Recipient address(es), comma separated"), "subject": s("Subject"), "body": s("Plain-text body"),

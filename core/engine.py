@@ -121,7 +121,8 @@ class Engine:
         self.notify("digest", None, None, "Your daily digest", self.digest.headline(d))
 
     def _housekeeping(self) -> None:
-        """Nightly at 03:17: a local backup zip (kept: last 7) and pruning of stale data."""
+        """Nightly at 03:17: a local backup zip (kept: last 7), pruning of stale data,
+        and cleanup of old workspace files created by bots to free storage."""
         try:
             bdir = paths.data_dir() / "backups"
             bdir.mkdir(parents=True, exist_ok=True)
@@ -132,7 +133,21 @@ class Engine:
             for old in keep:
                 old.unlink(missing_ok=True)
             self.db.execute("DELETE FROM notifications WHERE ts < ?", (time.time() - 30 * 86400,))
-            self.log.info("housekeeping: auto-backup %s (%.1f MB), pruned stale notifications", name, len(data) / 1e6)
+            # Prune workspace files older than 7 days (bots create reports, PDFs, etc.)
+            ws = paths.workspace_dir()
+            if ws.is_dir():
+                cutoff = time.time() - 7 * 86400
+                removed = 0
+                for f in ws.rglob("*"):
+                    if f.is_file() and f.stat().st_mtime < cutoff:
+                        try:
+                            f.unlink()
+                            removed += 1
+                        except OSError:
+                            pass
+                self.log.info("housekeeping: auto-backup %s (%.1f MB), pruned stale notifications, removed %d old workspace files", name, len(data) / 1e6, removed)
+            else:
+                self.log.info("housekeeping: auto-backup %s (%.1f MB), pruned stale notifications", name, len(data) / 1e6)
         except Exception:   # never break the scheduler
             self.log.exception("housekeeping failed")
 

@@ -113,6 +113,7 @@ function ChatScreen({ thread, threads, botName: propsBotName, onSwitch, onBack, 
   const [liveUrl, setLiveUrl] = useState('');
   const [liveBusy, setLiveBusy] = useState(false);
   const [liveErr, setLiveErr] = useState('');
+  const [liveInteractive, setLiveInteractive] = useState(false);   // interactive takeover mode
   const [histOpen, setHistOpen] = useState(false);
   const [histQ, setHistQ] = useState('');
   const [err, setErr] = useState('');
@@ -168,18 +169,32 @@ function ChatScreen({ thread, threads, botName: propsBotName, onSwitch, onBack, 
 
   const load = useCallback(async (quiet) => {
     try {
-      const d = await api('/api/threads/' + thread.id, { timeout: 25000 });
+      const d = await api('/api/threads/' + thread.id, { timeout: 15000 });
       apply(d, !!quiet);
     } catch (e) {
-      // Keep the screen usable, but leave evidence: "no replies" is either a
-      // crash or the phone not reaching the server, and they look identical.
+      // Keep the screen usable even if the first load is slow — polling will
+      // retry automatically, so "stuck on loading" never happens.
       noteOnce('load', 'net', e, 'thread ' + thread.id);
       if (!quiet) setErr(String(e.message || e));
     }
     setLoading(false);
   }, [thread.id, apply]);
 
-  useEffect(() => { setItems([]); setLoading(true); setReplyTo(null); setErr(''); load(); }, [thread.id, load]);
+  // Show cached items immediately if available (from SSE delta), then load fresh.
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      // First, try a fast load with a short timeout so the screen isn't blank.
+      try {
+        const d = await api('/api/threads/' + thread.id, { timeout: 8000 });
+        if (!cancelled) apply(d, true);
+      } catch (e) {
+        // Fall through to the normal load below.
+      }
+      if (!cancelled) load(false);
+    })();
+    return () => { cancelled = true; };
+  }, [thread.id, load, apply]);
 
   // Safety net: the phone's SSE can be blocked by a proxy or killed by the OS, and
   // then the answer never appeared while the screen kept saying "working". Poll the
@@ -297,6 +312,23 @@ function ChatScreen({ thread, threads, botName: propsBotName, onSwitch, onBack, 
       const d = await api('/api/host/desktop', { method: 'POST', body: JSON.stringify({ viewOnly: true, ttl: 3600 }) });
       if (!d || !d.url) throw new Error('The server did not return a live link.');
       setLiveUrl(d.url);
+      setLiveInteractive(false);
+    } catch (e) {
+      setLiveErr(String(e.message || e));
+    }
+    setLiveBusy(false);
+  };
+  // Interactive takeover mode: full control of the desktop (click, type, enter passwords).
+  // Use this when a Bot needs you to log in, solve a CAPTCHA, or complete a step itself.
+  const openInteractive = async () => {
+    setLiveFull(true); setLiveErr('');
+    if (liveUrl) return;
+    setLiveBusy(true);
+    try {
+      const d = await api('/api/host/desktop', { method: 'POST', body: JSON.stringify({ viewOnly: false, ttl: 3600 }) });
+      if (!d || !d.url) throw new Error('The server did not return an interactive link.');
+      setLiveUrl(d.url);
+      setLiveInteractive(true);
     } catch (e) {
       setLiveErr(String(e.message || e));
     }
@@ -558,8 +590,18 @@ function ChatScreen({ thread, threads, botName: propsBotName, onSwitch, onBack, 
       {liveFull && (
         <View style={st.fullScr}>
           <View style={[st.fullBar, { paddingTop: (ins?.top || 0) + 8 }]}>
-            <Text style={st.fullT}>Live screen</Text>
+            <Text style={st.fullT}>{liveInteractive ? 'Interactive desktop' : 'Live screen'}</Text>
             <View style={{ flex: 1 }} />
+            {!!liveInteractive ? (
+              <Pressable onPress={closeLive} hitSlop={8} style={st.fullBtn}><Text style={st.fullBtnT}>✕ End control</Text></Pressable>
+            ) : (
+              <Pressable onPress={openInteractive} hitSlop={8} disabled={liveBusy}
+                style={[st.fullBtn, liveInteractive && { backgroundColor: '#00a884' }]}>
+                <Text style={[st.fullBtnT, liveInteractive && { color: '#fff' }]}>
+                  {liveBusy ? '…' : liveInteractive ? 'Interactive on' : 'Take control'}
+                </Text>
+              </Pressable>
+            )}
             <Pressable onPress={stop} hitSlop={8}><Text style={st.stop}>■ Stop bot</Text></Pressable>
             <Pressable onPress={closeLive} hitSlop={8}><Text style={st.fullX}>✕ Close</Text></Pressable>
           </View>
@@ -582,7 +624,7 @@ function ChatScreen({ thread, threads, botName: propsBotName, onSwitch, onBack, 
             <View style={st.fullErr}>
               <ActivityIndicator color={MUTED} />
               <Text style={st.fullErrT}>{liveBusy ? 'Starting the desktop…' : 'Connecting…'}</Text>
-              <Text style={st.fullErrS}>First start can take a few seconds.</Text>
+              <Text style={st.fullErrS}>{liveInteractive ? 'Interactive control starting…' : 'First start can take a few seconds.'}</Text>
             </View>
           )}
         </View>
@@ -721,6 +763,8 @@ const st = StyleSheet.create({
   fullScr: { position: 'absolute', inset: 0, backgroundColor: '#000' },
   fullBar: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 14, paddingTop: 40, paddingBottom: 8, backgroundColor: BG, gap: 12 },
   fullT: { color: TEXT, fontSize: 15, fontWeight: '800' },
+  fullBtn: { width: 34, height: 34, borderRadius: 17, backgroundColor: '#2a2a2a', alignItems: 'center', justifyContent: 'center', borderWidth: 1, borderColor: '#3a3a3a' },
+  fullBtnT: { color: TEXT, fontSize: 13, fontWeight: '600', lineHeight: 15 },
   fullX: { color: TEXT, fontSize: 15, fontWeight: '700' },
   fullErr: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: 20, gap: 8 },
   fullErrT: { color: '#e57373', fontSize: 13.5, textAlign: 'center' },
