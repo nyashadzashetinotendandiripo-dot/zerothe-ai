@@ -5,7 +5,7 @@ import { StatusBar as ExpoStatus } from 'expo-status-bar';
 import { api, connectEvents, loadKey, saveConf, tryConf, clearConf, conf, cfgGet, K_SERVER, K_TOKEN, K_EMAIL, K_PASS, loginEmail, loginGoogle } from './src/session';
 import { C } from './src/theme';
 import { checkUpdate, installUpdate, applyOta, APP_VERSION, APP_CODE } from './src/updates';
-import { lastError, send as reportNow, resend as resendLast, hydrate, note, breadcrumb } from './src/diag';
+import { lastError, send as reportNow, resend as resendLast, hydrate, note, noteOnce, breadcrumb } from './src/diag';
 import { BUILD_STAMP, OTA_CREATED, OTA_ID } from './src/build';
 import Connect, { AuthModal } from './src/Connect';
 import Chat from './src/Chat';
@@ -162,7 +162,7 @@ function ZbRoot() {
       const b = {};
       for (const [id, st] of Object.entries(d.status || {})) if (st && st.status && st.status !== 'idle') b[id] = st;
       setBusy(b);
-    } catch (e) { /* keep whatever we had */ }
+    } catch (e) { noteOnce('bootstrap', 'net', e, 'bootstrap'); }
   }, []);
 
   const onEvent = useCallback((ev) => {

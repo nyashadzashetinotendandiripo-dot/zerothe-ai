@@ -5,7 +5,7 @@ import { WebView } from 'react-native-webview';
 import { api, API_BASE } from './session';
 import md from './md';
 import { aiBody, uiPlain, uiStreamText } from './widgets';
-import { breadcrumb, note } from './diag';
+import { breadcrumb, note, noteOnce } from './diag';
 
 // Grok-style chat: near-black canvas, assistant answers as plain full-width text,
 // user messages as compact right-aligned bubbles, floating pill composer.
@@ -151,6 +151,9 @@ function ChatScreen({ thread, threads, onSwitch, onBack, onEvent, onMenu }) {
       const d = await api('/api/threads/' + thread.id, { timeout: 25000 });
       apply(d, !!quiet);
     } catch (e) {
+      // Keep the screen usable, but leave evidence: "no replies" is either a
+      // crash or the phone not reaching the server, and they look identical.
+      noteOnce('load', 'net', e, 'thread ' + thread.id);
       if (!quiet) setErr(String(e.message || e));
     }
     setLoading(false);

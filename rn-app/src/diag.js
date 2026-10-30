@@ -115,6 +115,16 @@ export async function resend() {
   return send(LAST.kind, { message: LAST.message, stack: LAST.stack }, 'stored ' + LAST.t + ' ' + (LAST.extra || ''));
 }
 
+// Report at most once a minute per key: a polling loop must not flood the log
+// (or the battery) while the server is unreachable.
+const ONCE = {};
+export function noteOnce(key, kind, e, extra) {
+  const now = Date.now();
+  if (ONCE[key] && now - ONCE[key] < 60000) return null;
+  ONCE[key] = now;
+  return note(kind, e, extra);
+}
+
 // Swallow uncaught errors instead of letting Android close the app. A bad row,
 // a dead socket or a widget that chokes must cost one bubble, not the session.
 export function installCrashGuard() {
