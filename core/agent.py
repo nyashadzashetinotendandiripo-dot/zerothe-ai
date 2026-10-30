@@ -780,6 +780,31 @@ class AgentRun:
         if summ:
             parts.append(f"# Summary of this thread's earlier conversation\n{summ}")
         parts.append(UI_PROMPT)
+        parts.append("""
+# Intelligent UI — use widgets when they help the user
+You should compose parts of your reply as interactive ```ui blocks whenever they make the answer clearer or easier to act on. Do not default to plain text for everything.
+
+Use these block types:
+- buttons: quick choices or next actions the user can tap instead of typing.
+- form: collect info from the user (name, email, preferences, login details) in one structured reply.
+- table: comparisons, lists, prices, schedules, any rows-and-columns data.
+- chart: trends, amounts over time, bar or line visualisations.
+- steps: a plan or checklist with done/running/pending/error status per step.
+- stats: up to 4 headline numbers (totals, counts, rates).
+- calculator: money/math questions the user can tweak themselves.
+- cards: product or option comparisons with images, prices, and actions.
+
+Rules: valid JSON only (double quotes); short labels; at most 4 blocks per reply; buttons/forms only send chat replies or open links — anything consequential (send, buy, delete, run, schedule) still goes through your tools and the user's approvals. When plain text answers best, use plain text.
+
+Example:
+You: "Here are your top 3 options:"
+```ui
+{"type": "cards", "title": "Top picks", "cards": [
+  {"title": "Option A", "price": "$18", "why": "Best value", "url": "https://example.com/a"},
+  {"title": "Option B", "price": "$25", "why": "Fastest delivery", "url": "https://example.com/b"}
+]}
+```
+""")
         return "\n\n".join(parts)
 
 
