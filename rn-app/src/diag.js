@@ -5,9 +5,10 @@
 // small ring of breadcrumbs, catches every uncaught JS error, and posts the
 // report to /api/client-log, where it can actually be read and fixed.
 import { APP_VERSION, APP_CODE, OTA_ID } from './build';
-import { conf } from './session';
+import { conf, cfgGet, cfgSet } from './session';
 
 const RING = [];
+const K_LAST = 'zt_lasterr';
 let LAST = null;
 
 function clip(v, n) {
@@ -90,8 +91,28 @@ export function note(kind, e, extra) {
     extra: clip(extra || '', 600),
   };
   breadcrumb('error: ' + LAST.kind, LAST.message);
+  // Survives a process death: the next launch can still show (and send) it.
+  try { cfgSet(K_LAST, JSON.stringify(LAST)).catch(() => {}); } catch (e2) { /* ignore */ }
   send(kind, e, extra);
   return LAST;
+}
+
+// Load the last error from a previous launch, so "it crashed yesterday" is still
+// on screen today.
+export async function hydrate() {
+  try {
+    const raw = await cfgGet(K_LAST);
+    if (!raw) return null;
+    const d = JSON.parse(raw);
+    if (d && d.message) LAST = d;
+  } catch (e) { /* ignore */ }
+  return LAST;
+}
+
+// Post the stored record again (Settings → Diagnostics).
+export async function resend() {
+  if (!LAST) return false;
+  return send(LAST.kind, { message: LAST.message, stack: LAST.stack }, 'stored ' + LAST.t + ' ' + (LAST.extra || ''));
 }
 
 // Swallow uncaught errors instead of letting Android close the app. A bad row,

@@ -6,6 +6,7 @@
 //     installer.
 import { Linking } from 'react-native';
 import { APP_CODE, APP_VERSION } from './build';
+import { note } from './diag';
 
 export { APP_CODE, APP_VERSION };
 
@@ -31,6 +32,8 @@ export async function applyOta(onNote) {
       return 'updated';
     }
   } catch (e) {
+    // An OTA that silently fails leaves the phone on old code forever; report it.
+    note('ota', e, 'applyOta');
     return 'error';
   }
   return 'none';

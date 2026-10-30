@@ -5,7 +5,7 @@ import { StatusBar as ExpoStatus } from 'expo-status-bar';
 import { api, connectEvents, loadKey, saveConf, tryConf, clearConf, conf, cfgGet, K_SERVER, K_TOKEN, K_EMAIL, K_PASS, loginEmail, loginGoogle } from './src/session';
 import { C } from './src/theme';
 import { checkUpdate, installUpdate, applyOta, APP_VERSION, APP_CODE } from './src/updates';
-import { lastError, send as reportNow, note, breadcrumb } from './src/diag';
+import { lastError, send as reportNow, resend as resendLast, hydrate, note, breadcrumb } from './src/diag';
 import { BUILD_STAMP, OTA_CREATED, OTA_ID } from './src/build';
 import Connect, { AuthModal } from './src/Connect';
 import Chat from './src/Chat';
@@ -128,6 +128,7 @@ function ZbRoot() {
 
   useEffect(() => { (async () => {
     breadcrumb('boot', APP_VERSION + ' ' + (OTA_ID || 'embedded'));
+    try { const prev = await hydrate(); if (prev) breadcrumb('previous error', prev.message); } catch (e) { /* ignore */ }
     await loadKey();
     const saved = await cfgGet(K_SERVER), tok = await cfgGet(K_TOKEN);
     const mail = await cfgGet(K_EMAIL), pass = await cfgGet(K_PASS);
@@ -952,7 +953,7 @@ function DiagModal({ onClose }) {
   const rows = (srv && srv.items) || [];
   const sendTest = async () => {
     setBusy('send'); setMsg('');
-    const ok = await reportNow('manual', new Error('Diagnostics test from the phone'), 'settings');
+    const ok = le ? await resendLast() : await reportNow('manual', new Error('Diagnostics test from the phone'), 'settings');
     setBusy('');
     setMsg(ok ? 'Sent — the server has it.' : 'Could not send (check the connection).');
     load();
@@ -995,7 +996,7 @@ function DiagModal({ onClose }) {
           </ScrollView>
           <View style={{ flexDirection: 'row', gap: 8, marginTop: 12 }}>
             <Pressable onPress={sendTest} disabled={busy === 'send'} style={[n.appB, { flex: 1, alignItems: 'center' }]}>
-              <Text style={n.appOk}>{busy === 'send' ? 'Sending…' : 'Send a test report'}</Text>
+              <Text style={n.appOk}>{busy === 'send' ? 'Sending…' : (le ? 'Send the last error' : 'Send a test report')}</Text>
             </Pressable>
             <Pressable onPress={load} style={[n.appB, { flex: 1, alignItems: 'center' }]}>
               <Text style={n.appOk}>Refresh</Text>
