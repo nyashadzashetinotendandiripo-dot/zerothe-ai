@@ -604,6 +604,119 @@ def build_gdocs(c: Conn) -> list[ToolSpec]:
     ]
 
 
+def build_documents(c: Conn) -> list[ToolSpec]:
+    """Read and create PDF and DOCX files in the workspace (local, no vendor API)."""
+
+    def _ws_path(a, key="path"):
+        rel = (a.get(key) or "").strip()
+        if not rel:
+            raise ConnectorError("path is required.")
+        full, inside = c.mgr.engine.computer.resolve(rel)
+        if not inside:
+            raise ConnectorError("That path is outside the workspace.")
+        return full
+
+    def pdf_read(ctx, a):
+        try:
+            from pypdf import PdfReader
+        except ImportError:
+            raise ConnectorError("pypdf is not installed on the server.")
+        fp = _ws_path(a)
+        if not fp.is_file():
+            raise ConnectorError(f"No such file: {fp}")
+        if fp.suffix.lower() != ".pdf":
+            raise ConnectorError("Not a PDF file.")
+        reader = PdfReader(str(fp))
+        out = []
+        for i, page in enumerate(reader.pages):
+            t = page.extract_text() or ""
+            out.append(f"--- page {i + 1} ---\n{t}")
+        text = "\n".join(out)
+        return text[:200000] or "No text extracted."
+
+    def docx_read(ctx, a):
+        try:
+            from docx import Document
+        except ImportError:
+            raise ConnectorError("python-docx is not installed on the server.")
+        fp = _ws_path(a)
+        if not fp.is_file():
+            raise ConnectorError(f"No such file: {fp}")
+        if fp.suffix.lower() != ".docx":
+            raise ConnectorError("Not a DOCX file.")
+        doc = Document(str(fp))
+        out = []
+        for para in doc.paragraphs:
+            if para.text.strip():
+                out.append(para.text)
+        for table in doc.tables:
+            for row in table.rows:
+                out.append(" | ".join(cell.text for cell in row.cells))
+        text = "\n".join(out)
+        return text[:200000] or "No text extracted."
+
+    def pdf_create(ctx, a):
+        try:
+            from reportlab.pdfgen import canvas as pdf_canvas
+            from reportlab.lib.pagesizes import letter
+        except ImportError:
+            raise ConnectorError("reportlab is not installed on the server.")
+        fp = _ws_path(a)
+        title = a.get("title", "Document")
+        text = a.get("text", "")
+        can = pdf_canvas.Canvas(str(fp), pagesize=letter)
+        can.setFont("Helvetica", 12)
+        can.drawString(72, 720, title[:100])
+        y = 680
+        for line in text.split("\n"):
+            if y < 72:
+                can.showPage()
+                can.setFont("Helvetica", 12)
+                y = 680
+            can.drawString(72, y, line[:110])
+            y -= 16
+        can.save()
+        rel = c.mgr.engine.computer.rel(fp)
+        return f"Created PDF {rel} ({len(text.splitlines())} lines)."
+
+    def docx_create(ctx, a):
+        try:
+            from docx import Document
+        except ImportError:
+            raise ConnectorError("python-docx is not installed on the server.")
+        fp = _ws_path(a)
+        title = a.get("title", "Document")
+        text = a.get("text", "")
+        doc = Document()
+        doc.add_heading(title, 0)
+        for line in text.split("\n"):
+            doc.add_paragraph(line)
+        doc.save(str(fp))
+        rel = c.mgr.engine.computer.rel(fp)
+        return f"Created DOCX {rel}."
+
+    return [
+        T("pdf_read", "Extract text from a PDF file in the workspace.",
+          {"path": s("Workspace path to the PDF file")}, ["path"], pdf_read, read=True,
+          label=lambda a: "Read a PDF"),
+        T("docx_read", "Extract text from a Word (.docx) file in the workspace.",
+          {"path": s("Workspace path to the DOCX file")}, ["path"], docx_read, read=True,
+          label=lambda a: "Read a Word document"),
+        T("pdf_create", "Create a PDF file from plain text in the workspace.",
+          {"path": s("Workspace path to save the PDF (e.g. shared/report.pdf)"),
+           "title": s("Document title"), "text": s("Plain-text body")},
+          ["path", "text"], pdf_create,
+          risk=R("write", lambda a: f"Create PDF {a.get('path')}", lambda a: a.get('path') or "file"),
+          label=lambda a: f"Create PDF {a.get('path')}"),
+        T("docx_create", "Create a Word (.docx) file from plain text in the workspace.",
+          {"path": s("Workspace path to save the DOCX (e.g. shared/report.docx)"),
+           "title": s("Document title"), "text": s("Plain-text body")},
+          ["path", "text"], docx_create,
+          risk=R("write", lambda a: f"Create DOCX {a.get('path')}", lambda a: a.get('path') or "file"),
+          label=lambda a: f"Create DOCX {a.get('path')}"),
+    ]
+
+
 def build_calendar(c: Conn) -> list[ToolSpec]:
     base = "https://www.googleapis.com/calendar/v3"
 
@@ -989,6 +1102,8 @@ def builtin_defs() -> list[PluginDef]:
                                                            "https://www.googleapis.com/auth/drive.file"]},
                   build=build_gdocs, check=_google_check("https://www.googleapis.com/drive/v3/files?pageSize=1&fields=files(id)"),
                   help="Uses the same Google OAuth client as Gmail if you leave the fields blank. Enable the Google Docs, Sheets, Slides and Drive APIs."),
+        PluginDef("documents", "Documents (PDF & Word)", "Read text from PDF and Word files, and create new PDF/DOCX files in the workspace.",
+                  build=build_documents, help="Works out of the box — no setup needed. Files are saved in the Bot workspace and show up in the Files screen."),
         PluginDef("slack", "Slack", "Read channels and post messages (with approval).",
                   fields=[{"key": "bot_token", "label": "Bot token (xoxb-...)", "secret": True, "required": True},
                            {"key": "user_token", "label": "User token (xoxp-..., optional, for search)", "secret": True, "required": False}],
