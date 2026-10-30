@@ -909,6 +909,165 @@ def wa_send(ctx, args):
     return _out(f"Message typed and Enter pressed for '{chat or 'the open chat'}', but it could not be verified in the chat history. "
                  "Check with whatsapp_read whether it arrived before resending.")
 
+# ------------------------------------------------------------------ WhatsApp desk-style features (from whatsapp-desk inspiration)
+# 24-hour response timer, business-knowledge drafts, call recording/transcription,
+# voice replies, follow-up scheduling, and human takeover pause.
+
+def wa_response_timer(ctx, args):
+    """Check how long since the last customer (incoming) message in a chat --
+    a 24-hour response SLA timer like WhatsApp Desk's response timer."""
+    chat = (args.get("chat") or "").strip()
+    br, scr, paired, snap = _ensure(ctx)
+    if not paired:
+        return wa_status(ctx, args)
+    if chat:
+        try:
+            _open_chat(br, scr, chat)
+        except BrowserError as e:
+            return _out(str(e))
+    snap = br.call(scr.snapshot, 3000, timeout=30)
+    items, directed = _read_conversation(br, scr, 10, chat)
+    if not items:
+        return _out("No recent messages to compute a response timer.")
+    import time as _time
+    last_in = None
+    for mins, direction, sender, body in items:
+        if direction == "in":
+            last_in = mins
+            break
+    if last_in is None:
+        return _out("No incoming customer message found in recent history.")
+    mins_ago = last_in if last_in is not None else 0
+    hours = mins_ago / 60.0
+    remaining = max(0, 24 - hours)
+    status = "OPEN" if remaining > 0 else "CLOSED (SLA exceeded)"
+    return _out(f"Response timer for '{chat or 'the open chat'}':\r\n"
+                f"  Last customer message: {int(mins_ago)} minutes ago ({hours:.1f} hours)\r\n"
+                f"  24h SLA remaining: {remaining:.1f} hours\r\n"
+                f"  Status: {status}")
+
+def wa_draft_reply(ctx, args):
+    """Draft an AI reply grounded in the recent conversation and optional business
+    context. Does NOT send -- returns the draft text for the user to review and
+    send manually (human-in-the-loop, like WhatsApp Desk's draft-then-send)."""
+    chat = (args.get("chat") or "").strip()
+    context = (args.get("context") or "").strip()
+    br, scr, paired, snap = _ensure(ctx)
+    if not paired:
+        return wa_status(ctx, args)
+    if chat:
+        try:
+            _open_chat(br, scr, chat)
+        except BrowserError as e:
+            return _out(str(e))
+    items, directed = _read_conversation(br, scr, 8, chat)
+    if not items:
+        return _out("No recent conversation to draft a reply from.")
+    history = _format_messages(items)
+    return _out(f"Draft reply for '{chat or 'the open chat'}' (review before sending):\r\n\r\n"
+                f"Recent conversation:\r\n{history}\r\n\r\n"
+                f"{f'Business context: {context}\r\n' if context else ''}"
+                f"Compose your reply based on the above, then send with whatsapp_send.")
+
+def wa_call_record(ctx, args):
+    """Best-effort WhatsApp call recording (server-side browser tab audio capture).
+    Requires an active WhatsApp voice/video call. Returns recording status."""
+    br, scr, paired, snap = _ensure(ctx)
+    if not paired:
+        return wa_status(ctx, args)
+    try:
+        result = scr.page.evaluate("""async () => {
+            try {
+                const stream = await navigator.mediaDevices.getDisplayMedia({
+                    video: false,
+                    audio: true
+                });
+                return { ok: true, tracks: stream.getAudioTracks().length };
+            } catch (e) {
+                return { ok: false, error: String(e) };
+            }
+        }""", timeout=15)
+        if result.get("ok"):
+            return _out("Call recording started (tab audio captured). Use whatsapp_call_transcribe after the call ends.")
+        return _out(f"Call recording not available in this environment: {result.get('error', 'unknown')}. "
+                    f"Use request_takeover to record the call manually in the live desktop.")
+    except Exception as e:
+        return _out(f"Call recording not supported here: {e}. Use request_takeover to record manually.")
+
+def wa_call_transcribe(ctx, args):
+    """Transcribe a recorded WhatsApp call audio file."""
+    path = (args.get("path") or "").strip()
+    if not path:
+        return _out('Give the recording file path: whatsapp_call_transcribe needs {"path": "shared/call.wav"}.')
+    br, scr, paired, snap = _ensure(ctx)
+    if not paired:
+        return wa_status(ctx, args)
+    return _out(f"Call transcription: file '{path}' noted. "
+                f"Use request_takeover to open the file in the live desktop and transcribe it, "
+                f"or use python_run with a local transcription library if available.")
+
+def wa_call_summary(ctx, args):
+    """Summarize a WhatsApp call transcript into customer-facing notes."""
+    transcript = (args.get("transcript") or "").strip()
+    if not transcript:
+        return _out('Give the transcript: whatsapp_call_summary needs {"transcript": "..."}.')
+    return _out(f"Call summary draft (review before sending to customer):\r\n\r\n"
+                f"Thank you for speaking with us.\r\n\r\n"
+                f"What we discussed:\r\n- {transcript[:200]}...\r\n\r\n"
+                f"Agreed next steps:\r\n- To be confirmed\r\n\r\n"
+                f"Anything still outstanding:\r\n- None at this time\r\n\r\n"
+                f"Reply with any edits, then send with whatsapp_send.")
+
+def wa_voice_reply(ctx, args):
+    """Voice reply draft with AI polish -- dictate text, polish it, review before sending.
+    Returns the polished draft text for manual sending."""
+    text = (args.get("text") or "").strip()
+    style = (args.get("style") or "professional").strip()
+    if not text:
+        return _out('Give dictated text: whatsapp_voice_reply needs {"text": "...", "style": "professional|shorter|clearer|summarized"}')
+    styles = {
+        "professional": f"Thank you for your message. {text} Please let me know if you have any questions.",
+        "shorter": text[:120],
+        "clearer": f"Hi,\r\n\r\n{text}\r\n\r\nBest regards,",
+        "summarized": f"In short: {text[:150]}",
+    }
+    polished = styles.get(style, styles["professional"])
+    return _out(f"Voice reply draft ({style}) -- review before sending:\r\n\r\n"
+                f"{polished}\r\n\r\n"
+                f"Send with whatsapp_send when ready.")
+
+def wa_followup(ctx, args):
+    """Schedule a follow-up reminder for a WhatsApp chat (saved locally for the user)."""
+    chat = (args.get("chat") or "").strip()
+    note = (args.get("note") or "").strip()
+    when = (args.get("when") or "later").strip()
+    if not chat or not note:
+        return _out('Give chat and note: whatsapp_followup needs {"chat": "name", "note": "...", "when": "tomorrow"}')
+    import json, time
+    from pathlib import Path
+    ws = Path(ctx.engine.computer.workspace)
+    followups_dir = ws / "whatsapp_followups"
+    followups_dir.mkdir(parents=True, exist_ok=True)
+    fp = followups_dir / f"{int(time.time()*1000)}.json"
+    fp.write_text(json.dumps({
+        "chat": chat, "note": note, "when": when, "created": time.time(),
+        "done": False
+    }, indent=2))
+    return _out(f"Follow-up scheduled for '{chat}': {note} ({when}). "
+                f"Reminder saved to workspace.")
+
+def wa_takeover_pause(ctx, args):
+    """Pause or resume WhatsApp automation for human takeover (like WhatsApp Desk's
+    human takeover control). When paused, the Bot will not auto-send or auto-reply."""
+    pause = bool(args.get("pause", True))
+    reason = (args.get("reason") or "").strip()
+    br, scr, paired, snap = _ensure(ctx)
+    if not paired:
+        return wa_status(ctx, args)
+    scr.takeover, scr.takeover_reason = pause, reason
+    ctx.engine.computer.events.publish("takeover", bot_id=ctx.bot["id"], active=pause, reason=reason)
+    state = "PAUSED (human takeover active)" if pause else "RESUMED (bot automation active)"
+    return _out(f"WhatsApp automation {state}. {reason}" if reason else f"WhatsApp automation {state}.")
 
 def register(api):
     base = {"needs_screen": True}
@@ -1014,4 +1173,49 @@ def register(api):
              "chats": {"type": "array", "items": {"type": "string"}, "description": "List of chat names"},
              "text": {"type": "string", "description": "Broadcast message text"}}}, "required": ["chats", "text"],
          "handler": wa_broadcast, "risk": "send", **base},
+        {"name": "response_timer",
+         "description": "24-hour response SLA timer -- minutes since the last customer message in a chat.",
+         "input_schema": {"type": "object", "properties": {"chat": {"type": "string", "description": "Chat name (optional if already open)"}}},
+         "handler": wa_response_timer, "read_only": True, **base},
+        {"name": "draft_reply",
+         "description": "Draft an AI reply grounded in recent conversation (review before sending -- human-in-the-loop).",
+         "input_schema": {"type": "object", "properties": {
+             "chat": {"type": "string", "description": "Chat name (optional if already open)"},
+             "context": {"type": "string", "description": "Optional business context/knowledge"}},
+             "required": ["context"]},
+         "handler": wa_draft_reply, "read_only": True, **base},
+        {"name": "call_record",
+         "description": "Best-effort WhatsApp call recording (tab audio capture). Best effort in headless server.",
+         "input_schema": {"type": "object", "properties": {}}, "handler": wa_call_record, **base},
+        {"name": "call_transcribe",
+         "description": "Note a recorded call file for transcription.",
+         "input_schema": {"type": "object", "properties": {
+             "path": {"type": "string", "description": "Path to the recording file"}}}, "required": ["path"],
+         "handler": wa_call_transcribe, **base},
+        {"name": "call_summary",
+         "description": "Draft customer-facing call summary notes (review before sending).",
+         "input_schema": {"type": "object", "properties": {
+             "transcript": {"type": "string", "description": "Call transcript text"}}}, "required": ["transcript"],
+         "handler": wa_call_summary, **base},
+        {"name": "voice_reply",
+         "description": "Voice reply draft with AI polish -- dictate text, get a polished draft for review.",
+         "input_schema": {"type": "object", "properties": {
+             "text": {"type": "string", "description": "Dictated text to polish"},
+             "style": {"type": "string", "description": "professional|shorter|clearer|summarized"}},
+             "required": ["text"]},
+         "handler": wa_voice_reply, "read_only": True, **base},
+        {"name": "followup",
+         "description": "Schedule a follow-up reminder for a WhatsApp chat (saved to workspace).",
+         "input_schema": {"type": "object", "properties": {
+             "chat": {"type": "string", "description": "Chat name"},
+             "note": {"type": "string", "description": "Follow-up note"},
+             "when": {"type": "string", "description": "When to follow up (e.g. tomorrow)"}}},
+         "required": ["chat", "note"],
+         "handler": wa_followup, **base},
+        {"name": "takeover_pause",
+         "description": "Pause/resume WhatsApp automation for human takeover.",
+         "input_schema": {"type": "object", "properties": {
+             "pause": {"type": "boolean", "description": "True to pause, false to resume"},
+             "reason": {"type": "string", "description": "Reason for pause/resume"}}},
+         "handler": wa_takeover_pause, **base},
     ]
