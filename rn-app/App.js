@@ -293,6 +293,7 @@ function ZbRoot() {
       <Chat
         thread={{ id: chat.threadId }}
         threads={chat.threads}
+        botName={chat.bot.name}
         onSwitch={(tid) => setChat(c => ({ ...c, threadId: tid }))}
         onBack={() => { setScreenHistory([]); setScreen('home'); }}
         onEvent={chatHandler}
@@ -890,6 +891,12 @@ function BotModal({ bot, onClose, onCloseSaved }) {
             placeholderTextColor={C.muted} onSubmitEditing={addMem} />
           <Pressable onPress={addMem} style={[n.hbtn, { backgroundColor: C.solid }]}><Text style={{ fontSize: 18, color: C.onSolid }}>＋</Text></Pressable>
         </View>
+        <Pressable onPress={() => { setSaving(false); onClose(); Alert.alert('Delete bot?', 'This permanently deletes the bot and all its chats.', [
+          { text: 'Cancel', style: 'cancel' },
+          { text: 'Delete', style: 'destructive', onPress: async () => {
+            try { await api('/api/bots/' + bot.id, { method: 'DELETE' }); onClose(); } catch (e) { Alert.alert('Could not delete', String(e.message || e)); }
+          } },
+        ]) }} style={[l.btn, { backgroundColor: C.bad, borderColor: C.bad }]}><Text style={[l.btnT, { color: C.onSolid }]}>Delete this Bot</Text></Pressable>
       </ScrollView>
     </View>
   );

@@ -1,11 +1,13 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { View, Text, TextInput, Pressable, FlatList, StyleSheet, KeyboardAvoidingView, Platform, Image, ActivityIndicator, ScrollView } from 'react-native';
+import { View, Text, TextInput, Pressable, FlatList, StyleSheet, KeyboardAvoidingView, Platform, Image, ActivityIndicator, ScrollView, Clipboard } from 'react-native';
 import { WebView } from 'react-native-webview';
 import { api, API_BASE } from './session';
 import md from './md';
 import { aiBody, uiPlain, uiStreamText } from './widgets';
 import { breadcrumb, note, noteOnce } from './diag';
+import * as ImagePicker from 'expo-image-picker';
+import * as FileSystem from 'expo-file-system';
 
 // Grok-style chat: near-black canvas, assistant answers as plain full-width text,
 // user messages as compact right-aligned bubbles, floating pill composer.
@@ -97,7 +99,7 @@ class ChatBoundary extends React.Component {
   }
 }
 
-function ChatScreen({ thread, threads, onSwitch, onBack, onEvent, onMenu, modalOpenRef }) {
+function ChatScreen({ thread, threads, botName: propsBotName, onSwitch, onBack, onEvent, onMenu, modalOpenRef }) {
   const ins = useSafeAreaInsets();
   const [items, setItems] = useState([]);
   const [apps, setApps] = useState([]);              // pending approvals on this thread
@@ -114,6 +116,7 @@ function ChatScreen({ thread, threads, onSwitch, onBack, onEvent, onMenu, modalO
   const [histOpen, setHistOpen] = useState(false);
   const [histQ, setHistQ] = useState('');
   const [err, setErr] = useState('');
+  const [attachments, setAttachments] = useState([]);
   const listRef = useRef(null);
   const fastRef = useRef(0);            // keep fast polling for a while after sending
   const busyRef = useRef(null);
@@ -224,9 +227,35 @@ function ChatScreen({ thread, threads, onSwitch, onBack, onEvent, onMenu, modalO
     return () => { onEvent.current = null; };
   }, [thread.id, load]);
 
+  const pickImage = async () => {
+    try {
+      const perm = await ImagePicker.getCameraPermissionsAsync();
+      if (perm.granted !== true) {
+        const r = await ImagePicker.requestCameraPermissionsAsync();
+        if (r.granted !== true) return;
+      }
+      const result = await ImagePicker.launchImageLibraryAsync({
+        mediaTypes: ImagePicker.MediaTypeOptions.All,
+        allowsMultipleSelection: true,
+        maxResults: 5,
+        quality: 0.7,
+      });
+      if (!result.canceled && result.assets) {
+        const next = [];
+        for (const a of result.assets) {
+          try {
+            const b64 = await FileSystem.readAsStringAsync(a.uri, { encoding: FileSystem.EncodingType.Base64 });
+            next.push({ data: b64, type: a.mimeType || 'image/jpeg', name: a.fileName || 'file' });
+          } catch (e) { /* skip unreadable */ }
+        }
+        setAttachments((prev) => [...prev, ...next]);
+      }
+    } catch (e) { note('upload', e, 'image picker'); }
+  };
+
   const send = async () => {
     const t = text.trim();
-    if (!t) return;
+    if (!t && !attachments.length) return;
     if (!thread?.id) return;
     const pid = replyTo ? replyTo.id : 0;
     const snapshot = t;
@@ -241,9 +270,10 @@ function ChatScreen({ thread, threads, onSwitch, onBack, onEvent, onMenu, modalO
     try {
       // The POST is the one call that must not hang: a stuck request used to
       // leave the bubble saying "sending" with no way out.
-      await api('/api/threads/' + thread.id + '/messages', { method: 'POST', timeout: 30000, body: JSON.stringify({ text: snapshot, images: [], parent_id: pid }) });
+      await api('/api/threads/' + thread.id + '/messages', { method: 'POST', timeout: 30000, body: JSON.stringify({ text: snapshot, images: attachments.map((a) => ({ data: a.data, type: a.type })), parent_id: pid }) });
       breadcrumb('send:ok', snapshot.slice(0, 40));
-      await load();                            // show it immediately even if SSE lags
+      await load();
+      setAttachments([]);                            // show it immediately even if SSE lags
     } catch (e) {
       breadcrumb('send:fail', String(e && e.message || e));
       note('send', e, 'thread ' + thread.id);
@@ -360,7 +390,7 @@ function ChatScreen({ thread, threads, onSwitch, onBack, onEvent, onMenu, modalO
       disp.push(it);
     }); }
 
-  const botName = (threads && threads.find((t) => t.id === thread.id)?.title) || 'ZerotheBot';
+  const botName = propsBotName || (threads && threads.find((t) => t.id === thread.id)?.title) || 'ZerotheBot';
   const status = busy
     ? (busy.status === 'waiting_approval' ? 'needs your approval' : 'typing…')
     : (err ? 'offline — tap to retry' : 'online');
@@ -370,6 +400,12 @@ function ChatScreen({ thread, threads, onSwitch, onBack, onEvent, onMenu, modalO
       {/* WhatsApp-style top bar: menu · name/status (tap for chat history) */}
       <View style={[st.header, { paddingTop: (ins?.top || 0) + 6 }]}>
         <Pressable onPress={onMenu} hitSlop={10} style={st.hBtn}><Text style={st.hIcon}>☰</Text></Pressable>
+        <Pressable onPress={() => Alert.alert('Delete conversation?', 'This permanently deletes this chat and all its messages.', [
+          { text: 'Cancel', style: 'cancel' },
+          { text: 'Delete', style: 'destructive', onPress: async () => {
+            try { await api('/api/threads/' + thread.id, { method: 'DELETE' }); onBack(); } catch (e) { Alert.alert('Could not delete', String(e.message || e)); }
+          } },
+        ])} hitSlop={10} style={st.hBtn}><Text style={st.hIcon}>🗑</Text></Pressable>
         <Pressable style={{ flex: 1 }} onPress={() => { setHistQ(''); setHistOpen(true); }}>
           <Text style={st.htitle} numberOfLines={1}>{botName}</Text>
           <Text style={[st.hstatus, err && { color: '#e57373' }]} numberOfLines={1}>{status}</Text>
@@ -452,6 +488,9 @@ function ChatScreen({ thread, threads, onSwitch, onBack, onEvent, onMenu, modalO
       {/* WhatsApp-style composer: input · round send */}
       <View style={[st.composerWrap, { paddingBottom: 8 + (ins?.bottom || 0) }]}>
         <View style={st.composer}>
+          <Pressable onPress={pickImage} hitSlop={6} style={[st.uploadBtn, attachments.length > 0 && { backgroundColor: '#00a884' }]}>
+            <Text style={st.uploadT}>📎{attachments.length > 0 ? ' ' + attachments.length : ''}</Text>
+          </Pressable>
           <TextInput
             style={st.input}
             value={text}
@@ -483,7 +522,15 @@ function ChatScreen({ thread, threads, onSwitch, onBack, onEvent, onMenu, modalO
                 </Pressable>
               ))}
             </View>
-            <Pressable onPress={() => { setReplyTo(pick); setPick(null); }} style={st.sheetBtn}><Text style={st.sheetBtnT}>↩  Reply</Text></Pressable>
+            <View style={{ marginTop: 10 }}>
+              <Pressable onPress={() => { setReplyTo(pick); setPick(null); }} style={st.sheetBtn}><Text style={st.sheetBtnT}>↩  Reply</Text></Pressable>
+              {!!pick.type === 'user' && (
+                <>
+                  <Pressable onPress={() => { setText(asText(pick.text)); setPick(null); }} style={st.sheetBtn}><Text style={st.sheetBtnT}>✏  Edit & resend</Text></Pressable>
+                  <Pressable onPress={() => { Clipboard.setString(asText(pick.text)); setPick(null); }} style={st.sheetBtn}><Text style={st.sheetBtnT}>📋 Copy text</Text></Pressable>
+                </>
+              )}
+            </View>
             <Pressable onPress={() => setPick(null)} style={[st.sheetBtn, { backgroundColor: 'transparent' }]}><Text style={[st.sheetBtnT, { color: MUTED }]}>Cancel</Text></Pressable>
           </View>
         </View>
@@ -629,6 +676,8 @@ const st = StyleSheet.create({
 
   composerWrap: { paddingHorizontal: 10, paddingTop: 6, backgroundColor: BG },
   composer: { flexDirection: 'row', alignItems: 'flex-end', gap: 6, backgroundColor: '#1c1c1c', borderWidth: 1, borderColor: '#2a2a2a', borderRadius: 24, paddingLeft: 14, paddingRight: 5, paddingVertical: 5 },
+  uploadBtn: { width: 34, height: 34, borderRadius: 17, backgroundColor: '#2a2a2a', alignItems: 'center', justifyContent: 'center', borderWidth: 1, borderColor: '#3a3a3a' },
+  uploadT: { color: TEXT, fontSize: 14, lineHeight: 16 },
   input: { flex: 1, color: TEXT, fontSize: 15.5, lineHeight: 21, paddingVertical: 9, maxHeight: 120 },
   sendBtn: { width: 38, height: 38, borderRadius: 19, backgroundColor: '#00a884', alignItems: 'center', justifyContent: 'center' },
   sendBtnOff: { backgroundColor: '#2a2a2a' },
