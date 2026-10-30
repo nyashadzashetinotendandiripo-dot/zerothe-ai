@@ -4,7 +4,7 @@ import { Animated, Modal, View, Text, TextInput, Pressable, FlatList, StyleSheet
 import { StatusBar as ExpoStatus } from 'expo-status-bar';
 import { api, connectEvents, loadKey, saveConf, tryConf, clearConf, conf, cfgGet, K_SERVER, K_TOKEN, K_EMAIL, K_PASS, loginEmail, loginGoogle } from './src/session';
 import { C } from './src/theme';
-import { checkUpdate, installUpdate, applyOta, APP_VERSION, APP_CODE } from './src/updates';
+import { checkUpdate, installUpdate, applyOta, otaStatus, APP_VERSION, APP_CODE } from './src/updates';
 import { lastError, send as reportNow, resend as resendLast, hydrate, note, noteOnce, breadcrumb } from './src/diag';
 import { BUILD_STAMP, OTA_CREATED, OTA_ID } from './src/build';
 import Connect, { AuthModal } from './src/Connect';
@@ -944,11 +944,21 @@ function DiagModal({ onClose }) {
   const [srv, setSrv] = useState(null);
   const [busy, setBusy] = useState('');
   const [msg, setMsg] = useState('');
+  const [ota, setOta] = useState(null);
   const load = async () => {
     try { setSrv(await api('/api/client-log?limit=15')); }
     catch (e) { setSrv({ error: String(e.message || e) }); }
   };
-  useEffect(() => { load(); }, []);
+  useEffect(() => { load(); try { setOta(otaStatus()); } catch (e) { /* ignore */ } }, []);
+  const forceOta = async () => {
+    setBusy('ota'); setMsg('');
+    let res = 'none';
+    try { res = await applyOta((t) => setMsg(t)); } catch (e) { res = 'error'; }
+    setBusy('');
+    try { setOta(otaStatus()); } catch (e) { /* ignore */ }
+    if (res === 'none') setMsg('Already up to date for this build.');
+    else if (res === 'error') setMsg('The update check failed — see the last error below.');
+  };
   const le = lastError();
   const rows = (srv && srv.items) || [];
   const sendTest = async () => {
@@ -971,6 +981,16 @@ function DiagModal({ onClose }) {
             <Text style={[l.cap, { marginTop: 2 }]}>Version {APP_VERSION} (code {APP_CODE})</Text>
             <Text style={l.cap}>Bundle {OTA_ID ? String(OTA_ID).slice(0, 12) : 'built-in'}{OTA_CREATED ? ' · ' + OTA_CREATED : ''}</Text>
             <Text style={l.cap}>Server {conf().base || '—'}</Text>
+
+            <Text style={[l.lbl, { marginTop: 12 }]}>Updates</Text>
+            {!ota ? <Text style={l.cap}>Loading…</Text> : (
+              <>
+                <Text style={l.cap}>OTA {ota.enabled ? 'enabled' : 'not enabled'}{ota.reason ? ' — ' + ota.reason : ''}</Text>
+                <Text style={l.cap}>Runtime {ota.runtimeVersion || '—'}{ota.channel ? ' · channel ' + ota.channel : ''}</Text>
+                <Text style={l.cap}>Running bundle {String(ota.updateId || 'embedded').slice(0, 12)}{ota.createdAt ? ' · ' + ota.createdAt : ''}</Text>
+                <Text style={l.cap}>Checks {ota.checkAutomatically || '—'}</Text>
+              </>
+            )}
 
             <Text style={[l.lbl, { marginTop: 12 }]}>Last error on this phone</Text>
             {le ? (
@@ -995,10 +1015,13 @@ function DiagModal({ onClose }) {
             ))}
           </ScrollView>
           <View style={{ flexDirection: 'row', gap: 8, marginTop: 12 }}>
+            <Pressable onPress={forceOta} disabled={busy === 'ota'} style={[n.appB, { flex: 1, alignItems: 'center' }]}>
+              <Text style={n.appOk}>{busy === 'ota' ? 'Checking…' : 'Force update check'}</Text>
+            </Pressable>
             <Pressable onPress={sendTest} disabled={busy === 'send'} style={[n.appB, { flex: 1, alignItems: 'center' }]}>
               <Text style={n.appOk}>{busy === 'send' ? 'Sending…' : (le ? 'Send the last error' : 'Send a test report')}</Text>
             </Pressable>
-            <Pressable onPress={load} style={[n.appB, { flex: 1, alignItems: 'center' }]}>
+            <Pressable onPress={load} style={[n.appB, { alignItems: 'center' }]}>
               <Text style={n.appOk}>Refresh</Text>
             </Pressable>
           </View>

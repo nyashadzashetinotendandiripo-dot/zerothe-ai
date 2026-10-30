@@ -49,8 +49,7 @@ export async function checkUpdate() {
   } catch (e) { return null; }
 }
 
-export async function installUpdate(u) {
-  // preferred: download inside the app, then share to the package installer
+export async function installUpdate(u) {  // preferred: download inside the app, then share to the package installer
   try {
     const fs = require('expo-file-system/legacy');
     const Sharing = require('expo-sharing');
@@ -68,5 +67,26 @@ export async function installUpdate(u) {
     // fallback: browser download (browser -> file -> tap to install)
     try { await Linking.openURL(u.apk); return 'download';
     } catch (e2) { return 'failed'; }
+  }
+}
+
+// Everything expo-updates knows about this install. When the phone is stuck on
+// old code, this is the difference between "OTA is off", "the runtime version
+// does not match" and "the update server was never asked".
+export function otaStatus() {
+  if (!Updates) return { enabled: false, reason: 'expo-updates not loaded' };
+  try {
+    return {
+      enabled: !!Updates.isEnabled,
+      runtimeVersion: String(Updates.runtimeVersion || ''),
+      channel: String(Updates.channel || ''),
+      checkAutomatically: String(Updates.checkAutomatically || ''),
+      updateId: String(Updates.updateId || ''),
+      createdAt: Updates.createdAt ? new Date(Updates.createdAt).toISOString().slice(0, 19).replace('T', ' ') : '',
+      embedded: String(Updates.manifest?.id || ''),
+      reason: Updates.isEnabled ? '' : (Updates.isEmbeddedLaunch ? 'running the embedded bundle' : 'disabled'),
+    };
+  } catch (e) {
+    return { enabled: false, reason: String((e && e.message) || e) };
   }
 }
