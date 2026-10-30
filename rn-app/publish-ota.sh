@@ -43,7 +43,21 @@ const manifest = {
   extra: { expoClient: JSON.parse(fs.readFileSync(path.join(process.cwd(), 'app.json'), 'utf8')).expo || {} },
 };
 fs.writeFileSync(path.join(out, 'manifest.json'), JSON.stringify(manifest, null, 2));
-console.log(`OTA ${manifest.id.slice(0, 8)} bundle=${bundle.name} assets=${assets.length}`);
+// Housekeeping: bundles are content-addressed, so an old file is never needed
+// once no recent manifest points at it. Keep the current bundle and anything
+// touched in the last week; drop the rest so the disk does not fill up.
+const keep = new Set([bundle.name, ...assets.map((a) => a.name)]);
+const cutoff = Date.now() - 7 * 24 * 3600 * 1000;
+let pruned = 0, freed = 0;
+for (const f of fs.readdirSync(path.join(out, 'assets'))) {
+  const p = path.join(out, 'assets', f);
+  const st = fs.statSync(p);
+  if (keep.has(f) || st.mtimeMs > cutoff) continue;
+  freed += st.size;
+  fs.unlinkSync(p);
+  pruned++;
+}
+console.log(`OTA ${manifest.id.slice(0, 8)} bundle=${bundle.name} assets=${assets.length} pruned=${pruned} freed=${(freed / 1048576).toFixed(0)}MB`);
 NODE
 echo "manifest: $BASE/updates/manifest"
 curl -s -o /dev/null -w 'manifest http %{http_code}\n' "$BASE/updates/manifest" -H 'expo-platform: android' -H "expo-runtime-version: $(node -p "require('./app.json').expo.runtimeVersion || '1'")" -H 'expo-protocol-version: 1'

@@ -15,6 +15,7 @@ import hashlib
 import hmac
 import json
 import os
+import re
 import shutil
 import threading
 import time
@@ -395,3 +396,299 @@ def register_webhook(url: str, events: list[str] | None = None) -> dict:
             pass
     return {"ok": True, "existing": False, "id": created.get("id"), "url": url,
             "secret_saved": bool(secret), "events": events}
+
+
+# ---------------------------------------------------------------- invalidating
+def _forget(*prefixes: str) -> None:
+    """Drop cached reads so a write is visible on the next GET."""
+    with _lock:
+        for k in list(_cache):
+            if any(k.startswith(p) for p in prefixes):
+                _cache.pop(k, None)
+
+
+# ------------------------------------------------------------------ snapshots
+def snapshots() -> list[dict]:
+    rows = _get("/v1/snapshots", ttl=5.0).get("snapshots") or []
+    return [{"id": s.get("id"), "name": s.get("name"), "status": s.get("status"),
+             "created_at": s.get("createdAt"), "size": (s.get("sizeBytes") or s.get("dataSizeBytes")),
+             "root_only": s.get("rootOnly"), "template": s.get("template"),
+             "source": s.get("sourceMachineId")} for s in rows]
+
+
+def snapshot_create(name: str, description: str = "", root_only: bool = False,
+                    wait: int = 45) -> dict:
+    """Save a snapshot. A live save answers 202 and finishes in the background."""
+    name = re.sub(r"[^a-z0-9-]+", "-", (name or "").strip().lower()).strip("-")[:63]
+    if not name:
+        name = "zb-" + time.strftime("%Y%m%d-%H%M%S")
+    if not re.match(r"^[a-z0-9]", name):
+        name = "zb-" + name
+    out = _post(f"/v1/machines/{machine_id()}/snapshots",
+                {"name": name, "description": (description or "")[:200], "rootOnly": bool(root_only)},
+                timeout=120.0)
+    sid = out.get("id")
+    deadline = time.time() + max(0, wait)
+    while sid and out.get("status") in ("pending", "saving") and time.time() < deadline:
+        time.sleep(2.0)
+        try:
+            out = _get(f"/v1/snapshots/{sid}", ttl=0.0)
+        except HostError:
+            break
+    _forget("/v1/snapshots")
+    return out
+
+
+def snapshot_delete(sid: str) -> dict:
+    _request("DELETE", f"/v1/snapshots/{sid}", timeout=60.0,
+             extra_headers={"X-Confirm-Delete": sid})
+    _forget("/v1/snapshots")
+    return {"ok": True}
+
+
+def restore(sid: str, desired_state: str = "running") -> dict:
+    """Put the machine's disks back to a snapshot, in place (keeps its URLs)."""
+    if not sid:
+        raise HostError("Pick a snapshot to restore.")
+    out = _post(f"/v1/machines/{machine_id()}/restore",
+                {"snapshotId": sid, "desiredState": desired_state}, timeout=120.0)
+    _forget("/v1/machines/", "/v1/snapshots")
+    return out
+
+
+def fork(name: str = "") -> dict:
+    """A copy of this machine on the same host (no snapshot, no downtime)."""
+    body: dict[str, Any] = {}
+    if name:
+        body["name"] = re.sub(r"[^a-z0-9-]+", "-", name.lower()).strip("-")[:63]
+    out = _post(f"/v1/machines/{machine_id()}/fork", body or None, timeout=180.0)
+    _forget("/v1/machines")
+    return out
+
+
+# ---------------------------------------------------------------------- ports
+def port_publish(port: int, name: str = "", access: str = "public") -> dict:
+    port = int(port)
+    if not 1 <= port <= 65535:
+        raise HostError("Port must be between 1 and 65535.")
+    body: dict[str, Any] = {"port": port, "access": "private" if access == "private" else "public"}
+    if name:
+        body["name"] = name[:60]
+    out = _post(f"/v1/machines/{machine_id()}/ports", body, timeout=60.0)
+    _forget("/v1/machines/", "/v1/ports")
+    return out
+
+
+def port_unpublish(port: int) -> dict:
+    _request("DELETE", f"/v1/machines/{machine_id()}/ports/{int(port)}", timeout=45.0)
+    _forget("/v1/machines/", "/v1/ports")
+    return {"ok": True}
+
+
+# -------------------------------------------------------------------- secrets
+def org_id() -> str:
+    hit = _cache.get("org_id")
+    if hit and time.time() - hit[0] < 3600:
+        return hit[1]
+    orgs = _get("/v1/orgs", ttl=60.0).get("orgs") or []
+    if not orgs:
+        raise HostError("No Instabox org is visible to this API key.")
+    org = orgs[0]["id"]
+    with _lock:
+        _cache["org_id"] = (time.time(), org)
+    return org
+
+
+def org_secrets() -> dict:
+    """Proxy/env Secrets in the org. Values are never returned by the API."""
+    try:
+        items = _get(f"/v1/orgs/{org_id()}/secrets", ttl=20.0).get("items") or []
+    except HostError as e:
+        return {"items": [], "error": str(e)}
+    return {"items": [{"name": s.get("name"), "delivery": s.get("delivery"),
+                       "hosts": s.get("hosts") or [], "version": s.get("version"),
+                       "size": s.get("size"), "updated_at": s.get("updatedAt")} for s in items]}
+
+
+def secret_set(name: str, value: str, delivery: str = "proxy",
+               hosts: list[str] | None = None) -> dict:
+    name = (name or "").strip()
+    if not re.match(r"^[A-Za-z_][A-Za-z0-9_]{0,127}$", name):
+        raise HostError("Secret names use letters, digits and _, starting with a letter or _.")
+    if not value:
+        raise HostError("A secret needs a value.")
+    delivery = "env" if delivery == "env" else "proxy"
+    body: dict[str, Any] = {"value": value, "delivery": delivery}
+    if delivery == "proxy":
+        clean = [h.strip().lower() for h in (hosts or []) if h and h.strip()]
+        body["hosts"] = clean or ["*"]
+    try:
+        out = _request("PUT", f"/v1/orgs/{org_id()}/secrets/{name}", body=body, timeout=45.0)
+    except HostError as e:
+        if "missing_scope" in str(e) or "403" in str(e):
+            raise HostError(
+                "Writing Instabox Secrets needs a workspace-admin API key; this server's key "
+                "belongs to a personal org. Save the key in ZerotheBot's own encrypted vault instead."
+            ) from e
+        raise
+    _forget("/v1/orgs/", "/v1/machines/")
+    return out
+
+
+def secret_delete(name: str) -> dict:
+    _request("DELETE", f"/v1/orgs/{org_id()}/secrets/{name}", timeout=45.0,
+             extra_headers={"X-Confirm-Delete": name})
+    _forget("/v1/orgs/", "/v1/machines/")
+    return {"ok": True}
+
+
+def machine_secrets() -> dict:
+    try:
+        return _get(f"/v1/machines/{machine_id()}/secrets", ttl=10.0)
+    except HostError as e:
+        return {"error": str(e)}
+
+
+def machine_secrets_select(secrets_all: bool | None = None,
+                           env: list[str] | None = None) -> dict:
+    body: dict[str, Any] = {}
+    if secrets_all is not None:
+        body["secrets"] = "all" if secrets_all else []
+    if env is not None:
+        body["envSecrets"] = env
+    if not body:
+        raise HostError("Nothing to change.")
+    out = _request("PATCH", f"/v1/machines/{machine_id()}/secrets", body=body, timeout=45.0)
+    _forget("/v1/machines/")
+    return out
+
+
+# ----------------------------------------------------------------------- exec
+def exec_run(cmd: str, cwd: str | None = None, timeout: int = 60) -> dict:
+    body: dict[str, Any] = {"cmd": cmd, "timeoutSeconds": max(5, min(600, int(timeout)))}
+    if cwd:
+        body["cwd"] = cwd
+    return _post(f"/v1/machines/{machine_id()}/exec", body, timeout=float(body["timeoutSeconds"] + 20))
+
+
+def exec_stream(cmd: str, cwd: str | None = None, timeout: int = 120):
+    """Yield {event, data} as the command writes output (SSE from Instabox)."""
+    key = api_key()
+    if not key:
+        raise HostError("Instabox is not connected on this server.")
+    body: dict[str, Any] = {"cmd": cmd, "timeoutSeconds": max(5, min(600, int(timeout)))}
+    if cwd:
+        body["cwd"] = cwd
+    headers = {"Authorization": "Bearer " + key, "Accept": "text/event-stream",
+               "Content-Type": "application/json"}
+    try:
+        with httpx.stream("POST", f"{API}/v1/machines/{machine_id()}/exec",
+                          headers=headers, content=json.dumps(body),
+                          timeout=float(body["timeoutSeconds"] + 30)) as r:
+            if r.status_code >= 400:
+                r.read()
+                raise HostError(f"Instabox exec -> {r.status_code}: {(r.text or '')[:200]}")
+            event = "message"
+            for line in r.iter_lines():
+                line = line or ""
+                if line.startswith("event:"):
+                    event = line[6:].strip()
+                elif line.startswith("data:"):
+                    raw = line[5:].strip()
+                    try:
+                        data = json.loads(raw)
+                    except Exception:  # noqa: BLE001
+                        data = {"data": raw}
+                    yield {"event": event, "data": data}
+    except HostError:
+        raise
+    except Exception as e:  # noqa: BLE001
+        raise HostError(f"Instabox exec failed: {e}") from e
+
+
+def exec_history(limit: int = 20) -> list[dict]:
+    rows = _get(f"/v1/machines/{machine_id()}/history?limit={max(1, min(50, limit))}",
+                ttl=5.0).get("commands") or []
+    return [{"id": c.get("id"), "command": (c.get("command") or "")[:400],
+             "at": c.get("startedAt"), "ms": c.get("durationMs"),
+             "status": c.get("status"), "exit": c.get("exitCode")} for c in rows]
+
+
+def exec_get(exec_id: str) -> dict:
+    return _get(f"/v1/machines/{machine_id()}/history/{exec_id}", ttl=3600.0)
+
+
+# ------------------------------------------------------------------- template
+def template_info() -> dict:
+    m = machine()
+    cur = m.get("template") or {}
+    tpls = _get("/v1/templates", ttl=300.0).get("templates") or []
+    same = [t for t in tpls if t.get("id") == cur.get("id") and not t.get("hidden")]
+
+    def ver(t):
+        return str(t.get("version") or "")
+
+    latest = max(same, key=ver) if same else None
+    storage = (m.get("storage") or {})
+    return {
+        "current": {"id": cur.get("id"), "version": cur.get("version")},
+        "latest": {"id": latest.get("id"), "version": latest.get("version"),
+                   "description": (latest.get("description") or "")[:240]} if latest else None,
+        "up_to_date": bool(latest) and ver(latest) == str(cur.get("version") or ""),
+        "data_bytes": storage.get("diskBytes") or storage.get("sizeBytes") or _local_disk().get("total"),
+        "machine": {"id": m.get("id"), "name": m.get("name")},
+        "refresh_allowed": os.environ.get("ZEROTHEBOT_ALLOW_TEMPLATE_REFRESH") == "1",
+    }
+
+
+def template_plan() -> dict:
+    """What moving to the newest template would cost, without doing it."""
+    info = template_info()
+    if info["up_to_date"]:
+        return {**info, "steps": [], "warnings": ["This machine already runs the newest template."]}
+    steps = [
+        "Save a snapshot (rollback point).",
+        "Create a new machine from the newest template (new machine ID).",
+        "Copy /data across (repos, venv, threads DB, OTA bundles).",
+        "Repoint the phone and OTA URLs at the new machine.",
+        "Keep the old machine stopped until the new one answers.",
+    ]
+    warnings = [
+        "A template upgrade cannot happen in place: Instabox has no upgrade endpoint, and a "
+        "machine created from a snapshot keeps the snapshot's template.",
+        "The new machine gets a new ID, so its public port URLs change; the app and OTA "
+        "manifest URL must be updated (that needs a new APK build).",
+        "Copying /data is limited by the VM's outbound bandwidth (~6 MB/s).",
+    ]
+    return {**info, "steps": steps, "warnings": warnings}
+
+
+def template_refresh(confirm: str, name: str = "") -> dict:
+    """Stage an upgrade: snapshot now, create a stopped machine on the new template.
+
+    Deliberately does not cut over: that would change the machine ID and every
+    public URL. The caller gets the new machine's ID and the remaining steps.
+    """
+    if os.environ.get("ZEROTHEBOT_ALLOW_TEMPLATE_REFRESH") != "1":
+        raise HostError("Template refresh is disabled on this server "
+                        "(set ZEROTHEBOT_ALLOW_TEMPLATE_REFRESH=1 to allow it).")
+    info = template_info()
+    if info["up_to_date"]:
+        return {"ok": True, "up_to_date": True}
+    m = info["machine"]
+    if (confirm or "").strip().lower() != (m.get("name") or "").lower():
+        raise HostError(f"Type the machine name ({m.get('name')}) to confirm.")
+    snap = snapshot_create("zb-pre-upgrade-" + time.strftime("%Y%m%d-%H%M%S"),
+                           "Before template refresh", wait=0)
+    new_name = re.sub(r"[^a-z0-9-]+", "-", (name or (m.get("name") or "zb") + "-next").lower()).strip("-")[:63]
+    created = _post("/v1/machines", {
+        "templateId": info["latest"]["id"],
+        "templateVersion": info["latest"]["version"],
+        "name": new_name,
+        "desiredState": "stopped",
+        "orgId": org_id(),
+    }, timeout=180.0)
+    _forget("/v1/machines")
+    return {"ok": True, "snapshot": {"id": snap.get("id"), "status": snap.get("status")},
+            "machine": created.get("machineId") or created.get("id"), "name": new_name,
+            "template": info["latest"], "steps": template_plan()["steps"][2:]}

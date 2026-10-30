@@ -259,6 +259,30 @@ def delete_secret(name: str) -> None:
             pass
 
 
+def list_secrets() -> list[str]:
+    """Names stored in this server's encrypted vault (never the values)."""
+    names: set[str] = set()
+    vault = vault_backend()
+    if vault is not None:
+        try:
+            data = vault._read(vault._fernet())
+        except Exception:  # noqa: BLE001
+            data = {}
+        for key in data:
+            if "|" in key:
+                service, name = key.split("|", 1)
+                if service == SERVICE and name:
+                    names.add(name)
+    # OS keyrings cannot be enumerated; the encrypted vault file is the listable store.
+    return sorted(names)
+
+
+def env_secret_names() -> list[str]:
+    """Environment variables that act as read-only secrets on this host."""
+    return sorted(k for k in os.environ
+                  if k.startswith("ZEROTHEBOT_SECRET_") or k.startswith("OPENGROKBOT_SECRET_"))
+
+
 def redact(text: str, extra: list[str] | None = None) -> str:
     """Best-effort scrub of obvious secret shapes from text headed to logs/exports."""
     if not text:

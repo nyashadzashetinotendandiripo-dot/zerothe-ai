@@ -1285,6 +1285,183 @@ google.accounts.id.renderButton(document.getElementById('gbtn'),
         except host_mod.HostError as e:
             raise HTTPException(400, str(e))
 
+    # ------------------------------------------------------------ snapshots
+    @app.get("/api/host/snapshots", dependencies=[api])
+    def host_snapshots() -> dict:
+        try:
+            return {"snapshots": host_mod.snapshots()}
+        except host_mod.HostError as e:
+            raise HTTPException(400, str(e))
+
+    @app.post("/api/host/snapshots", dependencies=[api])
+    def host_snapshot_save(body: dict = Body(default={})) -> dict:
+        try:
+            return host_mod.snapshot_create(body.get("name") or "", body.get("description") or "",
+                                            bool(body.get("rootOnly")), int(body.get("wait") or 45))
+        except host_mod.HostError as e:
+            raise HTTPException(400, str(e))
+
+    @app.delete("/api/host/snapshots/{sid}", dependencies=[api])
+    def host_snapshot_delete(sid: str) -> dict:
+        try:
+            return host_mod.snapshot_delete(sid)
+        except host_mod.HostError as e:
+            raise HTTPException(400, str(e))
+
+    @app.post("/api/host/restore", dependencies=[api])
+    def host_restore(body: dict = Body(...)) -> dict:
+        """Destructive: the machine's disks go back to the snapshot. The phone
+        must send the machine name as `confirm`."""
+        try:
+            name = (host_mod.machine().get("name") or "").lower()
+        except host_mod.HostError as e:
+            raise HTTPException(400, str(e))
+        if (body.get("confirm") or "").strip().lower() != name:
+            raise HTTPException(400, f"Type the machine name ({name}) to confirm the restore.")
+        try:
+            return host_mod.restore(body.get("snapshotId") or "", body.get("state") or "running")
+        except host_mod.HostError as e:
+            raise HTTPException(400, str(e))
+
+    @app.post("/api/host/fork", dependencies=[api])
+    def host_fork(body: dict = Body(default={})) -> dict:
+        try:
+            return host_mod.fork(body.get("name") or "")
+        except host_mod.HostError as e:
+            raise HTTPException(400, str(e))
+
+    # ---------------------------------------------------------------- ports
+    @app.get("/api/host/ports", dependencies=[api])
+    def host_ports() -> dict:
+        try:
+            return {"ports": host_mod.ports()}
+        except host_mod.HostError as e:
+            raise HTTPException(400, str(e))
+
+    @app.post("/api/host/ports", dependencies=[api])
+    def host_port_publish(body: dict = Body(...)) -> dict:
+        try:
+            return host_mod.port_publish(int(body["port"]), body.get("name") or "",
+                                         body.get("access") or "public")
+        except (KeyError, ValueError, TypeError):
+            raise HTTPException(400, "Send a port number.")
+        except host_mod.HostError as e:
+            raise HTTPException(400, str(e))
+
+    @app.delete("/api/host/ports/{port}", dependencies=[api])
+    def host_port_unpublish(port: int) -> dict:
+        try:
+            return host_mod.port_unpublish(port)
+        except host_mod.HostError as e:
+            raise HTTPException(400, str(e))
+
+    # -------------------------------------------------------------- secrets
+    @app.get("/api/host/secrets", dependencies=[api])
+    def host_secrets() -> dict:
+        """Three stores in one view: Instabox org Secrets (values never leave
+        the platform), this machine's selection, and ZerotheBot's own vault."""
+        org = host_mod.org_secrets()
+        return {
+            "instabox": org,
+            "machine": host_mod.machine_secrets(),
+            "local": secrets.list_secrets(),
+            "env": secrets.env_secret_names(),
+            "vault_backend": secrets.backend_available(),
+        }
+
+    @app.put("/api/host/secrets/{name}", dependencies=[api])
+    def host_secret_put(name: str, body: dict = Body(...)) -> dict:
+        try:
+            return host_mod.secret_set(name, body.get("value") or "",
+                                       body.get("delivery") or "proxy",
+                                       body.get("hosts") or [])
+        except host_mod.HostError as e:
+            raise HTTPException(400, str(e))
+
+    @app.delete("/api/host/secrets/{name}", dependencies=[api])
+    def host_secret_delete(name: str) -> dict:
+        try:
+            return host_mod.secret_delete(name)
+        except host_mod.HostError as e:
+            raise HTTPException(400, str(e))
+
+    @app.post("/api/host/secrets/apply", dependencies=[api])
+    def host_secrets_apply(body: dict = Body(default={})) -> dict:
+        try:
+            return host_mod.machine_secrets_select(body.get("all"), body.get("env"))
+        except host_mod.HostError as e:
+            raise HTTPException(400, str(e))
+
+    # ZerotheBot's own encrypted vault: the keys Bots use for plugins and tools.
+    @app.put("/api/host/vault/{name}", dependencies=[api])
+    def host_vault_put(name: str, body: dict = Body(...)) -> dict:
+        value = (body.get("value") or "").strip()
+        if not name.strip() or not value:
+            raise HTTPException(400, "A name and a value are required.")
+        try:
+            secrets.set_secret(name.strip(), value)
+        except SecretStoreError as e:
+            raise HTTPException(400, str(e))
+        return {"ok": True, "name": name.strip()}
+
+    @app.delete("/api/host/vault/{name}", dependencies=[api])
+    def host_vault_delete(name: str) -> dict:
+        secrets.delete_secret(name)
+        return {"ok": True}
+
+    # ----------------------------------------------------------------- exec
+    @app.post("/api/host/exec", dependencies=[api])
+    def host_exec(body: dict = Body(...)) -> StreamingResponse:
+        """Run a shell command on the machine and stream stdout/stderr as SSE.
+
+        The phone reads this with a plain XHR so output appears as it happens.
+        """
+        cmd = (body.get("cmd") or "").strip()
+        if not cmd:
+            raise HTTPException(400, "Command is empty.")
+        cwd = body.get("cwd") or None
+        timeout = int(body.get("timeout") or 60)
+
+        def gen():
+            yield "retry: 3000\n\n"
+            try:
+                for ev in host_mod.exec_stream(cmd, cwd, timeout):
+                    yield f"event: {ev['event']}\ndata: {json.dumps(ev['data'], default=str)}\n\n"
+            except host_mod.HostError as e:
+                yield f"event: error\ndata: {json.dumps({'message': str(e)})}\n\n"
+
+        return StreamingResponse(gen(), media_type="text/event-stream",
+                                 headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+
+    @app.get("/api/host/exec/history", dependencies=[api])
+    def host_exec_history(limit: int = 20) -> dict:
+        try:
+            return {"commands": host_mod.exec_history(limit)}
+        except host_mod.HostError as e:
+            raise HTTPException(400, str(e))
+
+    @app.get("/api/host/exec/history/{eid}", dependencies=[api])
+    def host_exec_one(eid: str) -> dict:
+        try:
+            return host_mod.exec_get(eid)
+        except host_mod.HostError as e:
+            raise HTTPException(400, str(e))
+
+    # ------------------------------------------------------------- template
+    @app.get("/api/host/template", dependencies=[api])
+    def host_template() -> dict:
+        try:
+            return host_mod.template_plan()
+        except host_mod.HostError as e:
+            raise HTTPException(400, str(e))
+
+    @app.post("/api/host/template/refresh", dependencies=[api])
+    def host_template_refresh(body: dict = Body(default={})) -> dict:
+        try:
+            return host_mod.template_refresh(body.get("confirm") or "", body.get("name") or "")
+        except host_mod.HostError as e:
+            raise HTTPException(400, str(e))
+
     @app.post("/api/host/webhook/register", dependencies=[api])
     def host_webhook_register() -> dict:
         try:
