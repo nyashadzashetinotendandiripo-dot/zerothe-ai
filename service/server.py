@@ -29,7 +29,7 @@ from core.bots import BotError
 from core.computer import ComputerError
 from core.engine import Engine
 from core.files import FileError
-from core.plugins import ConnectorError
+from core.plugins import ConnectorError, google_client
 from core.providers import ProviderError, friendly_error, make_provider, model_warnings
 from core.routines import PRESETS
 from core.secrets import SecretStoreError
@@ -823,6 +823,60 @@ def create_app(engine: Engine, token: str) -> FastAPI:
     @app.post("/api/plugins/rest", dependencies=[api])
     def plugins_rest(body: dict = Body(...)) -> dict:
         return eng.plugins.add_rest(body)
+
+    # ------------------------------------------------- plugin items (emails, etc.)
+    # Phone-app CRUD for plugin data items (e.g. Gmail messages). The server holds
+    # the plugin credentials, so the phone can list and delete items without going
+    # through the bot agent.
+    def _gmail_headers(pid: str) -> dict:
+        cid, csec = google_client(eng.plugins, pid)
+        return {"Authorization": "Bearer " + eng.plugins.google.access_token(pid, cid, csec)}
+
+    @app.get("/api/plugins/{pid}/items", dependencies=[api])
+    def plugins_items_list(pid: str, request: Request, query: str = "", max_results: int = 10) -> dict:
+        import httpx
+        d = eng.plugins.defs.get(pid)
+        if not d:
+            raise HTTPException(404, "Unknown plugin.")
+        if not eng.plugins.configured(pid):
+            raise HTTPException(400, "Plugin not configured. Press Connect first.")
+        if d.id != "gmail":
+            raise HTTPException(400, "Item listing not supported for this plugin.")
+        base = "https://gmail.googleapis.com/gmail/v1/users/me"
+        headers = _gmail_headers(pid)
+        r = httpx.get(f"{base}/messages", headers=headers,
+                      params={"q": query, "maxResults": min(max_results, 25)}, timeout=30)
+        if r.status_code >= 400:
+            raise HTTPException(r.status_code, r.text[:400])
+        res = r.json()
+        out = []
+        for m in res.get("messages", []):
+            rr = httpx.get(f"{base}/messages/{m['id']}", headers=headers,
+                           params={"format": "metadata", "metadataHeaders": ["From", "To", "Subject", "Date"]}, timeout=30)
+            if rr.status_code >= 400:
+                continue
+            dd = rr.json()
+            hd = {x["name"]: x["value"] for x in dd.get("payload", {}).get("headers", [])}
+            out.append({"id": dd["id"], "thread_id": dd.get("threadId"), "from": hd.get("From"),
+                        "to": hd.get("To"), "subject": hd.get("Subject"), "date": hd.get("Date"),
+                        "snippet": dd.get("snippet"), "labels": dd.get("labelIds")})
+        return {"items": out, "plugin": pid}
+
+    @app.delete("/api/plugins/{pid}/items/{item_id}", dependencies=[api])
+    def plugins_item_delete(pid: str, item_id: str) -> dict:
+        import httpx
+        d = eng.plugins.defs.get(pid)
+        if not d:
+            raise HTTPException(404, "Unknown plugin.")
+        if not eng.plugins.configured(pid):
+            raise HTTPException(400, "Plugin not configured.")
+        if d.id != "gmail":
+            raise HTTPException(400, "Item delete not supported for this plugin.")
+        base = "https://gmail.googleapis.com/gmail/v1/users/me"
+        r = httpx.delete(f"{base}/messages/{item_id}", headers=_gmail_headers(pid), timeout=30)
+        if r.status_code >= 400:
+            raise HTTPException(r.status_code, r.text[:400])
+        return {"ok": True, "deleted": item_id}
 
     # ------- phone app: over-the-air JS updates (expo-updates protocol, self-hosted)
     _updates_dir = paths.data_dir() / "updates"

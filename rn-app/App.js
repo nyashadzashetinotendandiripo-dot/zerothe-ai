@@ -10,7 +10,7 @@ import { BUILD_STAMP, OTA_CREATED, OTA_ID } from './src/build';
 import Connect, { AuthModal } from './src/Connect';
 import Chat from './src/Chat';
 import ServerScreen from './src/ServerScreen';
-import { TopBar, DashboardScreen, MarketplaceScreen, ApprovalsScreen, McpScreen, RoutinesScreen, FilesScreen, WalletScreen } from './src/Screens';
+import { TopBar, DashboardScreen, MarketplaceScreen, ApprovalsScreen, McpScreen, RoutinesScreen, FilesScreen, WalletScreen, PluginItemsScreen } from './src/Screens';
 
 function AnsRow({ onSend, placeholder }) {
   const [v, setV] = useState('');
@@ -302,6 +302,12 @@ function ZbRoot() {
         {menuBlock}
       </Shell>
     );
+    case 'gmail': return (
+      <Shell upd={upd} onUpd={doUpdate} updState={updState}>
+        <PluginItemsScreen onMenu={() => setMenuOpen(true)} pluginId="gmail" title="Gmail" />
+        {menuBlock}
+      </Shell>
+    );
     case 'mcp': return (
       <Shell upd={upd} onUpd={doUpdate} updState={updState}>
         <McpScreen onMenu={() => setMenuOpen(true)} />
@@ -385,6 +391,7 @@ const TAB_GROUPS = [
   ]],
   ['COMMUNICATIONS', [
     ['chat', '💬', 'Chats Room'],
+    ['gmail', '📧', 'Gmail'],
   ]],
   ['HIRE & EXTEND', [
     ['market', '🛍', 'Bot Marketplace'],
@@ -459,7 +466,7 @@ function Drawer({ open, tab, onGo, onClose, approvals, working, notes }) {
     </Modal>
   );
 }
-const tabSPECIAL = ['chat', 'dash', 'market', 'approvals', 'plugins', 'mcp', 'routines', 'files', 'wallet', 'server', 'set'];
+const tabSPECIAL = ['chat', 'dash', 'market', 'approvals', 'plugins', 'gmail', 'mcp', 'routines', 'files', 'wallet', 'server', 'set'];
 
 function Shell({ children, upd, onUpd, updState }) {
   const insets = useSafeAreaInsets();

@@ -431,6 +431,10 @@ def build_gmail(c: Conn) -> list[ToolSpec]:
                json_body={"addLabelIds": a.get("add", []), "removeLabelIds": a.get("remove", [])})
         return "Labels updated."
 
+    def delete_email(ctx, a):
+        c.http(ctx, "DELETE", f"{base}/messages/{a['message_id']}", headers=H())
+        return "Email deleted."
+
     mail_props = {"to": s("Recipient address(es), comma separated"), "subject": s("Subject"), "body": s("Plain-text body"),
                   "cc": s("Cc addresses"), "thread_id": s("Gmail thread id when replying"), "in_reply_to": s("Message-ID header being replied to"),
                   "attachments": {"type": "array", "items": {"type": "string"},
@@ -458,6 +462,10 @@ def build_gmail(c: Conn) -> list[ToolSpec]:
         T("gmail_label", "Add/remove labels on a message (e.g. archive = remove INBOX, mark read = remove UNREAD).",
           {"message_id": s("Message id"), "add": {"type": "array", "items": {"type": "string"}}, "remove": {"type": "array", "items": {"type": "string"}}},
           ["message_id"], label, label=lambda a: "Update Gmail labels"),
+        T("gmail_delete_email", "Permanently delete an email by id. Requires user approval.",
+          {"message_id": s("Message id")}, ["message_id"], delete_email,
+          risk=R("delete", lambda a: f"Delete Gmail email {a.get('message_id')}", lambda a: "email"),
+          label=lambda a: "Delete an email"),
     ]
 
 

@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { ActivityIndicator, FlatList, Pressable, Text, TextInput, View, Share, Linking } from 'react-native';
+import { ActivityIndicator, Alert, FlatList, Pressable, Text, TextInput, View, Share, Linking } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { api, conf } from './session';
 import { C } from './theme';
@@ -450,6 +450,82 @@ export function WalletScreen({ onMenu, bots }) {
           </View>
         )}
       />
+    </View>
+  );
+}
+
+// ---------------------------------------------------------------- plugin items: Gmail emails
+export function PluginItemsScreen({ onMenu, pluginId, title }) {
+  const [items, setItems] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState('');
+  const [q, setQ] = useState('');
+  const [delId, setDelId] = useState(null);
+  const load = useCallback(async () => {
+    setBusy(true); setMsg('');
+    try {
+      const url = '/api/plugins/' + pluginId + '/items' + (q ? '?query=' + encodeURIComponent(q) : '');
+      const d = await api(url);
+      setItems(d && d.items || []);
+    } catch (e) { setMsg('Could not load: ' + (e.message || e)); setItems([]); }
+    setBusy(false);
+  }, [pluginId, q]);
+  useEffect(() => { load(); }, [load]);
+  const del = async (id) => {
+    setDelId(id);
+    Alert.alert(
+      'Delete email?',
+      'This permanently deletes the message from Gmail and cannot be undone.',
+      [
+        { text: 'Cancel', style: 'cancel', onPress: () => setDelId(null) },
+        { text: 'Delete', style: 'destructive', onPress: async () => {
+          setBusy(id);
+          try {
+            await api('/api/plugins/' + pluginId + '/items/' + encodeURIComponent(id), { method: 'DELETE' });
+            setMsg('Email deleted.');
+            setDelId(null);
+            load();
+          } catch (e) { setMsg('Delete failed: ' + (e.message || e)); }
+          setBusy(false);
+        } },
+      ]
+    );
+  };
+  return (
+    <View style={s0.screen}>
+      <TopBar title={title || 'Plugin items'} subtitle={items === null ? 'loading…' : items.length + ' items'} onMenu={onMenu}
+        right={<Pressable onPress={load} hitSlop={8} disabled={busy}><Text style={[s0.chevS, { fontSize: 14 }]}>↻</Text></Pressable>} />
+      <View style={{ paddingHorizontal: 14, paddingTop: 10, gap: 8 }}>
+        <TextInput style={sIn} value={q} onChangeText={setQ} placeholder="Search (Gmail query, e.g. is:unread)" placeholderTextColor={C.muted} autoCapitalize="none" onSubmitEditing={load} />
+        {!!msg && <Text style={s0.rowS}>{msg.startsWith('Could not') || msg.startsWith('Delete failed') ? '' : msg}</Text>}
+        {!!msg && (msg.startsWith('Could not') || msg.startsWith('Delete failed')) && <Text style={[s0.rowS, { color: C.bad }]}>{msg}</Text>}
+      </View>
+      <FlatList
+        data={items || []}
+        keyExtractor={(it) => it.id}
+        contentContainerStyle={s0.pad}
+        ListEmptyComponent={
+          <View style={{ alignItems: 'center', gap: 6, padding: 40 }}>
+            <Text style={{ fontSize: 40 }}>📭</Text>
+            <Text style={s0.rowL}>{items === null ? 'loading…' : 'No emails found.'}</Text>
+            <Text style={s0.rowS}>Try a Gmail query like "is:unread" or "from:example.com".</Text>
+          </View>
+        }
+        renderItem={({ item: it }) => (
+          <Pressable onPress={() => del(it.id)} disabled={busy} style={({ pressed }) => [s0.row, pressed && { opacity: .9 }, busy && { opacity: .5 }]}>
+            <View style={s0.rowIc}><Text style={{ fontSize: 16 }}>✉️</Text></View>
+            <View style={{ flex: 1, gap: 2 }}>
+              <Text style={s0.rowL} numberOfLines={1}>{it.subject || '(no subject)'}</Text>
+              <Text style={s0.rowS} numberOfLines={2}>{(it.from || '')} · {it.date || ''}{it.snippet ? ' — ' + it.snippet : ''}</Text>
+              {it.labels && it.labels.length && <Text style={[s0.rowS, { color: C.muted }]}>{it.labels.join(', ')}</Text>}
+            </View>
+            <Text style={s0.chevS}>🗑</Text>
+          </Pressable>
+        )}
+      />
+      {!!delId && <View style={{ position: 'absolute', bottom: 20, left: 0, right: 0, alignItems: 'center' }}>
+        <Pressable onPress={() => setDelId(null)} style={[s0.btn, { backgroundColor: C.bad, borderColor: C.bad }]}><Text style={[s0.btnT, { color: C.onSolid }]}>Cancel delete</Text></Pressable>
+      </View>}
     </View>
   );
 }
