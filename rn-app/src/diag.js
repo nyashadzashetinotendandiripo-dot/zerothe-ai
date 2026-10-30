@@ -127,12 +127,22 @@ export function noteOnce(key, kind, e, extra) {
 
 // Swallow uncaught errors instead of letting Android close the app. A bad row,
 // a dead socket or a widget that chokes must cost one bubble, not the session.
+// If errors keep firing (a render loop), stop swallowing: a crash the user can
+// restart from beats a phone burning battery on a broken screen.
 export function installCrashGuard() {
   try {
     const EU = global.ErrorUtils;
     if (!EU || typeof EU.setGlobalHandler !== 'function') return;
+    const prev = typeof EU.getGlobalHandler === 'function' ? EU.getGlobalHandler() : null;
+    let hits = [];
     EU.setGlobalHandler((e, isFatal) => {
-      try { note(isFatal ? 'fatal' : 'error', e, isFatal ? 'uncaught fatal' : 'uncaught'); } catch (e2) { /* ignore */ }
+      const now = Date.now();
+      hits = hits.filter((t) => now - t < 10000);
+      hits.push(now);
+      try { note(isFatal ? 'fatal' : 'error', e, (isFatal ? 'uncaught fatal' : 'uncaught') + ' x' + hits.length); } catch (e2) { /* ignore */ }
+      if (hits.length > 25 && typeof prev === 'function') {
+        try { prev(e, isFatal); } catch (e3) { /* ignore */ }
+      }
     });
   } catch (e) { /* ignore */ }
 }
