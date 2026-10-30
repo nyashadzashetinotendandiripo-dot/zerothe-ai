@@ -14,6 +14,7 @@ import base64
 import hashlib
 import importlib.util
 import inspect
+import io
 import json
 import mimetypes
 import re
@@ -22,6 +23,7 @@ import shutil
 import subprocess
 import threading
 import time
+import textwrap
 from dataclasses import dataclass, field
 from email.message import EmailMessage
 from pathlib import Path
@@ -714,7 +716,53 @@ def build_documents(c: Conn) -> list[ToolSpec]:
           ["path", "text"], docx_create,
           risk=R("write", lambda a: f"Create DOCX {a.get('path')}", lambda a: a.get('path') or "file"),
           label=lambda a: f"Create DOCX {a.get('path')}"),
+        T("python_run", "Run Python code with access to pandas, openpyxl, pdfplumber, python-pptx, docxtpl, beautifulsoup4, html2text, markdown, pypdf, python-docx, reportlab and more. Code runs in the Bot workspace. Use this for data analysis, report generation, file processing, and anything the other tools don't cover.",
+          {"code": s("Python code to run"), "timeout": i("Timeout in seconds (default 60, max 300)")},
+          ["code"], python_run,
+          risk=R("execute", lambda a: f"Run Python code ({len(a.get('code', ''))} chars)", lambda a: "python"),
+          label=lambda a: "Run Python code"),
     ]
+
+
+def python_run(ctx, a):
+    """Run Python code in a subprocess with access to all installed libraries."""
+    code = a.get("code", "").strip()
+    if not code:
+        raise ConnectorError("code is required.")
+    timeout = min(int(a.get("timeout", 60) or 60), 300)
+    if timeout < 1:
+        timeout = 1
+    full, inside = c.mgr.engine.computer.resolve(".")
+    if not inside:
+        raise ConnectorError("Cannot resolve workspace directory.")
+    script = textwrap.dedent(code)
+    script_path = full / "_zb_python_run.py"
+    script_path.write_text(script, encoding="utf-8")
+    try:
+        proc = subprocess.run(
+            ["python3", "_zb_python_run.py"],
+            cwd=str(full),
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+        )
+        out = proc.stdout or ""
+        err = proc.stderr or ""
+        result = f"exit code: {proc.returncode}\n"
+        if out:
+            result += f"--- stdout ---\n{out[:50000]}\n"
+        if err:
+            result += f"--- stderr ---\n{err[:10000]}\n"
+        if proc.returncode != 0:
+            raise ConnectorError(result)
+        return result or "Script ran successfully with no output."
+    except subprocess.TimeoutExpired:
+        raise ConnectorError(f"Python script timed out after {timeout} seconds.")
+    finally:
+        try:
+            script_path.unlink()
+        except OSError:
+            pass
 
 
 def build_calendar(c: Conn) -> list[ToolSpec]:
