@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState, useCallback } from 'react';
 import { SafeAreaProvider, useSafeAreaInsets } from 'react-native-safe-area-context';
-import { Animated, Modal, View, Text, TextInput, Pressable, FlatList, StyleSheet, Linking, Alert, ScrollView } from 'react-native';
+import { Animated, Modal, View, Text, TextInput, Pressable, FlatList, StyleSheet, Linking, Alert, ScrollView, BackHandler } from 'react-native';
 import { StatusBar as ExpoStatus } from 'expo-status-bar';
 import { api, connectEvents, loadKey, saveConf, tryConf, clearConf, conf, cfgGet, K_SERVER, K_TOKEN, K_EMAIL, K_PASS, loginEmail, loginGoogle } from './src/session';
 import { C } from './src/theme';
@@ -82,7 +82,35 @@ function ZbRoot() {
   const [ready, setReady] = useState(false);
   const [signed, setSigned] = useState(false);
   const [screen, setScreen] = useState('home');            // dash home chat market approvals plugins mcp routines files wallet set
+  const [screenHistory, setScreenHistory] = useState([]);  // back-stack for hardware back button
   const [menuOpen, setMenuOpen] = useState(false);         // side drawer
+  const modalOpenRef = useRef(false);                      // any screen can set this when a sheet/modal is open
+
+  // Hardware back button: close any open modal/sheet first, otherwise walk back
+  // through visited screens instead of quitting the app.
+  useEffect(() => {
+    const sub = BackHandler.addEventListener('hardwareBackPress', () => {
+      if (modalOpenRef.current) { modalOpenRef.current = false; return true; }
+      if (menuOpen) { setMenuOpen(false); return true; }
+      if (screenHistory.length > 0) {
+        const prev = screenHistory[screenHistory.length - 1];
+        setScreenHistory(screenHistory.slice(0, -1));
+        setScreen(prev);
+        return true;
+      }
+      if (screen !== 'home') { setScreenHistory([]); setScreen('home'); return true; }
+      return false;  // exit the app
+    });
+    return () => sub.remove();
+  }, [screenHistory, screen, menuOpen]);
+
+  // Push a screen onto the back-stack when navigating (not the first home).
+  const pushScreen = useCallback((k) => {
+    setScreen(k);
+    if (k !== 'home' && screenHistory[screenHistory.length - 1] !== k) {
+      setScreenHistory((h) => (h.includes(k) ? h.filter((s) => s !== k) : [...h, k]));
+    }
+  }, [screenHistory]);
   const [bots, setBots] = useState([]);
   const [templates, setTemplates] = useState([]);
   const [busy, setBusy] = useState({});                    // bot_id -> {status, thread_id}
@@ -201,7 +229,7 @@ function ZbRoot() {
       const main = rows.find((r) => r.main) || rows[0];
       if (!main) return;
       setChat({ bot, threadId: main.id, threads: rows });
-      setScreen('chat');
+      pushScreen('chat');
     } catch (e) { /* ignore */ }
   };
 
@@ -235,13 +263,13 @@ function ZbRoot() {
 
   // Chats tab: most recent chat, else the first Bot's main thread
   const openChatTab = useCallback(() => {
-    if (chat) setScreen('chat');
+    if (chat) pushScreen('chat');
     else if (bots.length) openBot(bots[0]);
-    else setScreen('home');
+    else pushScreen('home');
   }, [chat, bots, openBot]);
   const openChatTabRef = useRef(null);
   useEffect(() => { openChatTabRef.current = openChatTab; }, [openChatTab]);
-  const go = useCallback((k) => { setMenuOpen(false); if (k === 'chat') openChatTabRef.current && openChatTabRef.current(); else setScreen(k); }, []);
+  const go = useCallback((k) => { setMenuOpen(false); if (k === 'chat') openChatTabRef.current && openChatTabRef.current(); else pushScreen(k); }, []);
 
   const menuProps = {
     open: menuOpen,
@@ -256,7 +284,7 @@ function ZbRoot() {
   if (!ready) return null;
   if (!signed) return (
     <Shell upd={upd} onUpd={doUpdate} updState={updState}>
-      <Login onDone={() => { setSigned(true); setScreen('home'); refresh(); }} />
+      <Login onDone={() => { setSigned(true); setScreenHistory([]); setScreen('home'); refresh(); }} />
     </Shell>
   );
 
@@ -266,9 +294,10 @@ function ZbRoot() {
         thread={{ id: chat.threadId }}
         threads={chat.threads}
         onSwitch={(tid) => setChat(c => ({ ...c, threadId: tid }))}
-        onBack={() => setScreen('home')}
+        onBack={() => { setScreenHistory([]); setScreen('home'); }}
         onEvent={chatHandler}
         onMenu={() => setMenuOpen(true)}
+        modalOpenRef={modalOpenRef}
       />
       <Drawer {...menuProps} />
     </Shell>
@@ -276,7 +305,7 @@ function ZbRoot() {
 
   if (screen === 'plugins') return (
     <Shell upd={upd} onUpd={doUpdate} updState={updState}>
-      <Connect onBack={() => setScreen('home')} onMenu={() => setMenuOpen(true)} />
+      <Connect onBack={() => { setScreenHistory([]); setScreen('home'); }} onMenu={() => setMenuOpen(true)} />
       <Drawer {...menuProps} />
     </Shell>
   );
@@ -340,7 +369,7 @@ function ZbRoot() {
     );
     case 'set': return (
       <Shell upd={upd} onUpd={doUpdate} updState={updState}>
-        <Settings onOut={async () => { await clearConf(); setSigned(false); }} onCheck={runCheck} onPlug={() => setScreen('plugins')} onMenu={() => setMenuOpen(true)} onServer={() => setScreen('server')} />
+        <Settings onOut={async () => { await clearConf(); setSigned(false); }} onCheck={runCheck} onPlug={() => pushScreen('plugins')} onMenu={() => setMenuOpen(true)} onServer={() => pushScreen('server')} modalOpenRef={modalOpenRef} />
         <DragMenu onMenu={() => setMenuOpen(true)} />
         {menuBlock}
       </Shell>
@@ -350,7 +379,7 @@ function ZbRoot() {
 
   return (
     <Shell upd={upd} onUpd={doUpdate} updState={updState}>
-      <Home bots={bots} busy={busy} apps={apps} noteBadge={noteBadge} onOpen={openBot} onPlug={() => setScreen('plugins')} onBell={() => setNoteOpen(true)} onNew={newBot} onHire={hireBot} templates={templates} onDecide={decideApp} onBotLong={setBotModal} onMenu={() => setMenuOpen(true)} />
+      <Home bots={bots} busy={busy} apps={apps} noteBadge={noteBadge} onOpen={openBot} onPlug={() => pushScreen('plugins')} onBell={() => setNoteOpen(true)} onNew={newBot} onHire={hireBot} templates={templates} onDecide={decideApp} onBotLong={setBotModal} onMenu={() => setMenuOpen(true)} />
       <DragMenu onMenu={() => setMenuOpen(true)} />
       {!!botModal && <BotModal bot={botModal} onClose={() => setBotModal(null)} onCloseSaved={() => { setBotModal(null); refresh(); }} />}
       {noteOpen && <NotifSheet onClose={() => setNoteOpen(false)} onReadAll={() => setNoteBadge(0)} />}
@@ -1039,13 +1068,14 @@ function DiagModal({ onClose }) {
   );
 }
 
-function Settings({ onOut, onCheck, onPlug, onMenu, onServer }) {
+function Settings({ onOut, onCheck, onPlug, onMenu, onServer, modalOpenRef }) {
   const ins = useSafeAreaInsets();
   const [mail2, setMail2] = useState('');
   const [updMsg, setUpdMsg] = useState('');
   const [checking, setChecking] = useState(false);
   const [diagOpen, setDiagOpen] = useState(false);
   useEffect(() => { cfgGet(K_EMAIL).then((m) => setMail2(String(m || ''))).catch(() => {}); }, []);
+  useEffect(() => { if (modalOpenRef) modalOpenRef.current = diagOpen; }, [diagOpen, modalOpenRef]);
   const check = async () => {
     setChecking(true); setUpdMsg('');
     try {

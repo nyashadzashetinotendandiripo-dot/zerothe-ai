@@ -97,7 +97,7 @@ class ChatBoundary extends React.Component {
   }
 }
 
-function ChatScreen({ thread, threads, onSwitch, onBack, onEvent, onMenu }) {
+function ChatScreen({ thread, threads, onSwitch, onBack, onEvent, onMenu, modalOpenRef }) {
   const ins = useSafeAreaInsets();
   const [items, setItems] = useState([]);
   const [apps, setApps] = useState([]);              // pending approvals on this thread
@@ -118,10 +118,27 @@ function ChatScreen({ thread, threads, onSwitch, onBack, onEvent, onMenu }) {
   const fastRef = useRef(0);            // keep fast polling for a while after sending
   const busyRef = useRef(null);
   busyRef.current = busy;
+  const atBottom = useRef(true);        // only auto-scroll when the user is already at the bottom
+  // Tell the hardware back button to close open sheets/modals instead of quitting.
+  useEffect(() => {
+    const open = !!histOpen || !!pick || liveFull;
+    if (modalOpenRef) modalOpenRef.current = open;
+  }, [histOpen, pick, liveFull, modalOpenRef]);
   // scrollToEnd can throw when the list has no rows yet (or is mid-measure), and
   // that throw happens in a native callback where React cannot catch it.
   const scrollEnd = useCallback(() => {
-    try { if (listRef.current) listRef.current.scrollToEnd({ animated: false }); } catch (e) { /* not laid out yet */ }
+    if (atBottom.current) {
+      try { if (listRef.current) listRef.current.scrollToEnd({ animated: false }); } catch (e) { /* not laid out yet */ }
+    }
+  }, []);
+  const onScroll = useCallback((e) => {
+    // Decide whether the user is still at the bottom: if the visible window
+    // reaches within 40 px of the content end, new messages can autoscroll.
+    const layout = e.nativeEvent.layoutMeasurement;
+    const content = e.nativeEvent.contentSize;
+    const offset = e.nativeEvent.contentOffset.y;
+    const bottom = content.height - layout.height - offset;
+    atBottom.current = bottom <= 40;
   }, []);
 
   const apply = useCallback((d, quiet) => {
@@ -349,7 +366,7 @@ function ChatScreen({ thread, threads, onSwitch, onBack, onEvent, onMenu }) {
     : (err ? 'offline — tap to retry' : 'online');
 
   return (
-    <KeyboardAvoidingView style={{ flex: 1, backgroundColor: BG }} behavior={Platform.OS === 'ios' ? 'padding' : undefined} keyboardVerticalOffset={0}>
+    <KeyboardAvoidingView style={{ flex: 1, backgroundColor: BG }} behavior="padding" keyboardVerticalOffset={10}>
       {/* WhatsApp-style top bar: menu · name/status (tap for chat history) */}
       <View style={[st.header, { paddingTop: (ins?.top || 0) + 6 }]}>
         <Pressable onPress={onMenu} hitSlop={10} style={st.hBtn}><Text style={st.hIcon}>☰</Text></Pressable>
@@ -383,6 +400,7 @@ function ChatScreen({ thread, threads, onSwitch, onBack, onEvent, onMenu }) {
             keyboardShouldPersistTaps="handled"
             onContentSizeChange={scrollEnd}
             onLayout={scrollEnd}
+            onScroll={onScroll}
             ListEmptyComponent={!busy ? <Text style={st.empty}>Ask {botName} anything.</Text> : null}
           />
         )}
