@@ -1215,11 +1215,55 @@ google.accounts.id.renderButton(document.getElementById('gbtn'),
             raise HTTPException(500, f"Proxy error: {type(e).__name__}: {e}")
 
     async def _mcp_proxy_inner(request: Request, mcp_id: str):
-        # Simple test response without curl
+        import json as _json
+        ports_raw = os.environ.get("MCP_PROXY_PORTS", "{}")
+        try:
+            ports = _json.loads(ports_raw)
+        except Exception:
+            ports = {}
+        port = ports.get(mcp_id)
+        if not port:
+            # Strip trailing /mcp if present (clients may call /mcp-proxy/quickbooks/mcp)
+            stripped = mcp_id.removesuffix("/mcp") if mcp_id.endswith("/mcp") else mcp_id
+            port = ports.get(stripped)
+        if not port:
+            raise HTTPException(404, f"No MCP proxy port configured for '{mcp_id}'")
+
+        target_url = f"http://127.0.0.1:{port}/mcp"
+        body = await request.body()
+
+        # Use curl subprocess for reliable MCP SSE proxying
+        import asyncio
+        cmd = [
+            "curl", "-s", "-X", request.method,
+            "-H", "Content-Type: application/json",
+            "-H", "Accept: application/json, text/event-stream",
+            "-H", "MCP-Protocol-Version: 2024-11-05",
+        ]
+        if body:
+            cmd.extend(["-d", body.decode() if isinstance(body, bytes) else body])
+        cmd.append(target_url)
+
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                *cmd,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=60)
+            resp_data = stdout
+            status = 200 if proc.returncode == 0 else 500
+        except asyncio.TimeoutExpired:
+            raise HTTPException(504, f"MCP server '{mcp_id}' timed out")
+        except Exception as e:
+            raise HTTPException(500, f"Proxy error: {type(e).__name__}: {e}")
+
+        resp_headers = {"content-type": "application/json"}
+
         return Response(
-            content=b'{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":"2024-11-05","capabilities":{"tools":{}},"serverInfo":{"name":"test","version":"1.0.0"}}}',
-            status_code=200,
-            headers={"content-type": "application/json"},
+            content=resp_data,
+            status_code=status,
+            headers=resp_headers,
             media_type="application/json",
         )
 
