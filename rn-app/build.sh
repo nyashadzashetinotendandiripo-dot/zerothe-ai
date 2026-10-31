@@ -44,6 +44,29 @@ org.gradle.workers.max=2
 org.gradle.jvmargs=-Xmx2048m -XX:MaxMetaspaceSize=512m
 kotlin.daemon.jvmargs=-Xmx1024m
 kotlin.compiler.execution.strategy=in-process
+# The box only has JDK 21; Kotlin would otherwise emit 21 bytecode while the
+# Android/Java tasks compile at 17 -> "Inconsistent JVM Target Compatibility".
+kotlin.jvm.target.validation.mode=warning
+EOF
+
+# 4c. Align every Kotlin module with the Java 17 target that RN/Expo set.
+#     Must run AFTER prebuild (which regenerates android/) or it is wiped.
+cat >> android/build.gradle <<'EOF'
+
+// ZerotheBot: force Kotlin bytecode to Java 17 on a JDK-21-only build box.
+subprojects { sub ->
+  sub.afterEvaluate {
+    sub.tasks.matching { it.class.name.contains('KotlinCompile') }.configureEach { t ->
+      try {
+        t.kotlinOptions.jvmTarget = '17'
+      } catch (Throwable ignored) {
+        try {
+          t.compilerOptions.jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17)
+        } catch (Throwable ignored2) { }
+      }
+    }
+  }
+}
 EOF
 
 # 5. Build
