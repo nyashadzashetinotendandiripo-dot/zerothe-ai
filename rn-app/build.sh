@@ -55,7 +55,7 @@ cat >> android/build.gradle <<'EOF'
 
 // ZerotheBot: force Kotlin bytecode to Java 17 on a JDK-21-only build box.
 subprojects { sub ->
-  sub.afterEvaluate {
+  def pinKotlinTarget = {
     sub.tasks.matching { it.class.name.contains('KotlinCompile') }.configureEach { t ->
       try {
         t.kotlinOptions.jvmTarget = '17'
@@ -65,6 +65,12 @@ subprojects { sub ->
         } catch (Throwable ignored2) { }
       }
     }
+  }
+  // Some subprojects (Expo modules) are already evaluated by the root plugins above.
+  if (sub.state.executed) {
+    pinKotlinTarget()
+  } else {
+    sub.afterEvaluate { pinKotlinTarget() }
   }
 }
 EOF
