@@ -1,10 +1,10 @@
-"""Build the Windows installer (OpenGrokBot-Setup-<version>.exe).
+"""Build the Windows installer (ZerotheBot-Setup-<version>.exe).
 
     python build_installer.py              # build the app folder with PyInstaller, then compile the installer
-    python build_installer.py --skip-build # reuse an existing dist/OpenGrokBot folder
+    python build_installer.py --skip-build # reuse an existing dist/ZerotheBot folder
 
 Needs Inno Setup 6 (free):  winget install JRSoftware.InnoSetup
-Output: dist/OpenGrokBot-Setup-<version>.exe
+Output: dist/ZerotheBot-Setup-<version>.exe
 
 Tip: PyInstaller can fail on very long folder paths. If the build complains about paths, run this from a short
 folder such as C:\\gbb.
@@ -44,7 +44,7 @@ def version() -> str:
 
 def main() -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--skip-build", action="store_true", help="reuse the existing dist/OpenGrokBot folder")
+    ap.add_argument("--skip-build", action="store_true", help="reuse the existing dist/ZerotheBot folder")
     args = ap.parse_args()
 
     iscc = find_iscc()
@@ -55,15 +55,15 @@ def main() -> int:
         r = subprocess.run([sys.executable, str(ROOT / "build_exe.py")], cwd=ROOT)
         if r.returncode:
             return r.returncode
-    exe = ROOT / "dist" / "OpenGrokBot" / "OpenGrokBot.exe"
+    exe = ROOT / "dist" / "ZerotheBot" / "ZerotheBot.exe"
     if not exe.exists():
         print(f"Missing {exe}. Run without --skip-build first.")
         return 1
     v = version()
-    r = subprocess.run([iscc, f"/DAppVersion={v}", str(ROOT / "installer" / "OpenGrokBot.iss")], cwd=ROOT)
+    r = subprocess.run([iscc, f"/DAppVersion={v}", str(ROOT / "installer" / "ZerotheBot.iss")], cwd=ROOT)
     if r.returncode:
         return r.returncode
-    out = ROOT / "dist" / f"OpenGrokBot-Setup-{v}.exe"
+    out = ROOT / "dist" / f"ZerotheBot-Setup-{v}.exe"
     print(f"\nInstaller: {out}  ({out.stat().st_size / 1e6:.0f} MB)")
     return 0
 

@@ -249,7 +249,7 @@ class HomePage(QWidget):
             show = bool(d.get("newer")) and d.get("latest") != dismissed
             self.banner.setVisible(show)
             if show:
-                self.banner_text.setText(f"OpenGrokBot {d['latest']} is out. You have {d['current']}.")
+                self.banner_text.setText(f"ZerotheBot {d['latest']} is out. You have {d['current']}.")
         self.api.get("/api/digest", digest, lambda _e: None, params={"spec": "today"})
         self.api.get("/api/updates", updates, lambda _e: None)
         self.api.get("/api/usage", usage)

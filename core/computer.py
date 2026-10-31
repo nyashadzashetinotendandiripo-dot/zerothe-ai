@@ -260,7 +260,7 @@ class Computer:
         import httpx
         if not re.match(r"^[a-z][a-z0-9+.-]*://", url, re.I):
             url = "https://" + url
-        headers = {"User-Agent": "Mozilla/5.0 (compatible; OpenGrokBot/1.0)", "Accept": "text/html,text/plain,application/json;q=0.9,*/*;q=0.5"}
+        headers = {"User-Agent": "Mozilla/5.0 (compatible; ZerotheBot/1.0)", "Accept": "text/html,text/plain,application/json;q=0.9,*/*;q=0.5"}
         cur = url
         with httpx.Client(timeout=httpx.Timeout(20.0, connect=10.0), follow_redirects=False, headers=headers) as client:
             for _ in range(6):

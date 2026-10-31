@@ -36,7 +36,7 @@ def ntfy(base_url: str, topic: str, title: str, body: str, urgent: bool = False,
     def send() -> None:
         try:
             import httpx
-            headers = {"Title": title.encode("utf-8").decode("latin-1", "ignore") or "OpenGrokBot", "Priority": "high" if urgent else "default", "Tags": "robot"}
+            headers = {"Title": title.encode("utf-8").decode("latin-1", "ignore") or "ZerotheBot", "Priority": "high" if urgent else "default", "Tags": "robot"}
             if click_url:
                 headers["Click"] = click_url
             httpx.post(f"{base_url.rstrip('/')}/{topic}", content=body.encode("utf-8"), headers=headers, timeout=10)

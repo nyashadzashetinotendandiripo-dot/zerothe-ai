@@ -11,7 +11,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-os.environ["OPENGROKBOT_HOME"] = tempfile.mkdtemp(prefix="gbtest-br-")
+os.environ["ZEROTHEBOT_HOME"] = tempfile.mkdtemp(prefix="zttest-br-")
 
 from core import agent as agent_mod  # noqa: E402
 from core.engine import Engine  # noqa: E402
@@ -54,12 +54,13 @@ class H(BaseHTTPRequestHandler):
 class BrowserTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        os.environ["OPENGROKBOT_HOME"] = tempfile.mkdtemp(prefix="gbtest-")   # isolated data dir per test class
+        os.environ["ZEROTHEBOT_HOME"] = tempfile.mkdtemp(prefix="zttest-")   # isolated data dir per test class
         cls.web = ThreadingHTTPServer(("127.0.0.1", 0), H)
         cls.base = f"http://127.0.0.1:{cls.web.server_address[1]}"
         threading.Thread(target=cls.web.serve_forever, daemon=True).start()
         cls.eng = Engine()
         cls.eng.settings.set("notifications.toast", False)
+        cls.eng.settings.set("memory.auto_reflect", False)
         cls.eng.settings.set("network", {"mode": "open", "allow": [], "deny": [], "block_private": False})
         cls.eng.start()
 

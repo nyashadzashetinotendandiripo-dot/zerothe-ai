@@ -1,6 +1,6 @@
 """Uploads (or replaces) the installer on a GitHub release using the credential Git already has.
 
-    python scripts/publish_release_asset.py dist/OpenGrokBot-Setup-1.5.0.exe v1.5.0
+    python scripts/publish_release_asset.py dist/ZerotheBot-Setup-1.6.0.exe v1.6.0
 
 The token is read from `git credential fill` and never printed.
 """
@@ -23,7 +23,7 @@ out = subprocess.run(["git", "credential", "fill"], input="protocol=https\nhost=
 tok = dict(l.split("=", 1) for l in out.splitlines() if "=" in l).get("password")
 if not tok:
     sys.exit("no stored GitHub credential available")
-H = {"Authorization": f"Bearer {tok}", "Accept": "application/vnd.github+json", "X-GitHub-Api-Version": "2022-11-28", "User-Agent": "opengrokbot-release"}
+H = {"Authorization": f"Bearer {tok}", "Accept": "application/vnd.github+json", "X-GitHub-Api-Version": "2022-11-28", "User-Agent": "zerothebot-release"}
 
 
 def call(method: str, url: str, data=None, headers=None, raw=False):
@@ -50,7 +50,7 @@ try:
     rel = call("GET", f"https://api.github.com/repos/{REPO}/releases/tags/{tag}")
 except SystemExit:
     rel = call("POST", f"https://api.github.com/repos/{REPO}/releases",
-               {"tag_name": tag, "target_commitish": "main", "name": f"OpenGrokBot {tag.lstrip('v')}", "body": notes(), "draft": False, "prerelease": False})
+               {"tag_name": tag, "target_commitish": "main", "name": f"ZerotheBot {tag.lstrip('v')}", "body": notes(), "draft": False, "prerelease": False})
     print("created release", rel["html_url"])
 for a in rel.get("assets", []):
     if a["name"] == exe.name:

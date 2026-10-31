@@ -25,6 +25,14 @@ class ConfigureDialog(QDialog):
         v = QVBoxLayout(self)
         if info.get("help"):
             v.addWidget(label(info["help"], muted=True))
+        if info.get("setup_url"):
+            from PySide6.QtWidgets import QLabel as _QLabel
+            link = _QLabel(f"<a href=\"{info['setup_url']}\">{info.get('setup_label') or 'Open setup in your browser'}</a> — create the app there, then paste the ID/secret below and press Connect.")
+            link.setWordWrap(True)
+            link.setOpenExternalLinks(True)
+            v.addWidget(link)
+        if info.get("oauth"):
+            v.addWidget(label("When the vendor asks for a redirect URL, use http://127.0.0.1:8765/oauth/callback", muted=True))
         f = QFormLayout()
         self.edits: dict[str, QLineEdit] = {}
         for fld in info["fields"]:
@@ -243,6 +251,8 @@ class PluginsPage(QWidget):
             row.addWidget(button("Configure…", on=lambda p=p: self.configure(p)))
             if p["oauth"]:
                 row.addWidget(button("Connect…" if not p["connected"] else "Reconnect…", primary=not p["connected"], on=lambda p=p: self.connect_oauth(p)))
+            if p.get("setup_url"):
+                row.addWidget(button(p.get("setup_label") or "Open setup…", on=lambda p=p: QDesktopServices.openUrl(QUrl(p["setup_url"]))))
             row.addWidget(button("Test", on=lambda p=p: self.test(p)))
         if p["removable"]:
             row.addWidget(button("Remove", danger=True, on=lambda p=p: self.remove(p)))

@@ -1,10 +1,10 @@
 """Build a Windows .exe with PyInstaller.
 
-    python build_exe.py            # folder build: dist/OpenGrokBot/OpenGrokBot.exe  (recommended, starts fastest)
-    python build_exe.py --onefile  # single dist/OpenGrokBot.exe
+    python build_exe.py            # folder build: dist/ZerotheBot/ZerotheBot.exe  (recommended, starts fastest)
+    python build_exe.py --onefile  # single dist/ZerotheBot.exe
 
 The browser engine (Chromium, ~150 MB) is not bundled. The app offers to download it on first run, or run:
-    OpenGrokBot.exe --install-browsers
+    ZerotheBot.exe --install-browsers
 """
 from __future__ import annotations
 
@@ -52,7 +52,7 @@ def main() -> int:
         shutil.rmtree(ROOT / "dist", ignore_errors=True)
 
     icon = make_icon()
-    cmd = [sys.executable, "-m", "PyInstaller", "--noconfirm", "--name", "OpenGrokBot", "--onefile" if args.onefile else "--onedir"]
+    cmd = [sys.executable, "-m", "PyInstaller", "--noconfirm", "--name", "ZerotheBot", "--onefile" if args.onefile else "--onedir"]
     if not args.console:
         cmd.append("--windowed")
     if icon.exists():
@@ -77,7 +77,7 @@ def main() -> int:
     print(" ".join(f'"{c}"' if " " in c else c for c in cmd))
     rc = subprocess.call(cmd, cwd=str(ROOT))
     if rc == 0:
-        exe = ROOT / "dist" / ("OpenGrokBot.exe" if args.onefile else "OpenGrokBot/OpenGrokBot.exe")
+        exe = ROOT / "dist" / ("ZerotheBot.exe" if args.onefile else "ZerotheBot/ZerotheBot.exe")
         print(f"\nBuilt: {exe}\nFirst run: it offers to install the Chromium engine. Or run:  \"{exe}\" --install-browsers")
     return rc
 

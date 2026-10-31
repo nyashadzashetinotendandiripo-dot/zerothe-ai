@@ -1,4 +1,4 @@
-"""Filesystem locations used by OpenGrokBot.
+"""Filesystem locations used by ZerotheBot.
 
 Everything the account owns lives under one data directory. The shared computer
 (workspace, browser profile, downloads) belongs to the account, not to any Bot.
@@ -10,6 +10,11 @@ import sys
 from pathlib import Path
 
 
+APP_DIR = "ZerotheBot"
+OLD_APP_DIR = "OpenGrokBot"   # pre-rename folder, moved into place once on first run
+DB_FILE = "zerothebot.sqlite3"
+
+
 def resource_root() -> Path:
     """Directory holding bundled resources (web/, skills/, plugins/, assets/)."""
     if getattr(sys, "frozen", False):
@@ -17,14 +22,36 @@ def resource_root() -> Path:
     return Path(__file__).resolve().parent.parent
 
 
+def _default_base() -> Path:
+    if os.name == "nt":
+        return Path(os.environ.get("APPDATA", str(Path.home()))) / APP_DIR
+    return Path(os.environ.get("XDG_DATA_HOME", str(Path.home() / ".local" / "share"))) / APP_DIR
+
+
+def _old_base() -> Path:
+    if os.name == "nt":
+        return Path(os.environ.get("APPDATA", str(Path.home()))) / OLD_APP_DIR
+    return Path(os.environ.get("XDG_DATA_HOME", str(Path.home() / ".local" / "share"))) / OLD_APP_DIR
+
+
+def _migrate() -> None:
+    """First run after the rename: move the old data folder into place so Bots, memory and settings survive."""
+    new, old = _default_base(), _old_base()
+    if new == old or new.exists() or not old.exists():
+        return
+    try:
+        old.rename(new)
+    except OSError:
+        pass   # old app still running or locked: the new folder stays fresh, old data is untouched
+
+
 def data_dir() -> Path:
-    override = os.environ.get("OPENGROKBOT_HOME")
+    override = os.environ.get("ZEROTHEBOT_HOME") or os.environ.get("OPENGROKBOT_HOME")
     if override:
         base = Path(override)
-    elif os.name == "nt":
-        base = Path(os.environ.get("APPDATA", str(Path.home()))) / "OpenGrokBot"
     else:
-        base = Path(os.environ.get("XDG_DATA_HOME", str(Path.home() / ".local" / "share"))) / "OpenGrokBot"
+        _migrate()
+        base = _default_base()
     base.mkdir(parents=True, exist_ok=True)
     return base
 
@@ -36,7 +63,7 @@ def _sub(*parts: str) -> Path:
 
 
 def db_path() -> Path:
-    return data_dir() / "opengrokbot.sqlite3"
+    return data_dir() / DB_FILE
 
 
 def workspace_dir() -> Path:
@@ -82,11 +109,12 @@ def ui_config_path() -> Path:
 def admin_policy_paths() -> list[Path]:
     """Places an administrator may drop an admin.json (first existing wins)."""
     paths: list[Path] = []
-    env = os.environ.get("OPENGROKBOT_ADMIN")
+    env = os.environ.get("ZEROTHEBOT_ADMIN") or os.environ.get("OPENGROKBOT_ADMIN")
     if env:
         paths.append(Path(env))
     pd = os.environ.get("PROGRAMDATA")
     if pd:
-        paths.append(Path(pd) / "OpenGrokBot" / "admin.json")
+        paths.append(Path(pd) / APP_DIR / "admin.json")
+        paths.append(Path(pd) / OLD_APP_DIR / "admin.json")
     paths.append(data_dir() / "admin.json")
     return paths

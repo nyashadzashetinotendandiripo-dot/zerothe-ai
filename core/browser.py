@@ -711,6 +711,14 @@ class BrowserHost:
                     "--no-first-run",
                     "--no-default-browser-check",
                     "--disable-accelerated-2d-canvas",
+                    # Small boxes: cap renderer count, JS heap and on-disk caches so
+                    # a long session cannot eat all the RAM/disk.
+                    "--renderer-process-limit=3",
+                    "--js-flags=--max-old-space-size=384",
+                    "--disk-cache-size=52428800",
+                    "--media-cache-size=33554432",
+                    "--disable-gpu-shader-disk-cache",
+                    "--disable-component-update",
                 ],
             )
             # Optional egress route for hostile ecosystems

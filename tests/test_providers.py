@@ -11,7 +11,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-os.environ.setdefault("OPENGROKBOT_HOME", tempfile.mkdtemp(prefix="gbtest-prov-"))
+os.environ.setdefault("ZEROTHEBOT_HOME", tempfile.mkdtemp(prefix="zttest-prov-"))
 
 from core.providers import AnthropicProvider, OpenAICompatProvider, ProviderError, StopRequested  # noqa: E402
 

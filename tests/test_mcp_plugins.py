@@ -13,7 +13,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
-os.environ["OPENGROKBOT_HOME"] = tempfile.mkdtemp(prefix="gbtest-mcp-")
+os.environ["ZEROTHEBOT_HOME"] = tempfile.mkdtemp(prefix="zttest-mcp-")
 
 from core import agent as agent_mod  # noqa: E402
 from core.engine import Engine  # noqa: E402
@@ -46,12 +46,13 @@ class Api(BaseHTTPRequestHandler):
 class McpPluginTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        os.environ["OPENGROKBOT_HOME"] = tempfile.mkdtemp(prefix="gbtest-")   # isolated data dir per test class
+        os.environ["ZEROTHEBOT_HOME"] = tempfile.mkdtemp(prefix="zttest-")   # isolated data dir per test class
         cls.api = ThreadingHTTPServer(("127.0.0.1", 0), Api)
         cls.port = cls.api.server_address[1]
         threading.Thread(target=cls.api.serve_forever, daemon=True).start()
         cls.eng = Engine()
         cls.eng.settings.set("notifications.toast", False)
+        cls.eng.settings.set("memory.auto_reflect", False)
         cls.eng.settings.set("network", {"mode": "open", "allow": [], "deny": [], "block_private": False})
         cls.eng.start()
 
@@ -164,7 +165,7 @@ class McpPluginTests(unittest.TestCase):
         self.eng.plugins.uninstall("rest-my-api")
 
     def test_admin_policy_restricts_plugins_and_network(self):
-        adm = Path(os.environ["OPENGROKBOT_HOME"]) / "admin.json"
+        adm = Path(os.environ["ZEROTHEBOT_HOME"]) / "admin.json"
         adm.write_text(json.dumps({"network_policy": {"mode": "allowlist", "allow": ["*.corp.example"], "deny": [], "locked": True},
                                    "approval_defaults": {"mode": "ask", "locked": True, "always_ask_categories": ["send"]},
                                    "allowed_plugins": ["github"], "allow_plugin_install": False, "max_steps": 7}))

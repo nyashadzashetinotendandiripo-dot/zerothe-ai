@@ -202,5 +202,45 @@ class ChatWiring(unittest.TestCase):
         _ = api
 
 
+class ComposerHooks(unittest.TestCase):
+    def make_page(self) -> tuple[FakeApi, Store, ChatPage]:
+        api = FakeApi()
+        store = Store(api)  # type: ignore[arg-type]
+        page = ChatPage(api, store, ImageCache(api))  # type: ignore[arg-type]
+        page.bot_id, page.thread_id = "b1", "t1"
+        return api, store, page
+
+    def test_voice_panel_hidden_until_toggled(self):
+        from PySide6.QtWidgets import QPushButton  # noqa: E402
+
+        _api, _store, page = self.make_page()
+        self.assertFalse(page.voice_panel.isVisible())
+        texts = [b.toolTip() for b in page.findChildren(QPushButton)]
+        self.assertTrue(any("Dictate" in t for t in texts))
+        warned: list = []
+        page.toast.connect(lambda t, k="info": warned.append((t, k)))
+        page.bot_id = ""
+        page.toggle_voice()
+        self.assertTrue(warned)
+        self.assertFalse(page.voice_panel.isVisible())
+
+    def test_attach_image_chip_and_size_guard(self):
+        _api, _store, page = self.make_page()
+        warned: list = []
+        page.toast.connect(lambda t, k="info": warned.append((t, k)))
+        page.attach_image("big.png", b"x" * (8 * 1024 * 1024 + 1))
+        self.assertTrue(warned)
+        self.assertEqual(page.attachments, [])
+        page.attach_image("screen-120000.png", b"\x89PNG" + b"0" * 100)
+        self.assertEqual(len(page.attachments), 1)
+        self.assertEqual(page.attachments[0]["name"], "screen-120000.png")
+
+    def test_dictated_appends_to_composer(self):
+        _api, _store, page = self.make_page()
+        page.input.setPlainText("hello")
+        page._dictated("world")
+        self.assertEqual(page.input.toPlainText(), "hello world")
+
+
 if __name__ == "__main__":
     unittest.main()

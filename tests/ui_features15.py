@@ -17,7 +17,7 @@ from pathlib import Path
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
-os.environ["OPENGROKBOT_HOME"] = tempfile.mkdtemp(prefix="gbtest-f15ui-")
+os.environ["ZEROTHEBOT_HOME"] = tempfile.mkdtemp(prefix="zttest-f15ui-")
 OUT = Path(sys.argv[1]) if len(sys.argv) > 1 else None
 if OUT:
     OUT.mkdir(parents=True, exist_ok=True)
@@ -62,7 +62,7 @@ eng.db.insert("turns", {"id": "tt1", "bot_id": inbox["id"], "thread_id": "x", "t
 eng.usage.record(inbox["id"], "u1", "openai", "gpt-x", 800_000, 120_000)
 eng.usage.record(research["id"], "u2", "mystery", "m1", 300_000, 50_000)
 eng.usage.pricing.set_prices({"openai/gpt-x": {"in": 2.5, "out": 10}}, "$")
-eng.settings.set("updates_state", {"checked_at": time.time(), "latest": "9.9.9", "url": "https://example.test/release", "name": "OpenGrokBot 9.9.9", "error": ""})
+eng.settings.set("updates_state", {"checked_at": time.time(), "latest": "9.9.9", "url": "https://example.test/release", "name": "ZerotheBot 9.9.9", "error": ""})
 
 from ui import theme  # noqa: E402
 from ui.api import Api, Connection, EventThread, load_ui_config  # noqa: E402

@@ -10,13 +10,14 @@ import time
 from pathlib import Path
 
 from core import paths, secrets
+from core import APP_NAME
 
 TOKEN_NAME = "service:token"
 
 
 def service_token() -> str:
     """Access token for the local API. Order: env var, credential store, (headless hosts only) a private file."""
-    env = os.environ.get("OPENGROKBOT_TOKEN")
+    env = os.environ.get("ZEROTHEBOT_TOKEN") or os.environ.get("OPENGROKBOT_TOKEN")
     if env:
         return env
     tok = secrets.get_secret(TOKEN_NAME)
@@ -55,7 +56,7 @@ def probe(host: str, port: int, timeout: float = 1.5) -> bool:
     try:
         import httpx
         r = httpx.get(f"http://{host}:{port}/api/health", timeout=timeout)
-        return r.status_code == 200 and r.json().get("name") == "OpenGrokBot"
+        return r.status_code == 200 and r.json().get("name") == APP_NAME
     except Exception:
         return False
 

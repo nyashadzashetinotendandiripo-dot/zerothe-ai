@@ -10,7 +10,7 @@ from PySide6.QtGui import QColor, QDesktopServices, QGuiApplication, QPainter, Q
 from PySide6.QtWidgets import (QApplication, QCheckBox, QComboBox, QFileDialog, QFormLayout, QFrame, QTimeEdit, QHBoxLayout as _H, QGroupBox, QHBoxLayout, QInputDialog, QLabel, QLineEdit, QListWidget,
                                QListWidgetItem, QMessageBox, QPlainTextEdit, QScrollArea, QSpinBox, QTabWidget, QVBoxLayout, QWidget)
 
-from core import paths
+from core import APP_NAME, paths
 from . import theme
 from .api import Api, Connection, load_ui_config, save_ui_config
 from .model_picker import ModelPicker
@@ -178,13 +178,27 @@ class SettingsPage(QWidget):
         right.addWidget(self.p_status)
         row = QHBoxLayout()
         row.addWidget(button("Save", primary=True, on=self.p_save))
-        row.addWidget(button("Test", on=self.p_test, tip="Check the key and detect the available models"))
+        row.addWidget(button("Test", on=self.p_test, tip="Check the key, the model, and send a real test message to the model"))
         row.addWidget(button("Make default", on=lambda: self.p_save(make_default=True)))
         row.addWidget(button("Remove key", on=self.p_remove_key))
         self.p_delete = button("Delete", danger=True, on=self.p_del)
         row.addWidget(self.p_delete)
         row.addStretch(1)
         right.addLayout(row)
+        right.addWidget(label("Failover chain", h2=True))
+        right.addWidget(label("When a Bot's provider fails (quota, key, outage), it retries the same step here in order. Drag order with Up/Down. Failed providers rest 10 minutes, then rejoin.", muted=True))
+        self.f_list = QListWidget()
+        self.f_list.setMaximumHeight(110)
+        right.addWidget(self.f_list)
+        frow = QHBoxLayout()
+        frow.addWidget(button("Add current", on=self._failover_add, tip="Add the provider + model shown above to the chain"))
+        frow.addWidget(button("Remove", on=self._failover_del))
+        frow.addWidget(button("Up", on=lambda: self._failover_move(-1)))
+        frow.addWidget(button("Down", on=lambda: self._failover_move(1)))
+        frow.addStretch(1)
+        right.addLayout(frow)
+        self.f_status = label("", muted=True)
+        right.addWidget(self.f_status)
         right.addStretch(1)
         h.addLayout(right, 1)
         self.tabs.addTab(w, "Models", "sparkle")
@@ -215,6 +229,7 @@ class SettingsPage(QWidget):
         p = self.store.provider(pid)
         if not p:
             return
+        changing = pid != self.cur_prov
         self.cur_prov = pid
         self.p_label.setText(p["label"])
         self.p_kind.setCurrentIndex(max(0, self.p_kind.findData(p["kind"])))
@@ -225,7 +240,13 @@ class SettingsPage(QWidget):
         self.p_key.clear()
         self.p_key.setPlaceholderText("•••••••• saved (type to replace)" if p.get("key_set") else ("No key needed" if not p.get("needs_key", True) else "Paste your API key"))
         self.p_delete.setEnabled(not p.get("preset"))
-        self.p_status.setText("")
+        if changing:   # keep an in-flight/just-finished Test result when a refresh reselects the same provider
+            self._p_status("")
+
+    def _p_status(self, text: str, bad: bool = False) -> None:
+        p = theme.palette()
+        self.p_status.setStyleSheet(f"color: {p['bad'] if bad else p['faint']};")
+        self.p_status.setText(text)
 
     def p_save(self, make_default: bool = False, then=None) -> None:
         body = {"label": self.p_label.text().strip(), "kind": self.p_kind.currentData(), "base_url": self.p_url.text().strip(), "model": self.p_picker.text(),
@@ -237,33 +258,103 @@ class SettingsPage(QWidget):
 
         def ok(_p: dict) -> None:
             self.p_key.clear()
-            self.p_status.setText("Saved." + (" Set as default." if make_default else ""))
+            self._p_status("Saved." + (" Set as default." if make_default else ""))
             if changed_endpoint:
                 self.p_picker.invalidate()   # new key or URL: the model list may differ
             if then:
                 then()
             self.store.refresh_all()
-        self.api.put(f"/api/providers/{self.cur_prov}", body, ok, lambda e: self.p_status.setText("Error: " + e))
+        self.api.put(f"/api/providers/{self.cur_prov}", body, ok, lambda e: self._p_status("Error: " + e, bad=True))
 
     def p_test(self) -> None:
-        """Save any typed key first, then detect the models: success proves the key works."""
-        self.p_status.setText("Testing connection…")
+        """Save any typed key first, then fully check the provider: key, model list, and a real chat call."""
+        self._p_status("Testing connection…")
 
         def run() -> None:
-            self.p_picker.set_provider(self.cur_prov, True, self.p_picker.text())
-            self.p_picker.detect()
-            self.p_status.setText("")
+            def done(d: dict) -> None:
+                models = d.get("models") or []
+                self.p_picker.take_models(models)
+                warnings = list(d.get("warnings") or [])
+                chat = d.get("chat")
+                parts, bad = [], bool(warnings)
+                if models:
+                    parts.append(f"Key OK · {len(models)} models detected")
+                parts.extend(warnings)
+                if chat:
+                    if chat.get("ok"):
+                        reply = (chat.get("reply") or "").strip()
+                        parts.append("Chat test OK" + (f" — the model replied “{reply[:40]}”" if reply else ""))
+                    else:
+                        parts.append("Chat failed: " + (chat.get("error") or "unknown error"))
+                        bad = True
+                self._p_status(" · ".join(parts) or "Connected.", bad)
+
+            def fail(e: str) -> None:
+                self._p_status("Failed: " + e, bad=True)
+
+            self.api.post(f"/api/providers/{self.cur_prov}/test", {"full": True}, done, fail, timeout=90)
+
         if self.p_key.text().strip() or self.p_url.text().strip():
             self.p_save(then=run)
         else:
             run()
 
     def p_remove_key(self) -> None:
-        self.api.put(f"/api/secrets/provider:{self.cur_prov}", {"value": ""}, lambda _: (self.p_status.setText("Key removed."), self.store.refresh_all()))
+        self.api.put(f"/api/secrets/provider:{self.cur_prov}", {"value": ""}, lambda _: (self._p_status("Key removed."), self.store.refresh_all()))
 
     def p_del(self) -> None:
         if QMessageBox.question(self, "Delete", "Delete this provider and its saved key?") == QMessageBox.StandardButton.Yes:
             self.api.delete(f"/api/providers/{self.cur_prov}", lambda _: self.store.refresh_all())
+
+    # ------------------------------------------------------- failover chain
+    def _failover_chain(self) -> list[dict]:
+        return list((self.store.settings.get("failover", {}) or {}).get("chain", []) or [])
+
+    def _failover_label(self, pid: str, model: str) -> str:
+        p = self.store.provider(pid) or {}
+        name = p.get("label", pid)
+        mdl = model or p.get("model", "")
+        return f"{name} — {mdl}" if mdl else name
+
+    def _failover_refresh(self) -> None:
+        self.f_list.clear()
+        for i, e in enumerate(self._failover_chain()):
+            self.f_list.addItem(f"{i + 1}. {self._failover_label(e.get('profile', ''), e.get('model', ''))}")
+
+    def _failover_save(self, chain: list[dict]) -> None:
+        cool = (self.store.settings.get("failover", {}) or {}).get("cooldown_min", 10)
+        self.api.put("/api/settings", {"failover": {"chain": chain, "cooldown_min": cool}},
+                     lambda s: (setattr(self.store, "settings", s), self._failover_refresh(), self.f_status.setText("Saved.")),
+                     lambda e: self.f_status.setText("Error: " + e))
+
+    def _failover_add(self) -> None:
+        if not self.cur_prov:
+            return
+        chain = self._failover_chain()
+        entry = {"profile": self.cur_prov, "model": self.p_picker.text()}
+        if any(e.get("profile") == entry["profile"] and (e.get("model") or "") == (entry["model"] or "") for e in chain):
+            self.f_status.setText("Already in the chain.")
+            return
+        chain.append(entry)
+        self._failover_save(chain)
+
+    def _failover_del(self) -> None:
+        row = self.f_list.currentRow()
+        if row < 0:
+            return
+        chain = self._failover_chain()
+        del chain[row]
+        self._failover_save(chain)
+
+    def _failover_move(self, delta: int) -> None:
+        row = self.f_list.currentRow()
+        chain = self._failover_chain()
+        nxt = row + delta
+        if row < 0 or not 0 <= nxt < len(chain):
+            return
+        chain[row], chain[nxt] = chain[nxt], chain[row]
+        self._failover_save(chain)
+        self.f_list.setCurrentRow(nxt)
 
     def add_provider(self) -> None:
         name, ok = QInputDialog.getText(self, "Add endpoint", "Name (e.g. Together, vLLM, my-proxy):")
@@ -427,6 +518,12 @@ class SettingsPage(QWidget):
         v.addWidget(label("All your Bots share one persistent computer: a browser with a persistent profile, a filesystem workspace and a terminal. By default it runs on this PC in a sandboxed workspace folder.", muted=True))
         self.c_headless = QCheckBox("Run the browser without a visible window (use Take over to watch or help)")
         v.addWidget(self.c_headless)
+        f = form()
+        self.c_browser = QComboBox()
+        self.c_browser.addItem("Bundled Chromium (default)", "chromium")
+        self.c_browser.addItem("Installed Google Chrome (fixes 'upgrade your browser' nags and blank pages)", "chrome")
+        f.addRow("Browser engine", self.c_browser)
+        v.addLayout(f)
         v.addWidget(button("Save", primary=True, on=self.save_computer))
         self.c_msg = label("", muted=True)
         v.addWidget(self.c_msg)
@@ -461,7 +558,7 @@ class SettingsPage(QWidget):
         self.tabs.addTab(sc, "Computer", "computer")
 
     def save_computer(self) -> None:
-        self.api.put("/api/settings", {"computer.headless": self.c_headless.isChecked()}, lambda s: (setattr(self.store, "settings", s), self.c_msg.setText("Saved. The browser restarts on next use.")),
+        self.api.put("/api/settings", {"computer.headless": self.c_headless.isChecked(), "computer.browser": self.c_browser.currentData()}, lambda s: (setattr(self.store, "settings", s), self.c_msg.setText("Saved. The browser restarts on next use.")),
                      lambda e: self.c_msg.setText(e))
 
     def switch_computer(self) -> None:
@@ -574,7 +671,7 @@ class SettingsPage(QWidget):
                 return
             self.load_mobile()
             if want_lan:
-                self.m_msg.setText("Ready. On your phone (same Wi-Fi) open the link above. If it does not load: check the phone is not on mobile data or a guest network, and allow OpenGrokBot through Windows Firewall for Private and Public networks.")
+                self.m_msg.setText("Ready. On your phone (same Wi-Fi) open the link above. If it does not load: check the phone is not on mobile data or a guest network, and allow ZerotheBot through Windows Firewall for Private and Public networks.")
             else:
                 self.m_msg.setText("Phone access is off. The service now listens on this PC only.")
 
@@ -653,8 +750,12 @@ class SettingsPage(QWidget):
         try:
             import winreg
             with winreg.OpenKey(winreg.HKEY_CURRENT_USER, r"Software\Microsoft\Windows\CurrentVersion\Run") as k:
-                winreg.QueryValueEx(k, "OpenGrokBot")
-                return True
+                try:
+                    winreg.QueryValueEx(k, APP_NAME)
+                    return True
+                except OSError:
+                    winreg.QueryValueEx(k, "OpenGrokBot")   # pre-rename entry
+                    return True
         except OSError:
             return False
 
@@ -670,12 +771,16 @@ class SettingsPage(QWidget):
                 else:
                     pyw = sys.executable.replace("python.exe", "pythonw.exe")
                     cmd = f'"{pyw}" "{os.path.abspath(sys.argv[0])}" --tray'
-                winreg.SetValueEx(k, "OpenGrokBot", 0, winreg.REG_SZ, cmd)
+                winreg.SetValueEx(k, APP_NAME, 0, winreg.REG_SZ, cmd)
             else:
                 try:
-                    winreg.DeleteValue(k, "OpenGrokBot")
+                    winreg.DeleteValue(k, APP_NAME)
                 except OSError:
                     pass
+            try:   # never leave the pre-rename entry behind pointing at the old exe
+                winreg.DeleteValue(k, "OpenGrokBot")
+            except OSError:
+                pass
 
     def save_app(self) -> None:
         cfg = load_ui_config()
@@ -694,7 +799,7 @@ class SettingsPage(QWidget):
                      lambda s: (setattr(self.store, "settings", s), self.appPrefsChanged.emit(), self.themeChanged.emit(t), self.a_info.setText("Saved.")))
 
     def backup_now(self) -> None:
-        path, _ = QFileDialog.getSaveFileName(self, "Back up OpenGrokBot", "opengrokbot-backup-" + time.strftime("%Y%m%d-%H%M") + ".zip", "Backup (*.zip)")
+        path, _ = QFileDialog.getSaveFileName(self, f"Back up {APP_NAME}", "zerothebot-backup-" + time.strftime("%Y%m%d-%H%M") + ".zip", "Backup (*.zip)")
         if not path:
             return
         self.a_backup_msg.setText("Backing up…")
@@ -737,6 +842,7 @@ class SettingsPage(QWidget):
         if not s:
             return
         self._prov_refresh_list()
+        self._failover_refresh()
         self.s_mode.setCurrentIndex(max(0, self.s_mode.findData(s.get("approval", {}).get("default_mode", "ask"))))
         self.s_rprov.clear()
         self.s_rprov.addItem("Same as the Bot's provider", "")
@@ -769,11 +875,12 @@ class SettingsPage(QWidget):
         self.d_on.setChecked(bool(dg.get("enabled", False)))
         self.d_time.setTime(QTime.fromString(dg.get("time", "18:00"), "HH:mm"))
         self.c_headless.setChecked(bool(s.get("computer", {}).get("headless", True)))
+        self.c_browser.setCurrentIndex(max(0, self.c_browser.findData(s.get("computer", {}).get("browser", "chromium"))))
         self.a_theme.setCurrentIndex(max(0, self.a_theme.findData(s.get("theme", "dark"))))
         self.a_updates.setChecked(bool(s.get("updates", {}).get("check", True)))
         st = self.store.status
         if st:
-            self.a_info.setText(f"OpenGrokBot {st.get('version', '')}  ·  data folder: {st.get('data_dir', '')}  ·  secrets backend: {'Windows Credential Manager / keyring' if s.get('secrets_backend') else 'NOT AVAILABLE (use environment variables)'}")
+            self.a_info.setText(f"{APP_NAME} {st.get('version', '')}  ·  data folder: {st.get('data_dir', '')}  ·  secrets backend: {'Windows Credential Manager / keyring' if s.get('secrets_backend') else 'NOT AVAILABLE (use environment variables)'}")
             adm = st.get("admin", {})
             if adm.get("active"):
                 self.a_admin.setText(f"Managed by your organization ({adm.get('path')}). Network policy, approval defaults, allowed plugins and limits may be locked.")

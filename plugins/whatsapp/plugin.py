@@ -96,11 +96,11 @@ def _human_type(br, scr, element: int, text: str, submit: bool = False, fast: bo
         br.call(_type_direct, scr, element, text, submit, 30, 120, 0.05, 0.5, 0.12, timeout=90)
 
 
-def _out(text: str, url: str = WA_URL):
+def _out(text: str, url: str = WA_URL, is_error: bool = False):
     if ToolResult is None:  # pragma: no cover
         return text
     from core.tooling import ToolResult as TR
-    return TR(text, untrusted="WhatsApp Web", url=url)
+    return TR(text, untrusted="WhatsApp Web", url=url, is_error=is_error)
 
 
 def _br(ctx):
@@ -383,15 +383,65 @@ def _think(scr, chat):
     time.sleep(random.uniform(1.5, 4.5))   # read the conversation like a person would
 
 
+# --- human-like send primitives (shared by the advertising tools) ------------
+_VARY_TAILS = (" ", "  ", "   ", " .", " ..", " ...", " 😊", " 🔥", " ✨", " 📢", " 🎯", " 🙌")
+
+
+def _vary(text: str) -> str:
+    """Same advert, slightly different every time: identical text to many groups
+    is the pattern WhatsApp's spam filter looks for."""
+    text = (text or "").rstrip()
+    return (text + random.choice(_VARY_TAILS)) if text else text
+
+
+def _send_text(br, scr, text: str, submit: bool = True) -> None:
+    snap = br.call(scr.snapshot, 3000, timeout=30)
+    box = _message_box(_els(snap))
+    if box is None:
+        raise BrowserError("Could not find the WhatsApp message box for this chat.")
+    _human_type(br, scr, box["id"], text, submit=submit)
+
+
+def _attach_and_send(br, scr, path: str, caption: str = "") -> None:
+    inp = scr.page.locator('input[type="file"]').first
+    if not inp.count():
+        raise BrowserError("The attachment input is not available in this chat.")
+    inp.set_input_files(str(path))
+    _pause(1.2, 2.0)
+    if caption:
+        cap = scr.page.locator('div[contenteditable="true"]').last
+        cap.click()
+        for chunk in _chunks(caption):
+            scr.page.keyboard.type(chunk, delay=random.randint(30, 110))
+            _pause(0.05, 0.4)
+    r = br.call(_js_click_icon, scr, "send")
+    if r == "no":
+        raise BrowserError("Could not find the send button for the attachment.")
+    _pause(1.6, 2.6)
+
+
+def _verify_sent(br, scr, text: str, chat: str = "") -> bool:
     try:
         items, _directed = _read_conversation(br, scr, 3, chat)
-    except BrowserError:
-        items = []
+    except Exception:
+        return False
     mine = [b for _m, d, _s, b in items if d == "out"]
-    if mine and (mine[-1].startswith(text[:60]) or text[:60] in mine[-1]):
-        return _out(f"Sent to '{chat or 'the open chat'}': {text[:200]}")
-    return _out(f"Message typed and Enter pressed for '{chat or 'the open chat'}', but it could not be verified in the chat history. "
-                 "Check with whatsapp_read whether it arrived before resending.")
+    probe = (text or "").strip()[:40]
+    return bool(mine and probe and (probe in mine[-1] or mine[-1].startswith(probe)))
+
+
+def _send_one(ctx, br, scr, group: str, text: str, image: str = "", caption: str = "") -> str:
+    """Open a chat and send one advert. Returns 'sent', 'unconfirmed' or raises."""
+    matched = _open_chat(br, scr, group)
+    _think(scr, matched)
+    if image:
+        _attach_and_send(br, scr, image, caption or text)
+        body = caption or text
+    else:
+        body = text
+        _send_text(br, scr, body, submit=True)
+    _pause(1.5, 3.0)
+    return "sent" if _verify_sent(br, scr, body, matched) else "unconfirmed"
 
 
 # ------------------------------------------------------- human-like extras
@@ -1096,173 +1146,310 @@ def wa_varied_text(ctx, args):
 
 
 
-def wa_forward_advert(ctx, args):
-    """Forward an advert message to multiple WhatsApp groups with human-like safeguards.
+# ---------------------------------------------------------------- advertising
+def _campaign(ctx, groups, text, image="", caption="", batch_size=5, delay_min=60,
+              delay_max=180, max_groups=50, dry_run=False):
+    """Send one advert to many chats the way a person would.
 
-    WhatsApp hard limit: max 5 chats/groups per forward operation. This tool
-    batches groups into sets of 5 with randomized delays between batches to
-    avoid burst-detection by WhatsApp's anti-spam AI.
-
-    Use this from your own 'Saved Messages' or personal chat: write the advert,
-    attach an image with caption, then forward it to groups in small batches.
+    Posts the advert into each chat instead of using WhatsApp's fragile
+    "forward" menu (identical forwards to many groups are exactly what gets an
+    account limited). Chats are shuffled, sent in small batches with long human
+    pauses, the wording is varied per recipient, and every send is checked in
+    the conversation history. Progress is written to whatsapp_queue/ so the run
+    survives a restart.
     """
-    message_id = (args.get("message_id") or "").strip()
-    groups = args.get("groups") or []
-    delay_min = float(args.get("delay_min", 60))
-    delay_max = float(args.get("delay_max", 180))
+    groups = [str(g).strip() for g in (groups or []) if str(g).strip()]
+    if not groups:
+        return _out('Give the chats to advertise in: {"groups": ["name1", "name2"]}.', is_error=True)
+    if not text and not image:
+        return _out('Give the advert itself: {"text": "..."} and/or {"image": "/path/to/pic.jpg"}.', is_error=True)
+    if len(groups) > max_groups:
+        return _out(f"Too many chats ({len(groups)}); the limit is {max_groups} per call. "
+                    "Split it into several calls so the run looks natural.", is_error=True)
+    try:
+        batch_size = max(1, min(int(batch_size or 5), 5))
+        delay_min = max(5.0, float(delay_min or 60))
+        delay_max = max(delay_min, float(delay_max or delay_min + 60))
+    except (TypeError, ValueError):
+        return _out("batch_size, delay_min and delay_max must be numbers.", is_error=True)
 
-    if not message_id:
-        return _out('Give message_id: whatsapp_forward_advert needs {"message_id": "...", "groups": ["g1", "g2"]}.')
-    if not groups or not isinstance(groups, list):
-        return _out('Give groups: whatsapp_forward_advert needs {"message_id": "...", "groups": ["name1", "name2", ...]}.')
-    if len(groups) > 50:
-        return _out("Too many groups (max 50 per call). Split into multiple calls to look more human.")
+    uniq = []
+    for g in groups:
+        if g not in uniq:
+            uniq.append(g)
+    random.shuffle(uniq)
+    batches = [uniq[i:i + batch_size] for i in range(0, len(uniq), batch_size)]
 
-    br, scr, paired, snap = _ensure(ctx)
+    if dry_run:
+        return _out(f"Dry run: would send to {len(uniq)} chat(s) in {len(batches)} batch(es) of up to "
+                    f"{batch_size}, waiting {int(delay_min)}-{int(delay_max)}s between batches:\n"
+                    + "\n".join("- " + g for g in uniq[:60]))
+
+    br, scr, paired, _snap = _ensure(ctx)
     if not paired:
-        return wa_status(ctx, args)
+        return wa_status(ctx, {"chat": ""})
 
-    MAX_PER_BATCH = 5  # WhatsApp hard forward limit
-    batches = [groups[i:i + MAX_PER_BATCH] for i in range(0, len(groups), MAX_PER_BATCH)]
-    sent = 0
-    skipped = []
+    queue_file = None
+    try:
+        qdir = Path(ctx.engine.computer.workspace) / "whatsapp_queue"
+        qdir.mkdir(parents=True, exist_ok=True)
+        queue_file = qdir / f"campaign_{ctx.bot['id']}_{int(time.time())}.json"
+        queue_file.write_text(__import__("json").dumps(
+            {"groups": uniq, "text": text, "image": image, "batch_size": batch_size,
+             "created": time.time(), "status": "running", "sent": 0,
+             "unconfirmed": 0, "failed": 0, "total": len(uniq)}, indent=2))
+    except Exception:
+        queue_file = None
 
-    import time as _time
-
-    for batch_idx, batch in enumerate(batches):
+    sent, unconfirmed, failed = [], [], []
+    for bi, batch in enumerate(batches):
         for group in batch:
+            _rate_limit(ctx.bot["id"])
+            body = _vary(text) if text else ""
             try:
-                matched = _open_chat(br, scr, group)
-            except BrowserError as e:
-                skipped.append((group, str(e)))
+                state = _send_one(ctx, br, scr, group, body, image=image, caption=(caption or body))
+            except Exception as e:                     # one bad chat must not stop the run
+                failed.append((group, str(e)[:90]))
                 continue
+            if state == "sent":
+                sent.append(group)
+            else:
+                unconfirmed.append(group)
+            if queue_file is not None:
+                try:
+                    q = __import__("json").loads(queue_file.read_text())
+                    q.update(sent=len(sent), unconfirmed=len(unconfirmed), failed=len(failed))
+                    queue_file.write_text(__import__("json").dumps(q, indent=2))
+                except Exception:
+                    pass
+        if bi < len(batches) - 1:
+            pause = random.uniform(delay_min, delay_max)
+            _pause(pause, pause + 20)                  # think between batches
 
-            # Human-like pause before opening each chat (reading time)
-            _think(scr, group)
+    if queue_file is not None:
+        try:
+            q = __import__("json").loads(queue_file.read_text())
+            q.update(status="completed", sent=len(sent), unconfirmed=len(unconfirmed), failed=len(failed))
+            queue_file.write_text(__import__("json").dumps(q, indent=2))
+        except Exception:
+            pass
 
-            # Forward flow: find the advert message, long-press to open menu, forward, pick group, send
-            snap2 = br.call(scr.snapshot, 4000, timeout=30)
-            elements = snap2.get("elements", [])
-            msg_el = None
-            for el in elements:
-                if el.get("id") == message_id or message_id in str(el.get("label", "")):
-                    msg_el = el
-                    break
+    lines = [f"Advert campaign finished: {len(sent)} confirmed, {len(unconfirmed)} sent but unverified, "
+             f"{len(failed)} failed, out of {len(uniq)} chat(s) in {len(batches)} batch(es)."]
+    if sent:
+        lines.append("Confirmed: " + ", ".join(sent[:20]))
+    if unconfirmed:
+        lines.append("Check before resending (WhatsApp may hide the sent bubble): " + ", ".join(unconfirmed[:15]))
+    if failed:
+        lines.append("Failed: " + "; ".join(f"{g} ({e})" for g, e in failed[:8]))
+    if unconfirmed or failed:
+        lines.append("Do not re-run the whole campaign - only retry the chats listed above.")
+    return _out("\n".join(lines))
 
-            if msg_el is None:
-                skipped.append((group, "Message element not found in current view"))
-                continue
 
-            # Click the message to open context menu (forward option)
-            try:
-                br.call(scr.click, element=msg_el["id"], timeout=10000)
-                _pause(1.0, 2.0)
+def wa_forward_advert(ctx, args):
+    """Send an advert (text and/or image) to WhatsApp chats, human-style.
 
-                sent += 1
-            except Exception as e:
-                skipped.append((group, str(e)))
-
-        # Random delay between batches (not after the last batch)
-        if batch_idx < len(batches) - 1:
-            delay = random.uniform(delay_min, delay_max)
-            _pause(delay, delay + 30)
-
-    result = f"Forwarded advert to {sent} group(s) in {len(batches)} batch(es)."
-    if skipped:
-        result += f"\nSkipped {len(skipped)}: " + "; ".join(f"{g} ({e[:60]})" for g, e in skipped[:5])
-    return _out(result)
+    This types your own advert into each chat instead of using WhatsApp's
+    fragile "forward" menu: identical forwards to many groups are what gets an
+    account restricted. Chats are shuffled, sent in batches of up to five, the
+    wording is varied per recipient, and every send is verified.
+    """
+    if args.get("message_id") and not (args.get("text") or args.get("image")):
+        return _out('Pass the advert itself rather than a message_id: '
+                    '{"text": "...", "image": "/path/pic.jpg", "groups": [...]}. '
+                    "A varied advert typed into each group is far safer than forwarding one message.", is_error=True)
+    return _campaign(
+        ctx, args.get("groups") or [], (args.get("text") or "").strip(),
+        image=(args.get("image") or "").strip(),
+        caption=(args.get("caption") or "").strip(),
+        batch_size=int(args.get("batch_size") or 5),
+        delay_min=float(args.get("delay_min") or 60),
+        delay_max=float(args.get("delay_max") or 180),
+        max_groups=int(args.get("max_groups") or 50),
+        dry_run=bool(args.get("dry_run")),
+    )
 
 
 def wa_forward_queue(ctx, args):
-    """Queue a forward campaign with automatic batching and human-like delays.
+    """Large advertising run: many chats, small batches, long human pauses.
 
-    Like wa_forward_advert but accepts more than 5 groups and automatically
-    splits into batches of 5 with randomized delays between each batch.
-    Best for advertising campaigns across many groups.
+    Same engine as whatsapp_forward_advert but with a higher chat limit and
+    longer waits. Progress is written to whatsapp_queue/ in the workspace.
     """
-    message_id = (args.get("message_id") or "").strip()
-    groups = args.get("groups") or []
-    batch_size = int(args.get("batch_size", 5))
-    delay_min = float(args.get("delay_min", 90))
-    delay_max = float(args.get("delay_max", 300))
+    return _campaign(
+        ctx, args.get("groups") or [], (args.get("text") or "").strip(),
+        image=(args.get("image") or "").strip(),
+        caption=(args.get("caption") or "").strip(),
+        batch_size=int(args.get("batch_size") or 5),
+        delay_min=float(args.get("delay_min") or 120),
+        delay_max=float(args.get("delay_max") or 360),
+        max_groups=int(args.get("max_groups") or 150),
+        dry_run=bool(args.get("dry_run")),
+    )
 
-    if not message_id:
-        return _out('Give message_id: whatsapp_forward_queue needs {"message_id": "...", "groups": ["g1", ...]}.')
-    if not groups or not isinstance(groups, list):
-        return _out('Give groups: whatsapp_forward_queue needs {"message_id": "...", "groups": ["name1", ...]}.')
-    if batch_size < 1 or batch_size > 5:
-        return _out("batch_size must be between 1 and 5 (WhatsApp forward limit).")
 
-    import random, time as _time
-    from pathlib import Path
+def wa_advert_campaign(ctx, args):
+    """Run an advertising campaign: a varied advert sent to many chats/groups.
 
-    # Persist the queue to workspace so it survives restarts
-    ws = Path(ctx.engine.computer.workspace)
-    queue_dir = ws / "whatsapp_queue"
-    queue_dir.mkdir(parents=True, exist_ok=True)
-    queue_file = queue_dir / f"queue_{ctx.bot['id']}_{int(_time.time())}.json"
-    queue_file.write_text(__import__("json").dumps({
-        "message_id": message_id,
-        "groups": groups,
-        "batch_size": batch_size,
-        "delay_min": delay_min,
-        "delay_max": delay_max,
-        "created": _time.time(),
-        "status": "queued",
-        "sent": 0,
-        "total": len(groups),
-    }, indent=2))
+    Accepts the same arguments as whatsapp_forward_advert (groups, text, image,
+    caption, batch_size, delay_min, delay_max, dry_run). Use dry_run first to
+    check the plan, then run it for real.
+    """
+    return wa_forward_advert(ctx, args)
 
-    batches = [groups[i:i + batch_size] for i in range(0, len(groups), batch_size)]
-    sent = 0
-    skipped = []
 
+def wa_groups(ctx, args):
+    """List your WhatsApp group chats (best effort, read from the chat list)."""
     br, scr, paired, snap = _ensure(ctx)
     if not paired:
         return wa_status(ctx, args)
-
-    for batch_idx, batch in enumerate(batches):
-        for group in batch:
-            try:
-                matched = _open_chat(br, scr, group)
-            except BrowserError as e:
-                skipped.append((group, str(e)))
-                continue
-            _think(scr, group)
-            try:
-                snap2 = br.call(scr.snapshot, 4000, timeout=30)
-                elements = snap2.get("elements", [])
-                msg_el = None
-                for el in elements:
-                    if el.get("id") == message_id or message_id in str(el.get("label", "")):
-                        msg_el = el
-                        break
-                if msg_el is None:
-                    skipped.append((group, "Message element not found"))
-                    continue
-                br.call(scr.click, element=msg_el["id"], timeout=10000)
-                _pause(1.0, 2.0)
-                sent += 1
-            except Exception as e:
-                skipped.append((group, str(e)))
-
-        if batch_idx < len(batches) - 1:
-            delay = random.uniform(delay_min, delay_max)
-            _pause(delay, delay + 60)
-
-    # Update queue file
+    limit = max(1, min(int(args.get("limit") or 30), 80))
     try:
-        qdata = __import__("json").loads(queue_file.read_text())
-        qdata["sent"] = sent
-        qdata["status"] = "completed"
-        queue_file.write_text(__import__("json").dumps(qdata, indent=2))
+        names = scr.page.evaluate("""(limit) => {
+            const rows = Array.from(document.querySelectorAll('[data-testid="cell-frame-container"], div[role="listitem"]'));
+            const out = [];
+            for (const r of rows) {
+                const t = (r.innerText || '').trim();
+                if (!t) continue;
+                const isGroup = !!r.querySelector('[data-testid="default-group"], [data-icon="default-group"], span[data-icon="default-group"]');
+                const first = t.split('\\n')[0].trim().slice(0, 60);
+                if (first && out.length < limit) out.push((isGroup ? 'GROUP  ' : 'chat   ') + first);
+            }
+            return out;
+        }""", limit)
+    except Exception as e:
+        return _out(f"Could not read the chat list: {e}", is_error=True)
+    if not names:
+        return _out("No chats found in the list. Make sure WhatsApp Web is loaded and the chat list is visible.", is_error=True)
+    return _out("Chats in the list (GROUP = group chat):\n" + "\n".join(names))
+
+
+def wa_group_members(ctx, args):
+    """List the members of a WhatsApp group (opens the group info panel)."""
+    group = (args.get("group") or "").strip()
+    if not group:
+        return _out('Give the group name: {"group": "..."}.', is_error=True)
+    br, scr, paired, snap = _ensure(ctx)
+    if not paired:
+        return wa_status(ctx, args)
+    try:
+        matched = _open_chat(br, scr, group)
+    except BrowserError as e:
+        return _out(str(e), is_error=True)
+    _pause(0.8, 1.6)
+    try:
+        header = scr.page.locator('[data-testid="conversation-header"], header').first
+        if header.count():
+            header.click()
+        _pause(1.2, 2.0)
+        info = scr.page.evaluate("""() => {
+            const drawer = document.querySelector('[data-testid="drawer-right"]');
+            return drawer ? (drawer.innerText || '') : '';
+        }""")
+    except Exception as e:
+        return _out(f"Could not open the group info panel: {e}", is_error=True)
+    try:
+        scr.page.keyboard.press("Escape")
     except Exception:
         pass
+    if not info.strip():
+        return _out("Opened the chat but could not read the group info panel. The layout may have changed.", is_error=True)
+    return _out(f"Group info for '{matched}':\n" + info[:1600])
 
-    result = f"Forward campaign complete: {sent}/{len(groups)} groups in {len(batches)} batch(es)."
-    if skipped:
-        result += f"\nSkipped {len(skipped)}: " + "; ".join(f"{g} ({e[:50]})" for g, e in skipped[:5])
-    return _out(result)
+
+def wa_contacts(ctx, args):
+    """List contacts you can message (from WhatsApp's new-chat panel)."""
+    br, scr, paired, snap = _ensure(ctx)
+    if not paired:
+        return wa_status(ctx, args)
+    limit = max(1, min(int(args.get("limit") or 40), 100))
+    try:
+        if br.call(_js_click_icon, scr, "new-chat") == "no":
+            btn = scr.page.locator('[data-testid="chat-list-search"], [title="New chat"], [data-icon="new-chat-outline"]').first
+            if btn.count():
+                btn.click()
+        _pause(1.0, 1.8)
+        names = scr.page.evaluate("""(limit) => {
+            const rows = Array.from(document.querySelectorAll('[data-testid="cell-frame-container"], div[role="listitem"], div[role="button"]'));
+            const out = [];
+            for (const r of rows) {
+                const t = (r.innerText || '').trim();
+                if (!t) continue;
+                const first = t.split('\\n')[0].trim().slice(0, 60);
+                if (first && first.length > 1 && out.length < limit && !out.includes(first)) out.push(first);
+            }
+            return out;
+        }""", limit)
+    except Exception as e:
+        return _out(f"Could not open the contact list: {e}", is_error=True)
+    try:
+        scr.page.keyboard.press("Escape")
+    except Exception:
+        pass
+    if not names:
+        return _out("No contacts listed. WhatsApp may still be loading, or the panel layout changed.", is_error=True)
+    return _out("Contacts:\n" + "\n".join("- " + n for n in names))
+
+
+def wa_download_media(ctx, args):
+    """Save the newest photo/file in a chat into the workspace downloads folder."""
+    br, scr, paired, snap = _ensure(ctx)
+    if not paired:
+        return wa_status(ctx, args)
+    chat = (args.get("chat") or "").strip()
+    if chat:
+        try:
+            chat = _open_chat(br, scr, chat)
+        except BrowserError as e:
+            return _out(str(e), is_error=True)
+    out_dir = Path(ctx.engine.computer.workspace) / "downloads"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    try:
+        media = scr.page.locator('[data-testid="media-container"] img, [data-testid="image-thumb"], img[src^="blob:"]').last
+        if not media.count():
+            return _out("No downloadable media is visible in this chat. Scroll to the message with the photo/file first.", is_error=True)
+        media.click()
+        _pause(1.2, 2.0)
+        path = None
+        try:
+            with scr.page.expect_download(timeout=20000) as dl:
+                btn = scr.page.locator('[data-testid="media-download"], [data-icon="download"]').first
+                if not btn.count():
+                    raise BrowserError("no download button")
+                btn.click()
+            path = out_dir / (dl.value.suggested_filename or f"whatsapp_{int(time.time())}.jpg")
+            dl.value.save_as(str(path))
+        except Exception:
+            return _out("Opened the media but WhatsApp Web did not expose a download button. "
+                        "Ask the user to save it from the phone instead.", is_error=True)
+        finally:
+            try:
+                scr.page.keyboard.press("Escape")
+            except Exception:
+                pass
+    except Exception as e:
+        return _out(f"Could not download media: {e}", is_error=True)
+    return _out(f"Saved media from '{chat or 'the open chat'}' to {path} ({path.stat().st_size} bytes).")
+
+
+def wa_mark_read(ctx, args):
+    """Mark every unread message in a chat as read."""
+    br, scr, paired, snap = _ensure(ctx)
+    if not paired:
+        return wa_status(ctx, args)
+    chat = (args.get("chat") or "").strip()
+    if chat:
+        try:
+            chat = _open_chat(br, scr, chat)
+        except BrowserError as e:
+            return _out(str(e), is_error=True)
+    else:
+        row = scr.page.locator('[data-testid="cell-frame-container"]:has([data-icon="unread"])').first
+        if row.count():
+            row.click()
+            _pause(1.0, 1.8)
+    return _out(f"Marked '{chat or 'the open chat'}' as read.")
 
 
 def register(api):
@@ -1421,24 +1608,67 @@ def register(api):
              "variation": {"type": "string", "description": "auto|space|emoji|dots|comma (default auto)"}}},
          "handler": wa_varied_text, "read_only": True, **base},
         {"name": "forward_advert",
-         "description": "Forward an advert message to WhatsApp groups (max 5 per batch, human-like delays).",
+         "description": "Send an advert (text and/or an image with caption) to WhatsApp chats/groups, human-style: shuffled order, batches of up to 5, varied wording, long pauses and per-chat verification. Safer than WhatsApp's forward menu. Use dry_run first to see the plan.",
          "input_schema": {"type": "object", "properties": {
-             "message_id": {"type": "string", "description": "ID of the advert message to forward"},
-             "groups": {"type": "array", "items": {"type": "string"}, "description": "List of group names (max 50)"},
+             "groups": {"type": "array", "items": {"type": "string"}, "description": "Chat or group names to advertise in"},
+             "text": {"type": "string", "description": "Advert text (varied automatically per chat)"},
+             "image": {"type": "string", "description": "Optional image/file path in the workspace to attach"},
+             "caption": {"type": "string", "description": "Optional caption for the image (defaults to the text)"},
+             "batch_size": {"type": "integer", "description": "Chats per batch, 1-5 (default 5)"},
              "delay_min": {"type": "number", "description": "Min seconds between batches (default 60)"},
-             "delay_max": {"type": "number", "description": "Max seconds between batches (default 180)"}
-         }},
-         "required": ["message_id", "groups"],
+             "delay_max": {"type": "number", "description": "Max seconds between batches (default 180)"},
+             "dry_run": {"type": "boolean", "description": "Plan only, send nothing"}},
+             "required": ["groups"]},
          "handler": wa_forward_advert, "risk": "send", **base},
-        {"name": "forward_queue",
-         "description": "Queue a forward campaign across many groups with automatic batching and human delays.",
+        {"name": "advert_campaign",
+         "description": "Run an advertising campaign: the same human-style advert engine as whatsapp_forward_advert (shuffled chats, batches of 5, varied wording, verification).",
          "input_schema": {"type": "object", "properties": {
-             "message_id": {"type": "string", "description": "ID of the advert message to forward"},
-             "groups": {"type": "array", "items": {"type": "string"}, "description": "List of group names"},
-             "batch_size": {"type": "number", "description": "Groups per batch (1-5, default 5)"},
-             "delay_min": {"type": "number", "description": "Min seconds between batches (default 90)"},
-             "delay_max": {"type": "number", "description": "Max seconds between batches (default 300)"}
-         }},
-         "required": ["message_id", "groups"],
+             "groups": {"type": "array", "items": {"type": "string"}, "description": "Chat or group names to advertise in"},
+             "text": {"type": "string", "description": "Advert text"},
+             "image": {"type": "string", "description": "Optional image/file path to attach"},
+             "caption": {"type": "string", "description": "Optional caption for the image"},
+             "batch_size": {"type": "integer", "description": "Chats per batch, 1-5 (default 5)"},
+             "delay_min": {"type": "number", "description": "Min seconds between batches (default 60)"},
+             "delay_max": {"type": "number", "description": "Max seconds between batches (default 180)"},
+             "dry_run": {"type": "boolean", "description": "Plan only, send nothing"}},
+             "required": ["groups"]},
+         "handler": wa_advert_campaign, "risk": "send", **base},
+        {"name": "forward_queue",
+         "description": "Large advertising run across many chats: batches of up to 5, long human pauses (default 120-360s), progress saved to whatsapp_queue/ in the workspace.",
+         "input_schema": {"type": "object", "properties": {
+             "groups": {"type": "array", "items": {"type": "string"}, "description": "Chat or group names"},
+             "text": {"type": "string", "description": "Advert text"},
+             "image": {"type": "string", "description": "Optional image/file path to attach"},
+             "caption": {"type": "string", "description": "Optional caption for the image"},
+             "batch_size": {"type": "integer", "description": "Chats per batch, 1-5 (default 5)"},
+             "delay_min": {"type": "number", "description": "Min seconds between batches (default 120)"},
+             "delay_max": {"type": "number", "description": "Max seconds between batches (default 360)"},
+             "dry_run": {"type": "boolean", "description": "Plan only, send nothing"}},
+             "required": ["groups"]},
          "handler": wa_forward_queue, "risk": "send", **base},
+        {"name": "groups",
+         "description": "List WhatsApp chats and flag which ones are groups (read from the chat list).",
+         "input_schema": {"type": "object", "properties": {
+             "limit": {"type": "integer", "description": "How many chats to list (default 30)"}}},
+         "handler": wa_groups, "read_only": True, **base},
+        {"name": "group_members",
+         "description": "List the members of a WhatsApp group by opening its info panel.",
+         "input_schema": {"type": "object", "properties": {
+             "group": {"type": "string", "description": "Group name"}}, "required": ["group"]},
+         "handler": wa_group_members, "read_only": True, **base},
+        {"name": "contacts",
+         "description": "List contacts you can message (from WhatsApp's new-chat panel).",
+         "input_schema": {"type": "object", "properties": {
+             "limit": {"type": "integer", "description": "How many contacts to list (default 40)"}}},
+         "handler": wa_contacts, "read_only": True, **base},
+        {"name": "download_media",
+         "description": "Save the newest photo/file in a chat into downloads/ in the workspace.",
+         "input_schema": {"type": "object", "properties": {
+             "chat": {"type": "string", "description": "Chat name (optional if a chat is already open)"}}},
+         "handler": wa_download_media, **base},
+        {"name": "mark_read",
+         "description": "Mark every unread message in a chat as read.",
+         "input_schema": {"type": "object", "properties": {
+             "chat": {"type": "string", "description": "Chat name (optional if a chat is already open)"}}},
+         "handler": wa_mark_read, "risk": "write", **base},
     ]

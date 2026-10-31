@@ -17,6 +17,7 @@ import json
 import os
 import re
 import shutil
+import subprocess
 import threading
 import time
 from typing import Any
@@ -309,6 +310,55 @@ def desktop_link(view_only: bool = True, ttl: int = 3600) -> dict:
 def desktop_revoke() -> dict:
     _request("DELETE", f"/v1/machines/{machine_id()}/desktop/stream", timeout=20.0)
     return {"ok": True}
+
+
+# ------------------------------------------------- desktop keyboard (xdotool)
+# The phone's live view streams the real X display. When the VNC canvas eats
+# keystrokes (mobile keyboards are unreliable there), the app can post text to
+# these helpers and it is typed into whatever window has focus.
+_KEYS = {
+    "enter": "Return", "return": "Return", "tab": "Tab", "escape": "Escape", "esc": "Escape",
+    "backspace": "BackSpace", "delete": "Delete", "space": "space", "up": "Up", "down": "Down",
+    "left": "Left", "right": "Right", "home": "Home", "end": "End", "pageup": "Prior",
+    "pagedown": "Next", "ctrl+a": "ctrl+a", "ctrl+c": "ctrl+c", "ctrl+v": "ctrl+v",
+}
+
+
+def _xdotool(args: list[str], timeout: float = 20.0) -> None:
+    if not shutil.which("xdotool"):
+        raise HostError("xdotool is not installed on this machine, so remote typing is unavailable.")
+    env = dict(os.environ)
+    env.setdefault("DISPLAY", ":1")
+    try:
+        r = subprocess.run(["xdotool", *args], capture_output=True, text=True, timeout=timeout, env=env)
+    except subprocess.TimeoutExpired as e:
+        raise HostError("The desktop did not accept the input in time.") from e
+    if r.returncode != 0:
+        raise HostError((r.stderr or r.stdout or "xdotool failed").strip()[:300])
+
+
+def desktop_type(text: str, enter: bool = False, delay_ms: int = 18) -> dict:
+    """Type text into the focused desktop window, optionally pressing Enter."""
+    text = str(text or "")
+    if not text and not enter:
+        raise HostError("Nothing to type.")
+    if text:
+        if len(text) > 4000:
+            raise HostError("That is too much text for one call (max 4000 characters).")
+        _xdotool(["type", "--clearmodifiers", "--delay", str(max(0, min(int(delay_ms), 200))), "--", text])
+    if enter:
+        _xdotool(["key", "--clearmodifiers", "Return"])
+    return {"ok": True, "typed": len(text), "enter": bool(enter)}
+
+
+def desktop_key(key: str) -> dict:
+    """Press one key (Return, Tab, Escape, ctrl+a, ...) in the focused window."""
+    k = _KEYS.get(str(key or "").strip().lower())
+    if not k:
+        raise HostError("Unsupported key. Use one of: " + ", ".join(sorted(_KEYS)))
+    _xdotool(["key", "--clearmodifiers", k])
+    return {"ok": True, "key": k}
+
 
 
 # --------------------------------------------------------------------- files

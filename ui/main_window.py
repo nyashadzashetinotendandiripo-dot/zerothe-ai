@@ -12,7 +12,7 @@ from PySide6.QtGui import QAction, QCloseEvent, QColor, QKeySequence, QShortcut
 from PySide6.QtWidgets import (QApplication, QDialog, QFileDialog, QFrame, QGridLayout, QHBoxLayout, QInputDialog, QLabel, QLineEdit, QListWidget, QListWidgetItem, QMainWindow,
                                QMenu, QMessageBox, QScrollArea, QSizePolicy, QStackedWidget, QSystemTrayIcon, QVBoxLayout, QWidget)
 
-from core import quiet
+from core import APP_NAME, quiet
 from . import icons, theme
 from .api import Api, load_ui_config, save_ui_config
 from .chat_view import ChatPage
@@ -481,7 +481,7 @@ class MainWindow(QMainWindow):
         self.api, self.store = api, store
         self.images = ImageCache(api)
         self.takeovers: dict[str, TakeoverView] = {}
-        self.setWindowTitle("OpenGrokBot")
+        self.setWindowTitle(APP_NAME)
         self.setWindowIcon(theme.app_icon())
         self.resize(1360, 860)
         self.setMinimumSize(980, 620)
@@ -572,9 +572,9 @@ class MainWindow(QMainWindow):
         self.tray: QSystemTrayIcon | None = None
         if tray_available and QSystemTrayIcon.isSystemTrayAvailable():
             self.tray = QSystemTrayIcon(theme.app_icon(), self)
-            self.tray.setToolTip("OpenGrokBot: your Bots keep working in the background")
+            self.tray.setToolTip(f"{APP_NAME}: your Bots keep working in the background")
             m = QMenu()
-            m.addAction("Open OpenGrokBot", self.show_window)
+            m.addAction(f"Open {APP_NAME}", self.show_window)
             m.addAction("Quick ask…", lambda: self.quick_ask(True))
             self.tray_needs = m.addAction("Needs you: 0", lambda: self.select("page:inbox"))
             m.addAction("Stop all running tasks", self.stop_all)
@@ -604,7 +604,7 @@ class MainWindow(QMainWindow):
         logo = QLabel()
         logo.setPixmap(theme.app_icon(64).pixmap(26, 26))
         head.addWidget(logo)
-        t = QLabel("OpenGrokBot")
+        t = QLabel(APP_NAME)
         t.setStyleSheet("font-size: 15px; font-weight: 600;")
         head.addWidget(t)
         head.addStretch(1)
@@ -717,7 +717,7 @@ class MainWindow(QMainWindow):
         self.groups_head.setVisible(True)
         n = len(self.store.approvals)
         self.rows["page:inbox"].set_badge(n)
-        self.setWindowTitle("OpenGrokBot" + (f"  ·  {n} need you" if n else ""))
+        self.setWindowTitle(APP_NAME + (f"  ·  {n} need you" if n else ""))
         if self.tray:
             self.tray_needs.setText(f"Needs you: {n}")
         self.bots_head.setText(f"BOTS  ·  {len(self.store.bots)}" if self.store.bots else "BOTS")
@@ -1094,6 +1094,8 @@ class MainWindow(QMainWindow):
     def check_browser_engine(self) -> None:
         if self.banner_shown or playwright_browser_installed():
             return
+        if (self.store.settings.get("computer", {}) or {}).get("browser", "chromium") == "chrome":
+            return   # using the PC's installed Google Chrome: no engine download needed
         self.banner_shown = True
         r = QMessageBox.question(self, "Install the browser engine",
                                  "Bots use a Chromium browser (Playwright) as their computer-use browser. It is not installed on this PC yet (about 150 MB).\n\nInstall it now?")

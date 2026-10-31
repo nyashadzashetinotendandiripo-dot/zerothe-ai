@@ -1,4 +1,4 @@
-"""OpenGrokBot entry point.
+"""ZerotheBot entry point.
 
     python main.py                    open the desktop app (starts the background service if needed)
     python main.py --tray             start hidden in the system tray
@@ -24,7 +24,7 @@ def main() -> int:
         # for both `--install-browsers` and the service (which re-runs this exe with --service).
         base = os.environ.get("LOCALAPPDATA") or os.path.expanduser("~")
         os.environ["PLAYWRIGHT_BROWSERS_PATH"] = os.path.join(base, "ms-playwright")
-    p = argparse.ArgumentParser(prog="OpenGrokBot", description="Always-on AI teammates with a computer of their own.")
+    p = argparse.ArgumentParser(prog="ZerotheBot", description="Always-on AI teammates with a computer of their own.")
     p.add_argument("--service", action="store_true", help="run the background service only (no window)")
     p.add_argument("--tray", action="store_true", help="start minimised to the system tray")
     p.add_argument("--install-browsers", action="store_true", help="install the Playwright Chromium browser")

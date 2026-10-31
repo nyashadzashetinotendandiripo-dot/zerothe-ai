@@ -1,5 +1,5 @@
 <#
-  Sets up OpenGrokBot's computer on a Windows VM so Bots, routines and background turns keep running when your laptop is closed.
+  Sets up ZerotheBot's computer on a Windows VM so Bots, routines and background turns keep running when your laptop is closed.
 
   Run in an elevated PowerShell on the VM, from the project folder:
       powershell -ExecutionPolicy Bypass -File deploy\setup-remote-windows.ps1 -Port 8765 -OpenFirewall
@@ -39,11 +39,11 @@ Write-Host ""
 $action = New-ScheduledTaskAction -Execute $py -Argument "main.py --service --host $BindAddress --port $Port" -WorkingDirectory $root
 $trigger = New-ScheduledTaskTrigger -AtLogOn
 $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -RestartCount 99 -RestartInterval (New-TimeSpan -Minutes 1) -ExecutionTimeLimit ([TimeSpan]::Zero)
-Register-ScheduledTask -TaskName "OpenGrokBotService" -Action $action -Trigger $trigger -Settings $settings -Description "OpenGrokBot background service" -Force | Out-Null
-Start-ScheduledTask -TaskName "OpenGrokBotService"
+Register-ScheduledTask -TaskName "ZerotheBotService" -Action $action -Trigger $trigger -Settings $settings -Description "ZerotheBot background service" -Force | Out-Null
+Start-ScheduledTask -TaskName "ZerotheBotService"
 
 if ($OpenFirewall) {
-    New-NetFirewallRule -DisplayName "OpenGrokBot service" -Direction Inbound -Protocol TCP -LocalPort $Port -Action Allow | Out-Null
+    New-NetFirewallRule -DisplayName "ZerotheBot service" -Direction Inbound -Protocol TCP -LocalPort $Port -Action Allow | Out-Null
     Write-Host "Firewall rule added for TCP $Port. Prefer a VPN (e.g. Tailscale) or an SSH tunnel over exposing this port to the internet."
 }
 

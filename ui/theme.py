@@ -153,7 +153,7 @@ def _arrow_url(color: str) -> str:
         import tempfile
 
         from . import icons
-        d = os.path.join(tempfile.gettempdir(), "opengrokbot-ui")
+        d = os.path.join(tempfile.gettempdir(), "zerothebot-ui")
         os.makedirs(d, exist_ok=True)
         path = os.path.join(d, f"chevron-{color.strip('#')}.png")
         if not os.path.exists(path):
@@ -174,7 +174,7 @@ def _check_url(color: str) -> str:
     try:
         import os
         import tempfile
-        d = os.path.join(tempfile.gettempdir(), "opengrokbot-ui")
+        d = os.path.join(tempfile.gettempdir(), "zerothebot-ui")
         os.makedirs(d, exist_ok=True)
         path = os.path.join(d, f"check-{color.strip('#')}.png")
         if not os.path.exists(path):

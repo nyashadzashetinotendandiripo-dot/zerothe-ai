@@ -52,7 +52,7 @@ class QuietUnit(unittest.TestCase):
 
 class Migration(unittest.TestCase):
     def test_old_database_gets_the_new_column(self):
-        path = Path(tempfile.mkdtemp(prefix="gbtest-mig-")) / "old.db"
+        path = Path(tempfile.mkdtemp(prefix="zttest-mig-")) / "old.db"
         con = sqlite3.connect(path)
         con.execute("CREATE TABLE bots(id TEXT PRIMARY KEY, name TEXT NOT NULL, emoji TEXT DEFAULT '', job TEXT DEFAULT '', instructions TEXT DEFAULT '', "
                     "profile TEXT DEFAULT '', model TEXT DEFAULT '', approval_mode TEXT DEFAULT 'ask', step_limit INTEGER DEFAULT 40, net_mode TEXT DEFAULT 'inherit', "
@@ -71,9 +71,10 @@ class Migration(unittest.TestCase):
 class Features(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        os.environ["OPENGROKBOT_HOME"] = tempfile.mkdtemp(prefix="gbtest-f13-")
+        os.environ["ZEROTHEBOT_HOME"] = tempfile.mkdtemp(prefix="zttest-f13-")
         cls.eng = Engine()
         cls.eng.settings.set("notifications.toast", False)
+        cls.eng.settings.set("memory.auto_reflect", False)
         cls.fake = FakeProvider([LLMResult(text="ok")] * 30)
         cls._orig = agent_mod.make_provider
         agent_mod.make_provider = lambda *a, **k: cls.fake

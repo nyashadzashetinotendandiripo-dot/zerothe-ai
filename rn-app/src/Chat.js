@@ -7,6 +7,7 @@ import md from './md';
 import { aiBody, uiPlain, uiStreamText } from './widgets';
 import { breadcrumb, note, noteOnce } from './diag';
 import * as ImagePicker from 'expo-image-picker';
+import * as DocumentPicker from 'expo-document-picker';
 import * as FileSystem from 'expo-file-system/legacy';
 
 // Grok-style chat: near-black canvas, assistant answers as plain full-width text,
@@ -114,20 +115,25 @@ function ChatScreen({ thread, threads, botName: propsBotName, onSwitch, onBack, 
   const [liveBusy, setLiveBusy] = useState(false);
   const [liveErr, setLiveErr] = useState('');
   const [liveInteractive, setLiveInteractive] = useState(false);   // interactive takeover mode
+  const [typeText, setTypeText] = useState('');                    // text posted to the live desktop
+  const [typeBusy, setTypeBusy] = useState(false);
+  const [zoom, setZoom] = useState(1);                             // live desktop fit scale
+  const [attachOpen, setAttachOpen] = useState(false);              // photo/file chooser sheet
   const [histOpen, setHistOpen] = useState(false);
   const [histQ, setHistQ] = useState('');
   const [err, setErr] = useState('');
   const [attachments, setAttachments] = useState([]);
   const listRef = useRef(null);
+  const liveRef = useRef(null);
   const fastRef = useRef(0);            // keep fast polling for a while after sending
   const busyRef = useRef(null);
   busyRef.current = busy;
   const atBottom = useRef(true);        // only auto-scroll when the user is already at the bottom
   // Tell the hardware back button to close open sheets/modals instead of quitting.
   useEffect(() => {
-    const open = !!histOpen || !!pick || liveFull;
+    const open = !!histOpen || !!pick || !!attachOpen || liveFull;
     if (modalOpenRef) modalOpenRef.current = open;
-  }, [histOpen, pick, liveFull, modalOpenRef]);
+  }, [histOpen, pick, attachOpen, liveFull, modalOpenRef]);
   // scrollToEnd can throw when the list has no rows yet (or is mid-measure), and
   // that throw happens in a native callback where React cannot catch it.
   const scrollEnd = useCallback(() => {
@@ -268,6 +274,30 @@ function ChatScreen({ thread, threads, botName: propsBotName, onSwitch, onBack, 
     }
   };
 
+  const pickFile = async () => {
+    try {
+      const result = await DocumentPicker.getDocumentAsync({
+        multiple: true,
+        copyToCacheDirectory: true,
+        type: '*/*',
+      });
+      if (result.canceled || !result.assets) return;
+      const next = [];
+      let failed = 0;
+      for (const a of result.assets) {
+        try {
+          const b64 = await FileSystem.readAsStringAsync(a.uri, { encoding: FileSystem.EncodingType.Base64 });
+          next.push({ data: b64, type: a.mimeType || 'application/octet-stream', name: a.name || 'file' });
+        } catch (e) { failed += 1; note('upload', e, 'read file'); }
+      }
+      if (next.length) setAttachments((prev) => [...prev, ...next]);
+      if (failed) Alert.alert('Could not add file', failed + ' file(s) could not be read. Try a different file.');
+    } catch (e) {
+      note('upload', e, 'document picker');
+      Alert.alert('Could not open files', (e && e.message) || 'The file picker failed to open.');
+    }
+  };
+
   const send = async () => {
     const t = text.trim();
     if (!t && !attachments.length) return;
@@ -285,7 +315,7 @@ function ChatScreen({ thread, threads, botName: propsBotName, onSwitch, onBack, 
     try {
       // The POST is the one call that must not hang: a stuck request used to
       // leave the bubble saying "sending" with no way out.
-      await api('/api/threads/' + thread.id + '/messages', { method: 'POST', timeout: 30000, body: JSON.stringify({ text: snapshot, images: attachments.map((a) => ({ data: a.data, type: a.type })), parent_id: pid }) });
+      await api('/api/threads/' + thread.id + '/messages', { method: 'POST', timeout: 60000, body: JSON.stringify({ text: snapshot, images: attachments.map((a) => ({ data: a.data, type: a.type, name: a.name })), parent_id: pid }) });
       breadcrumb('send:ok', snapshot.slice(0, 40));
       await load();
       setAttachments([]);                            // show it immediately even if SSE lags
@@ -302,41 +332,57 @@ function ChatScreen({ thread, threads, botName: propsBotName, onSwitch, onBack, 
     try { await api('/api/threads/' + thread.id + '/stop', { method: 'POST', body: '{}' }); } catch (e) { /* already done */ }
     setTimeout(() => load(), 600);
   };
-  // A real live view of the machine's desktop (Instabox VNC link in a WebView)
-  // instead of a still screenshot. View-only, short-lived, revoked on close.
-  const openLive = async () => {
-    setLiveFull(true); setLiveErr('');
-    if (liveUrl) return;
-    setLiveBusy(true);
+  // A real live view of the machine's desktop (Instabox VNC link in a WebView).
+  // `control` opens it with keyboard/mouse control so the user can log in, solve
+  // a CAPTCHA or finish a step themselves.
+  const startLive = async (control) => {
+    setLiveFull(true); setLiveErr(''); setLiveBusy(true);
+    if (control) setLiveInteractive(true);
     try {
-      const d = await api('/api/host/desktop', { method: 'POST', body: JSON.stringify({ viewOnly: true, ttl: 3600 }) });
+      if (liveUrl) { try { await api('/api/host/desktop', { method: 'DELETE' }); } catch (e) { /* already expired */ } }
+      setLiveUrl('');
+      const d = await api('/api/host/desktop', { method: 'POST', body: JSON.stringify({ viewOnly: !control, ttl: 3600 }) });
       if (!d || !d.url) throw new Error('The server did not return a live link.');
       setLiveUrl(d.url);
-      setLiveInteractive(false);
+      setLiveInteractive(!!control);
     } catch (e) {
       setLiveErr(String(e.message || e));
     }
     setLiveBusy(false);
   };
-  // Interactive takeover mode: full control of the desktop (click, type, enter passwords).
-  // Use this when a Bot needs you to log in, solve a CAPTCHA, or complete a step itself.
-  const openInteractive = async () => {
-    setLiveFull(true); setLiveErr('');
-    if (liveUrl) return;
-    setLiveBusy(true);
-    try {
-      const d = await api('/api/host/desktop', { method: 'POST', body: JSON.stringify({ viewOnly: false, ttl: 3600 }) });
-      if (!d || !d.url) throw new Error('The server did not return an interactive link.');
-      setLiveUrl(d.url);
-      setLiveInteractive(true);
-    } catch (e) {
-      setLiveErr(String(e.message || e));
-    }
-    setLiveBusy(false);
-  };
+  const openLive = () => startLive(false);
+  const openInteractive = () => startLive(true);
   const closeLive = () => {
-    setLiveFull(false); setLiveUrl('');
+    setLiveFull(false); setLiveUrl(''); setLiveInteractive(false); setZoom(1);
     api('/api/host/desktop', { method: 'DELETE' }).catch(() => {});
+  };
+  // The VNC canvas swallows the phone keyboard, so text and special keys are
+  // posted to the server and typed with xdotool into the focused window.
+  const desktopType = async (enter) => {
+    const t = typeText;
+    if (!t && !enter) return;
+    setTypeBusy(true);
+    try {
+      await api('/api/host/type', { method: 'POST', body: JSON.stringify({ text: t, enter: !!enter }) });
+      setTypeText('');
+    } catch (e) { setLiveErr(String(e.message || e)); }
+    setTypeBusy(false);
+  };
+  const desktopKey = async (key) => {
+    try { await api('/api/host/key', { method: 'POST', body: JSON.stringify({ key }) }); }
+    catch (e) { setLiveErr(String(e.message || e)); }
+  };
+  // Fit the whole desktop on the phone screen (the machine's display is 1280x800).
+  const applyZoom = (z) => {
+    setZoom(z);
+    try {
+      if (liveRef.current) {
+        liveRef.current.injectJavaScript(
+          "(function(){var b=document.body;if(!b)return;b.style.transform='scale(" + z + ")';"
+          + "b.style.transformOrigin='top left';b.style.width='" + (100 / z) + "%';"
+          + "b.style.height='" + (100 / z) + "%';})();true;");
+      }
+    } catch (e) { /* view not ready yet */ }
   };
   const react = async (mid, emoji) => { try { await api('/api/messages/' + mid + '/reactions', { method: 'POST', body: JSON.stringify({ emoji, author: 'user' }) }); load(); } catch (e) { /* ignore */ } };
   const decide = async (a, approve, remember, answer) => {
@@ -422,10 +468,14 @@ function ChatScreen({ thread, threads, botName: propsBotName, onSwitch, onBack, 
       disp.push(it);
     }); }
 
-  const botName = propsBotName || (threads && threads.find((t) => t.id === thread.id)?.title) || 'ZerotheBot';
+  // The header shows the Bot the user opened, never the conversation title
+  // (a thread can be called "hi", which is not a name).
+  const botName = propsBotName || 'ZerotheBot';
+  const curThread = (threads || []).find((t) => t.id === thread.id);
+  const threadLabel = curThread && !curThread.main ? asText(curThread.title) : '';
   const status = busy
     ? (busy.status === 'waiting_approval' ? 'needs your approval' : 'typing…')
-    : (err ? 'offline — tap to retry' : 'online');
+    : (err ? 'offline — tap to retry' : (threadLabel ? 'online · ' + threadLabel : 'online'));
 
   return (
     <KeyboardAvoidingView style={{ flex: 1, backgroundColor: BG }} behavior="padding" keyboardVerticalOffset={10}>
@@ -517,10 +567,19 @@ function ChatScreen({ thread, threads, botName: propsBotName, onSwitch, onBack, 
         </View>
       )}
 
-      {/* WhatsApp-style composer: input · round send */}
+      {/* WhatsApp-style composer: attach · input · round send */}
       <View style={[st.composerWrap, { paddingBottom: 8 + (ins?.bottom || 0) }]}>
+        {!!attachments.length && (
+          <View style={st.attachRow}>
+            {attachments.map((a, i) => (
+              <Pressable key={i} onPress={() => setAttachments((prev) => prev.filter((_x, j) => j !== i))} style={st.attachChip}>
+                <Text numberOfLines={1} style={st.attachChipT}>📎 {asText(a.name).slice(0, 18)} ✕</Text>
+              </Pressable>
+            ))}
+          </View>
+        )}
         <View style={st.composer}>
-          <Pressable onPress={pickImage} hitSlop={6} style={[st.uploadBtn, attachments.length > 0 && { backgroundColor: '#00a884' }]}>
+          <Pressable onPress={() => setAttachOpen(true)} hitSlop={6} style={[st.uploadBtn, attachments.length > 0 && { backgroundColor: '#00a884' }]}>
             <Text style={st.uploadT}>📎{attachments.length > 0 ? ' ' + attachments.length : ''}</Text>
           </Pressable>
           <TextInput
@@ -534,12 +593,30 @@ function ChatScreen({ thread, threads, botName: propsBotName, onSwitch, onBack, 
             onSubmitEditing={send}
             blurOnSubmit={false}
           />
-          <Pressable onPress={send} disabled={!text.trim()} hitSlop={6}
-            style={[st.sendBtn, !text.trim() && st.sendBtnOff]}>
-            <Text style={[st.sendT, !text.trim() && { color: MUTED }]}>➤</Text>
+          <Pressable onPress={send} disabled={!text.trim() && !attachments.length} hitSlop={6}
+            style={[st.sendBtn, !text.trim() && !attachments.length && st.sendBtnOff]}>
+            <Text style={[st.sendT, !text.trim() && !attachments.length && { color: MUTED }]}>➤</Text>
           </Pressable>
         </View>
       </View>
+
+      {attachOpen && (
+        <View style={st.scrimM} onStartShouldSetResponder={() => true}>
+          <View style={[st.sheet, { paddingBottom: 16 + (ins?.bottom || 0) }]}>
+            <View style={st.grabber} />
+            <Text style={st.sheetT}>Add to this chat</Text>
+            <Pressable onPress={() => { setAttachOpen(false); pickImage(); }} style={st.sheetBtn}>
+              <Text style={st.sheetBtnT}>🖼  Photos & videos</Text>
+            </Pressable>
+            <Pressable onPress={() => { setAttachOpen(false); pickFile(); }} style={st.sheetBtn}>
+              <Text style={st.sheetBtnT}>📄  Files (PDF, docs, zip…)</Text>
+            </Pressable>
+            <Pressable onPress={() => setAttachOpen(false)} style={[st.sheetBtn, { backgroundColor: 'transparent' }]}>
+              <Text style={[st.sheetBtnT, { color: MUTED }]}>Cancel</Text>
+            </Pressable>
+          </View>
+        </View>
+      )}
 
       {!!pick && (
         <View style={st.scrimM} onStartShouldSetResponder={() => true}>
@@ -556,7 +633,7 @@ function ChatScreen({ thread, threads, botName: propsBotName, onSwitch, onBack, 
             </View>
             <View style={{ marginTop: 10 }}>
               <Pressable onPress={() => { setReplyTo(pick); setPick(null); }} style={st.sheetBtn}><Text style={st.sheetBtnT}>↩  Reply</Text></Pressable>
-              {!!pick.type === 'user' && (
+              {pick.type === 'user' && (
                 <>
                   <Pressable onPress={() => { setText(asText(pick.text)); setPick(null); }} style={st.sheetBtn}><Text style={st.sheetBtnT}>✏  Edit & resend</Text></Pressable>
                   <Pressable onPress={() => { Clipboard.setString(asText(pick.text)); setPick(null); }} style={st.sheetBtn}><Text style={st.sheetBtnT}>📋 Copy text</Text></Pressable>
@@ -590,41 +667,79 @@ function ChatScreen({ thread, threads, botName: propsBotName, onSwitch, onBack, 
       {liveFull && (
         <View style={st.fullScr}>
           <View style={[st.fullBar, { paddingTop: (ins?.top || 0) + 8 }]}>
-            <Text style={st.fullT}>{liveInteractive ? 'Interactive desktop' : 'Live screen'}</Text>
+            <Text style={st.fullT}>{liveInteractive ? 'Desktop · in control' : 'Live desktop'}</Text>
             <View style={{ flex: 1 }} />
+            <Pressable onPress={() => applyZoom(zoom === 1 ? 0.7 : zoom === 0.7 ? 0.5 : 1)} hitSlop={8} style={st.fullBtn}>
+              <Text style={st.fullBtnT}>{zoom === 1 ? 'Fit' : Math.round(zoom * 100) + '%'}</Text>
+            </Pressable>
             {!!liveInteractive ? (
-              <Pressable onPress={closeLive} hitSlop={8} style={st.fullBtn}><Text style={st.fullBtnT}>✕ End control</Text></Pressable>
+              <Pressable onPress={closeLive} hitSlop={8} style={st.fullBtn}><Text style={st.fullBtnT}>✕ End</Text></Pressable>
             ) : (
               <Pressable onPress={openInteractive} hitSlop={8} disabled={liveBusy}
-                style={[st.fullBtn, liveInteractive && { backgroundColor: '#00a884' }]}>
-                <Text style={[st.fullBtnT, liveInteractive && { color: '#fff' }]}>
-                  {liveBusy ? '…' : liveInteractive ? 'Interactive on' : 'Take control'}
-                </Text>
+                style={[st.fullBtn, { backgroundColor: '#00a884', borderColor: '#00a884' }]}>
+                <Text style={[st.fullBtnT, { color: '#fff' }]}>{liveBusy ? '…' : 'Control'}</Text>
               </Pressable>
             )}
-            <Pressable onPress={stop} hitSlop={8}><Text style={st.stop}>■ Stop bot</Text></Pressable>
-            <Pressable onPress={closeLive} hitSlop={8}><Text style={st.fullX}>✕ Close</Text></Pressable>
+            <Pressable onPress={stop} hitSlop={8}><Text style={st.stop}>■ Stop</Text></Pressable>
+            <Pressable onPress={closeLive} hitSlop={8}><Text style={st.fullX}>✕</Text></Pressable>
           </View>
           {!!liveErr ? (
             <View style={st.fullErr}>
               <Text style={st.fullErrT}>{liveErr}</Text>
+              <Pressable onPress={() => startLive(liveInteractive)} style={st.sheetBtn}><Text style={st.sheetBtnT}>Try again</Text></Pressable>
               {!!shotUri && <Image style={{ flex: 1, width: '100%' }} source={{ uri: shotUri }} resizeMode="contain" />}
             </View>
           ) : liveUrl ? (
             <WebView
+              ref={liveRef}
               source={{ uri: liveUrl }}
               style={{ flex: 1, backgroundColor: '#000' }}
               javaScriptEnabled
               domStorageEnabled
               allowsInlineMediaPlayback
+              mediaPlaybackRequiresUserAction={false}
               setSupportMultipleWindows={false}
-              onError={() => setLiveErr('The live view could not connect. Close and try again.')}
+              mixedContentMode="always"
+              useWideViewPort
+              loadWithOverviewMode
+              scalesPageToFit
+              originWhitelist={['*']}
+              onLoadEnd={() => { if (zoom !== 1) applyZoom(zoom); }}
+              onError={() => setLiveErr('The live view could not connect. Tap Try again.')}
             />
           ) : (
             <View style={st.fullErr}>
               <ActivityIndicator color={MUTED} />
               <Text style={st.fullErrT}>{liveBusy ? 'Starting the desktop…' : 'Connecting…'}</Text>
               <Text style={st.fullErrS}>{liveInteractive ? 'Interactive control starting…' : 'First start can take a few seconds.'}</Text>
+            </View>
+          )}
+          {!!liveInteractive && (
+            <View style={[st.typeBar, { paddingBottom: 8 + (ins?.bottom || 0) }]}>
+              <View style={st.typeKeys}>
+                {[['Enter', 'enter'], ['Tab', 'tab'], ['Esc', 'escape'], ['⌫', 'backspace']].map(([label, key]) => (
+                  <Pressable key={key} onPress={() => desktopKey(key)} style={st.typeKey}>
+                    <Text style={st.typeKeyT}>{label}</Text>
+                  </Pressable>
+                ))}
+              </View>
+              <View style={st.typeRow}>
+                <TextInput
+                  style={st.typeIn}
+                  value={typeText}
+                  onChangeText={setTypeText}
+                  placeholder="Type here, then Send — it lands on the desktop"
+                  placeholderTextColor={MUTED}
+                  autoCapitalize="none"
+                  autoCorrect={false}
+                  onSubmitEditing={() => desktopType(false)}
+                  returnKeyType="done"
+                />
+                <Pressable onPress={() => desktopType(false)} disabled={typeBusy || !typeText}
+                  style={[st.typeSend, (typeBusy || !typeText) && { backgroundColor: '#2a2a2a' }]}>
+                  <Text style={st.typeSendT}>{typeBusy ? '…' : 'Send'}</Text>
+                </Pressable>
+              </View>
             </View>
           )}
         </View>
@@ -724,6 +839,9 @@ const st = StyleSheet.create({
   sendBtn: { width: 38, height: 38, borderRadius: 19, backgroundColor: '#00a884', alignItems: 'center', justifyContent: 'center' },
   sendBtnOff: { backgroundColor: '#2a2a2a' },
   sendT: { color: '#ffffff', fontSize: 17, fontWeight: '800', lineHeight: 19, marginLeft: 1 },
+  attachRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 6, paddingHorizontal: 4, paddingBottom: 6 },
+  attachChip: { backgroundColor: '#222', borderRadius: 999, paddingHorizontal: 10, paddingVertical: 5, borderWidth: 1, borderColor: '#333' },
+  attachChipT: { color: TEXT, fontSize: 12 },
 
   emojiPanel: { flexDirection: 'row', flexWrap: 'wrap', gap: 4, backgroundColor: BG, paddingHorizontal: 10, paddingTop: 8 },
   emojiB: { width: 40, height: 40, alignItems: 'center', justifyContent: 'center', borderRadius: 10 },
@@ -769,4 +887,12 @@ const st = StyleSheet.create({
   fullErr: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: 20, gap: 8 },
   fullErrT: { color: '#e57373', fontSize: 13.5, textAlign: 'center' },
   fullErrS: { color: MUTED, fontSize: 12 },
+  typeBar: { backgroundColor: BG, borderTopWidth: 1, borderColor: LINE, paddingHorizontal: 10, paddingTop: 6, gap: 6 },
+  typeKeys: { flexDirection: 'row', gap: 6 },
+  typeKey: { backgroundColor: '#222', borderRadius: 8, paddingHorizontal: 12, paddingVertical: 6, borderWidth: 1, borderColor: '#333' },
+  typeKeyT: { color: TEXT, fontSize: 12.5, fontWeight: '600' },
+  typeRow: { flexDirection: 'row', gap: 8, alignItems: 'center' },
+  typeIn: { flex: 1, backgroundColor: '#1c1c1c', borderRadius: 20, borderWidth: 1, borderColor: '#2a2a2a', color: TEXT, paddingHorizontal: 14, paddingVertical: 9, fontSize: 14 },
+  typeSend: { backgroundColor: '#00a884', borderRadius: 999, paddingHorizontal: 16, paddingVertical: 10 },
+  typeSendT: { color: '#fff', fontSize: 13, fontWeight: '800' },
 });

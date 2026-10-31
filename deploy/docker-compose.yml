@@ -1,5 +1,5 @@
 services:
-  opengrokbot:
+  zerothebot:
     build:
       context: ..
       dockerfile: deploy/Dockerfile
@@ -9,16 +9,16 @@ services:
       # Change to "8765:8765" only on a trusted network.
       - "127.0.0.1:8765:8765"
     environment:
-      OPENGROKBOT_TOKEN: "${OPENGROKBOT_TOKEN:?set OPENGROKBOT_TOKEN to a long random string}"
+      ZEROTHEBOT_TOKEN: "${ZEROTHEBOT_TOKEN:?set ZEROTHEBOT_TOKEN to a long random string}"
       ANTHROPIC_API_KEY: "${ANTHROPIC_API_KEY:-}"
       OPENAI_API_KEY: "${OPENAI_API_KEY:-}"
       OPENROUTER_API_KEY: "${OPENROUTER_API_KEY:-}"
       GROQ_API_KEY: "${GROQ_API_KEY:-}"
     volumes:
-      - opengrokbot-data:/data
+      - zerothebot-data:/data
     shm_size: "1gb"          # Chromium needs a larger /dev/shm
     security_opt:
       - no-new-privileges:true
 
 volumes:
-  opengrokbot-data:
+  zerothebot-data:

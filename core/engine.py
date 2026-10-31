@@ -120,6 +120,67 @@ class Engine:
         d = self.digest.build("today")
         self.notify("digest", None, None, "Your daily digest", self.digest.headline(d))
 
+    def _tidy_after_turn(self) -> None:
+        """Delete the scratch files a turn leaves behind, so repeated jobs do not
+        slowly fill the disk. Only temp/scratch folders are touched — deliverables
+        in the workspace root and shared/ uploads are kept."""
+        cutoff = time.time() - 30 * 60
+        ws = paths.workspace_dir()
+        roots = [ws / "tmp", ws / ".cache", ws / "scratch", ws / "whatsapp_queue",
+                 paths.data_dir() / "tmp", paths.data_dir() / "tmp-plugin-install"]
+        freed = 0
+        for root in roots:
+            if not root.is_dir():
+                continue
+            for f in root.rglob("*"):
+                try:
+                    if f.is_file() and f.stat().st_mtime < cutoff:
+                        freed += f.stat().st_size
+                        f.unlink()
+                except OSError:
+                    pass
+        if freed > 2_000_000:
+            self.log.info("tidy: freed %.1f MB of scratch files after the turn", freed / 1e6)
+
+    def _prune_workspace(self, keep_days: float = 7, max_mb: int = 300) -> int:
+        """Age- and size-based pruning of bot output in the workspace."""
+        ws = paths.workspace_dir()
+        if not ws.is_dir():
+            return 0
+        removed = 0
+        cutoff = time.time() - keep_days * 86400
+        files = []
+        for f in ws.rglob("*"):
+            if not f.is_file():
+                continue
+            rel = f.relative_to(ws).as_posix()
+            if rel.startswith("shared/") or rel.startswith("."):
+                continue                      # user uploads and hidden state stay
+            try:
+                st = f.stat()
+            except OSError:
+                continue
+            if st.st_mtime < cutoff:
+                try:
+                    f.unlink()
+                    removed += 1
+                except OSError:
+                    pass
+            else:
+                files.append((st.st_mtime, st.st_size, f))
+        total = sum(sz for _m, sz, _f in files)
+        if total > max_mb * 1024 * 1024:
+            for _m, sz, f in sorted(files):
+                if total <= max_mb * 1024 * 1024:
+                    break
+                try:
+                    f.unlink()
+                    total -= sz
+                    removed += 1
+                except OSError:
+                    pass
+        return removed
+
     def _housekeeping(self) -> None:
         """Nightly at 03:17: a local backup zip (kept: last 7), pruning of stale data,
         and cleanup of old workspace files created by bots to free storage."""
@@ -133,21 +194,24 @@ class Engine:
             for old in keep:
                 old.unlink(missing_ok=True)
             self.db.execute("DELETE FROM notifications WHERE ts < ?", (time.time() - 30 * 86400,))
-            # Prune workspace files older than 7 days (bots create reports, PDFs, etc.)
-            ws = paths.workspace_dir()
-            if ws.is_dir():
-                cutoff = time.time() - 7 * 86400
-                removed = 0
-                for f in ws.rglob("*"):
-                    if f.is_file() and f.stat().st_mtime < cutoff:
+            # Prune bot output older than 7 days and cap the workspace size.
+            removed = self._prune_workspace()
+            # Chromium keeps three copies of every cached asset; clear the stale ones.
+            comp = paths.data_dir() / "computer"
+            cache_cutoff = time.time() - 3 * 86400
+            freed = 0
+            if comp.is_dir():
+                for pat in ("*/Default/Cache/*", "*/Default/Code Cache/*", "*/Default/GPUCache/*",
+                            "*/Default/Service Worker/CacheStorage/*", "*/Default/DawnGraphiteCache/*"):
+                    for f in comp.glob(pat):
                         try:
-                            f.unlink()
-                            removed += 1
+                            if f.is_file() and f.stat().st_mtime < cache_cutoff:
+                                freed += f.stat().st_size
+                                f.unlink()
                         except OSError:
                             pass
-                self.log.info("housekeeping: auto-backup %s (%.1f MB), pruned stale notifications, removed %d old workspace files", name, len(data) / 1e6, removed)
-            else:
-                self.log.info("housekeeping: auto-backup %s (%.1f MB), pruned stale notifications", name, len(data) / 1e6)
+            self.log.info("housekeeping: auto-backup %s (%.1f MB), pruned notifications, removed %d workspace files, %.1f MB browser cache",
+                          name, len(data) / 1e6, removed, freed / 1e6)
         except Exception:   # never break the scheduler
             self.log.exception("housekeeping failed")
 
@@ -280,6 +344,10 @@ class Engine:
             threading.Thread(target=run_reflection, args=(self, run), daemon=True, name="reflect").start()
         if res.status == "done" and self.turns.has_unseen_user_messages(run):
             self.turns.start(run.bot_id, run.thread_id, trigger="user")
+        try:
+            self._tidy_after_turn()
+        except Exception:   # cleanup must never break a turn
+            self.log.exception("tidy after turn failed")
 
     # ------------------------------------------------------- high-level actions
     def send_user_message(self, thread_id: str, text: str, image_paths: list[str] | None = None,

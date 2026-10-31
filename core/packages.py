@@ -50,7 +50,7 @@ def export_bot(engine: "Engine", bot_id: str, include_memory: bool = False) -> b
         if include_memory:
             mem = [{"kind": m["kind"], "text": clean(m["text"])} for m in engine.memory.list(bot_id) if m["kind"] in ("role", "preference", "voice", "edge_case")]
             z.writestr("memory.json", json.dumps(mem, indent=2, ensure_ascii=False))
-        z.writestr("README.txt", "OpenGrokBot Bot package. Contains the Bot's role, skills and routines. It contains no secrets, credentials or conversations.\n"
+        z.writestr("README.txt", "ZerotheBot Bot package. Contains the Bot's role, skills and routines. It contains no secrets, credentials or conversations.\n"
                                  "Import it from Bots > Import. Review skills and routines before enabling them; grant connectors again on your own account.\n")
     return buf.getvalue()
 

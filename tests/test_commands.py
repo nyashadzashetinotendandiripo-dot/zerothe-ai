@@ -29,9 +29,10 @@ class CommandParsing(unittest.TestCase):
 class CommandRuns(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        os.environ["OPENGROKBOT_HOME"] = tempfile.mkdtemp(prefix="gbtest-cmd-")
+        os.environ["ZEROTHEBOT_HOME"] = tempfile.mkdtemp(prefix="zttest-cmd-")
         cls.eng = Engine()
         cls.eng.settings.set("notifications.toast", False)
+        cls.eng.settings.set("memory.auto_reflect", False)
         cls.fake = FakeProvider([LLMResult(text="ok")] * 20)
         cls._orig = agent_mod.make_provider
         agent_mod.make_provider = lambda *a, **k: cls.fake

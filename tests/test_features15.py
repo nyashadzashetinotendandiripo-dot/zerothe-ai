@@ -27,14 +27,14 @@ _N = __import__("itertools").count(1000)     # unique Bot names even when tests 
 
 
 def fresh_home() -> str:
-    d = tempfile.mkdtemp(prefix="gbtest-f15-")
-    os.environ["OPENGROKBOT_HOME"] = d
+    d = tempfile.mkdtemp(prefix="zttest-f15-")
+    os.environ["ZEROTHEBOT_HOME"] = d
     return d
 
 
 class FilesUnit(unittest.TestCase):
     def setUp(self):
-        self.root = Path(tempfile.mkdtemp(prefix="gbtest-files-"))
+        self.root = Path(tempfile.mkdtemp(prefix="zttest-files-"))
         (self.root / "shared").mkdir()
         (self.root / "shared" / "notes.md").write_text("# Notes\nhello", encoding="utf-8")
         (self.root / "shared" / "data.csv").write_text("a,b\n1,2\n", encoding="utf-8")
@@ -283,7 +283,7 @@ class Features(unittest.TestCase):
 
         def fetch():
             calls.append(1)
-            return {"tag_name": "v9.9.9", "html_url": "https://example.test/rel", "name": "OpenGrokBot 9.9.9"}
+            return {"tag_name": "v9.9.9", "html_url": "https://example.test/rel", "name": "ZerotheBot 9.9.9"}
         self.eng.settings.set("updates_state", {})
         u = Updates(self.eng.settings, "1.5.0", fetch)
         s = u.check()

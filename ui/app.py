@@ -7,14 +7,14 @@ from PySide6.QtCore import QObject, QThread, QTimer, Signal
 from PySide6.QtNetwork import QLocalServer, QLocalSocket
 from PySide6.QtWidgets import QApplication, QLabel, QMessageBox, QVBoxLayout, QWidget
 
-from core import secrets
+from core import APP_NAME, secrets
 from . import theme
 from .api import Api, Connection, EventThread, load_ui_config, save_ui_config, remote_token
 from .main_window import MainWindow
 from .quick_ask import GlobalHotkey
 from .store import Store
 
-SINGLE_KEY = "OpenGrokBotUI"
+SINGLE_KEY = "ZerotheBotUI"
 
 
 class ServiceStarter(QThread):
@@ -47,7 +47,7 @@ class ServiceStarter(QThread):
 class Splash(QWidget):
     def __init__(self, text: str):
         super().__init__()
-        self.setWindowTitle("OpenGrokBot")
+        self.setWindowTitle(APP_NAME)
         self.setWindowIcon(theme.app_icon())
         self.setFixedSize(360, 140)
         v = QVBoxLayout(self)
@@ -91,7 +91,7 @@ class Controller(QObject):
     def _failed(self, msg: str) -> None:
         if self.splash:
             self.splash.close()
-        QMessageBox.critical(None, "OpenGrokBot", f"Could not start the background service.\n\n{msg}")
+        QMessageBox.critical(None, APP_NAME, f"Could not start the background service.\n\n{msg}")
         self.app.quit()
 
     def _local_ready(self, host: str, port: int) -> None:
@@ -115,7 +115,7 @@ class Controller(QObject):
         try:
             d = self.api.call("GET", "/api/bootstrap")
         except Exception as e:  # noqa: BLE001
-            QMessageBox.critical(None, "OpenGrokBot", f"Could not reach the service at {conn.url}:\n\n{e}")
+            QMessageBox.critical(None, APP_NAME, f"Could not reach the service at {conn.url}:\n\n{e}")
             if conn.mode == "remote":
                 save_ui_config({**load_ui_config(), "mode": "local"})
                 self.start_local()
@@ -201,7 +201,7 @@ class Controller(QObject):
 
 def run_ui(start_hidden: bool = False) -> int:
     app = QApplication(sys.argv)
-    app.setApplicationName("OpenGrokBot")
+    app.setApplicationName(APP_NAME)
     app.setQuitOnLastWindowClosed(False)
     app.setWindowIcon(theme.app_icon())
     cfg = load_ui_config()

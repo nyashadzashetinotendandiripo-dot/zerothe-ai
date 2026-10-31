@@ -437,7 +437,7 @@ def _resumeall(c: Ctx):
 
 @command("version", "Show the app version", "/version", group="Info", aliases=("about",))
 def _version(c: Ctx):
-    return f"OpenGrokBot **{VERSION}** · up {int((time.time() - c.eng.started) // 60)} min · data in `{c.eng.status()['data_dir']}`"
+    return f"ZerotheBot **{VERSION}** · up {int((time.time() - c.eng.started) // 60)} min · data in `{c.eng.status()['data_dir']}`"
 
 
 # ------------------------------------------------------------------------------------------------ dispatch

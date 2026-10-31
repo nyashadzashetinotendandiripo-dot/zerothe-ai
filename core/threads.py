@@ -278,7 +278,7 @@ class Threads:
         g = self.db.one("SELECT name FROM groups WHERE id=?", (th.get("group_id"),)) if th.get("group_id") else None
         stamp = lambda ts: datetime.fromtimestamp(ts).strftime("%Y-%m-%d %H:%M")   # noqa: E731
         lines = [f"# {th.get('title') or 'Conversation'}", "",
-                 f"_{(g or {}).get('name') or owner.get('name', 'Bot')} · exported {stamp(now())} from OpenGrokBot_", ""]
+                 f"_{(g or {}).get('name') or owner.get('name', 'Bot')} · exported {stamp(now())} from ZerotheBot_", ""]
         for it in self.display(thread_id, 100000):
             t = it["type"]
             if t == "user":

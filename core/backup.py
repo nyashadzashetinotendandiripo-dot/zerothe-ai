@@ -1,4 +1,4 @@
-"""Back up and restore your OpenGrokBot data: Bots, conversations, memory, routines, settings and skills (and, if you
+"""Back up and restore your ZerotheBot data: Bots, conversations, memory, routines, settings and skills (and, if you
 ask, the shared workspace). Secrets in the Windows Credential Manager (API keys, the service token) are never included.
 
 Restoring is staged: the zip is checked, unpacked into a pending folder, and applied the next time the service starts,
@@ -20,8 +20,10 @@ from . import VERSION, paths
 if TYPE_CHECKING:  # pragma: no cover
     from .engine import Engine
 
-APP = "OpenGrokBot"
-DB_NAME = "opengrokbot.sqlite3"
+APP = "ZerotheBot"
+OLD_APPS = ("OpenGrokBot",)              # pre-rename backups still restore
+DB_NAME = "zerothebot.sqlite3"
+OLD_DB_NAMES = ("opengrokbot.sqlite3",)
 MAX_WORKSPACE = 300 * 1024 * 1024
 MAX_RESTORE = 600 * 1024 * 1024
 
@@ -41,7 +43,7 @@ def _files_under(root: Path):
 
 
 def create(eng: "Engine", include_workspace: bool = False) -> bytes:
-    tmp = Path(tempfile.mkdtemp(prefix="gb-backup-"))
+    tmp = Path(tempfile.mkdtemp(prefix="zt-backup-"))
     try:
         snap = tmp / DB_NAME
         dst = sqlite3.connect(snap)
@@ -83,22 +85,23 @@ def stage_restore(data: bytes) -> dict:
     try:
         manifest = json.loads(z.read("manifest.json"))
     except (KeyError, ValueError):
-        raise BackupError("That zip is not an OpenGrokBot backup (no manifest).") from None
-    if manifest.get("app") != APP:
-        raise BackupError("That zip is not an OpenGrokBot backup.")
-    if DB_NAME not in z.namelist():
+        raise BackupError(f"That zip is not a {APP} backup (no manifest).") from None
+    if manifest.get("app") not in (APP, *OLD_APPS):
+        raise BackupError(f"That zip is not a {APP} backup.")
+    db_name = next((n for n in (DB_NAME, *OLD_DB_NAMES) if n in z.namelist()), None)
+    if db_name is None:
         raise BackupError("The backup has no database in it.")
-    tmp = Path(tempfile.mkdtemp(prefix="gb-restore-"))
+    tmp = Path(tempfile.mkdtemp(prefix="zt-restore-"))
     try:
         db_file = tmp / DB_NAME
-        db_file.write_bytes(z.read(DB_NAME))
+        db_file.write_bytes(z.read(db_name))
         con = sqlite3.connect(db_file)
         try:
             if con.execute("PRAGMA integrity_check").fetchone()[0] != "ok":
                 raise BackupError("The backup's database is damaged.")
             tables = {r[0] for r in con.execute("SELECT name FROM sqlite_master WHERE type='table'")}
             if not {"bots", "threads", "messages", "settings"} <= tables:
-                raise BackupError("The backup's database does not look like OpenGrokBot's.")
+                raise BackupError(f"The backup's database does not look like {APP}'s.")
             info = {"bots": con.execute("SELECT COUNT(*) FROM bots").fetchone()[0], "threads": con.execute("SELECT COUNT(*) FROM threads").fetchone()[0],
                     "messages": con.execute("SELECT COUNT(*) FROM messages").fetchone()[0]}
         finally:

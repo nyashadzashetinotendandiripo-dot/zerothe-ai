@@ -12,7 +12,7 @@ import unittest
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-os.environ["OPENGROKBOT_HOME"] = tempfile.mkdtemp(prefix="gbtest-")
+os.environ["ZEROTHEBOT_HOME"] = tempfile.mkdtemp(prefix="zttest-")
 
 from core.db import new_id, now  # noqa: E402
 from core.engine import Engine  # noqa: E402
@@ -22,7 +22,7 @@ from core.routines import limits_block  # noqa: E402
 class PhaseBTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        os.environ["OPENGROKBOT_HOME"] = tempfile.mkdtemp(prefix="gbtest-")
+        os.environ["ZEROTHEBOT_HOME"] = tempfile.mkdtemp(prefix="zttest-")
         cls.eng = Engine()
         cls.eng.settings.set("notifications.toast", False)
         cls.eng.start()

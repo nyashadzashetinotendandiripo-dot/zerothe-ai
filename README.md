@@ -1,8 +1,8 @@
 <div align="center">
 
-<img src="assets/icon.svg" width="88" alt="OpenGrokBot logo">
+<img src="assets/icon.svg" width="88" alt="ZerotheBot logo">
 
-# OpenGrokBot
+# ZerotheBot
 
 **Named, always-on AI teammates that work on a computer of their own.**<br>
 Give a Bot a job, message it a task, and it gets on with it. It asks you only when something needs your approval.
@@ -13,7 +13,7 @@ Give a Bot a job, message it a task, and it gets on with it. It asks you only wh
 ![UI: PySide6](https://img.shields.io/badge/UI-PySide6-41CD52)
 ![Models: Anthropic + OpenAI-compatible](https://img.shields.io/badge/models-Anthropic%20%2B%20OpenAI--compatible-8A6FF7)
 
-<img src="docs/screenshots/welcome.png" width="860" alt="OpenGrokBot welcome screen">
+<img src="docs/screenshots/welcome.png" width="860" alt="ZerotheBot welcome screen">
 
 </div>
 
@@ -100,24 +100,24 @@ Chromium is about 150 MB. If you skip the `playwright install` step, the app off
 
 ```powershell
 pip install -r requirements-build.txt
-python build_exe.py --onefile    # single dist\OpenGrokBot.exe
-python build_exe.py              # folder build: dist\OpenGrokBot\OpenGrokBot.exe (starts faster)
+python build_exe.py --onefile    # single dist\ZerotheBot.exe
+python build_exe.py              # folder build: dist\ZerotheBot\ZerotheBot.exe (starts faster)
 ```
 
-The browser engine is not bundled. Run `OpenGrokBot.exe --install-browsers` once, or accept the prompt on first launch. The exe is unsigned, so Windows SmartScreen may warn on first run.
+The browser engine is not bundled. Run `ZerotheBot.exe --install-browsers` once, or accept the prompt on first launch. The exe is unsigned, so Windows SmartScreen may warn on first run.
 
 ### Build the installer
 
 ```powershell
 winget install JRSoftware.InnoSetup    # once; Inno Setup 6 is free
-python build_installer.py              # builds the app folder, then dist\OpenGrokBot-Setup-<version>.exe
+python build_installer.py              # builds the app folder, then dist\ZerotheBot-Setup-<version>.exe
 ```
 
-The installer is a normal Windows setup wizard. It installs per user (no admin prompt; all-users is available), adds Start Menu and optional desktop shortcuts, and can download Chromium during setup and start the app in the tray when you sign in. Installing a newer version over an old one keeps your Bots, memory and settings. Uninstalling removes the program and asks whether to delete your data in `%APPDATA%\OpenGrokBot`. For unattended use: `OpenGrokBot-Setup-1.6.0.exe /VERYSILENT /CURRENTUSER`, and `unins000.exe /VERYSILENT /DELETEDATA` to also remove data. The installer is unsigned, so SmartScreen may warn until you sign it with a code-signing certificate.
+The installer is a normal Windows setup wizard. It installs per user (no admin prompt; all-users is available), adds Start Menu and optional desktop shortcuts, and can download Chromium during setup and start the app in the tray when you sign in. Installing a newer version over an old one keeps your Bots, memory and settings. Uninstalling removes the program and asks whether to delete your data in `%APPDATA%\ZerotheBot`. For unattended use: `ZerotheBot-Setup-1.6.0.exe /VERYSILENT /CURRENTUSER`, and `unins000.exe /VERYSILENT /DELETEDATA` to also remove data. The installer is unsigned, so SmartScreen may warn until you sign it with a code-signing certificate.
 
 ## Recommended models
 
-OpenGrokBot works with Anthropic or any OpenAI-compatible endpoint. Bots call tools constantly, so pick a model that supports **tool calling**, and a **vision** model for Bots that browse (they work from screenshots).
+ZerotheBot works with Anthropic or any OpenAI-compatible endpoint. Bots call tools constantly, so pick a model that supports **tool calling**, and a **vision** model for Bots that browse (they work from screenshots).
 
 ### Free models on OpenRouter
 
@@ -191,8 +191,8 @@ The full guide is in **[docs/GUIDE.md](docs/GUIDE.md)**:
 
 `site/` is a static download page (no build step). To publish it:
 
-1. Attach `OpenGrokBot-Setup-<version>.exe` to a GitHub Release.
-2. Set `REPO` to `your-user/OpenGrokBot` at the top of `site/app.js`. The page then reads the latest release, points the Download buttons at the installer and shows its size and SHA-256 checksum.
+1. Attach `ZerotheBot-Setup-<version>.exe` to a GitHub Release.
+2. Set `REPO` to `your-user/ZerotheBot` at the top of `site/app.js`. The page then reads the latest release, points the Download buttons at the installer and shows its size and SHA-256 checksum.
 3. In the repo go to *Settings > Pages > Source: GitHub Actions*. The included workflow (`.github/workflows/pages.yml`) deploys `site/` on every push to `main`.
 
 To preview locally: `python -m http.server 8000 --directory site`.

@@ -164,5 +164,39 @@ class GdocsTests(unittest.TestCase):
         self.assertIn("pres456", out.text)
 
 
+class GmailClientFallbackTests(unittest.TestCase):
+    """gdocs (like calendar) uses Gmail's OAuth client when its own fields are blank."""
+
+    def _mgr(self, cfgs, toks):
+        from unittest import mock
+        from core.plugins import PluginManager, builtin_defs
+        mgr = SimpleNamespace(defs={x.id: x for x in builtin_defs()},
+                              settings=SimpleNamespace(get=lambda k, d=None: cfgs.get(k, {})))
+        import types
+        mgr.config_value = types.MethodType(PluginManager.config_value, mgr)
+        mgr.configured = types.MethodType(PluginManager.configured, mgr)
+        return mgr, mock.patch("core.secrets.get_secret", lambda name: toks.get(name))
+
+    def test_gdocs_configured_via_gmail_client(self):
+        mgr, sec = self._mgr({"plugin_cfg.gmail": {"client_id": "x.apps.googleusercontent.com"}},
+                             {"plugin:gmail:client_secret": "s", "plugin:gmail:refresh_token": "t",
+                              "plugin:gdocs:refresh_token": "t", "plugin:google_calendar:refresh_token": "t"})
+        with sec:
+            self.assertTrue(mgr.configured("gdocs"))
+            self.assertTrue(mgr.configured("google_calendar"))
+            self.assertTrue(mgr.configured("gmail"))
+
+    def test_gdocs_not_configured_without_any_client(self):
+        mgr, sec = self._mgr({}, {"plugin:gdocs:refresh_token": "t"})
+        with sec:
+            self.assertFalse(mgr.configured("gdocs"))
+
+    def test_gdocs_not_configured_without_signin(self):
+        mgr, sec = self._mgr({"plugin_cfg.gmail": {"client_id": "x.apps.googleusercontent.com"}},
+                             {"plugin:gmail:client_secret": "s", "plugin:gmail:refresh_token": "t"})
+        with sec:
+            self.assertFalse(mgr.configured("gdocs"))
+
+
 if __name__ == "__main__":
     unittest.main()

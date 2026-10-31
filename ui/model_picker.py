@@ -69,6 +69,14 @@ class ModelPicker(QWidget):
     def invalidate(self) -> None:
         _CACHE.pop((self.api.conn.base, self.pid), None)
 
+    def take_models(self, models: list[str]) -> None:
+        """Use a model list detected elsewhere (e.g. by the full Test) instead of fetching again."""
+        if not models:
+            return                      # keep whatever is already shown
+        if self.pid:
+            _CACHE[(self.api.conn.base, self.pid)] = list(models)
+        self._fill(list(models), self.text())
+
     def detect(self, silent: bool = False) -> None:
         pid, gen = self.pid, self._gen
         if not pid:

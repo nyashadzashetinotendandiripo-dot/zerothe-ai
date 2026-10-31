@@ -1,4 +1,4 @@
-# OpenGrokBot guide
+# ZerotheBot guide
 
 Full documentation. Back to the [project README](../README.md).
 
@@ -62,7 +62,7 @@ For a team: tell the **Chief of Staff** *"Triage my inbox daily, track receipts,
 
 ## How it works
 
-**One computer per account.** All your Bots share one persistent computer: a Chromium profile (cookies, app logins), a filesystem workspace (`%APPDATA%\OpenGrokBot\workspace`) and a terminal. Handoffs work without repeating setup. *Everything on it is available to every Bot*, and the app says so. Each Bot gets its **own screen** (a tab) on it; a Bot runs one computer-use task on its screen at a time, while different Bots run in parallel.
+**One computer per account.** All your Bots share one persistent computer: a Chromium profile (cookies, app logins), a filesystem workspace (`%APPDATA%\ZerotheBot\workspace`) and a terminal. Handoffs work without repeating setup. *Everything on it is available to every Bot*, and the app says so. Each Bot gets its **own screen** (a tab) on it; a Bot runs one computer-use task on its screen at a time, while different Bots run in parallel.
 
 **Computer use.** Bots use connectors and MCP tools where available, and the browser for everything else: numbered-element snapshots, screenshots (shown inline in chat), clicking, typing, scrolling. If a site blocks automation, a session expires, or a CAPTCHA/2FA/login appears, the Bot **hands the step to you** and never tries to work around it. **Take over** opens the Bot's browser like a remote desktop; press *Hand back* when done. Passwords are never typed by Bots.
 
@@ -74,7 +74,7 @@ For a team: tell the **Chief of Staff** *"Triage my inbox daily, track receipts,
 
 ## Writing skills
 
-Skills are markdown files in `%APPDATA%\OpenGrokBot\skills`, editable in the **Skills** page. Starter skills are copied there on first run.
+Skills are markdown files in `%APPDATA%\ZerotheBot\skills`, editable in the **Skills** page. Starter skills are copied there on first run.
 
 ```markdown
 ---
@@ -188,12 +188,12 @@ It installs Python if needed, the headless dependencies and Chromium, prints an 
 **Docker host:**
 
 ```bash
-export OPENGROKBOT_TOKEN=$(openssl rand -hex 32)
+export ZEROTHEBOT_TOKEN=$(openssl rand -hex 32)
 export ANTHROPIC_API_KEY=sk-ant-...
 docker compose -f deploy/docker-compose.yml up -d --build
 ```
 
-Containers have no credential manager, so provider keys come from environment variables (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `OPENROUTER_API_KEY`, `GROQ_API_KEY`, or `OPENGROKBOT_SECRET_<NAME>`). The compose file binds to localhost; reach it with an SSH tunnel (`ssh -L 8765:127.0.0.1:8765 you@host`), a VPN such as Tailscale, or a TLS reverse proxy.
+Containers have no credential manager, so provider keys come from environment variables (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `OPENROUTER_API_KEY`, `GROQ_API_KEY`, or `ZEROTHEBOT_SECRET_<NAME>`). The compose file binds to localhost; reach it with an SSH tunnel (`ssh -L 8765:127.0.0.1:8765 you@host`), a VPN such as Tailscale, or a TLS reverse proxy.
 
 **Connect:** *Settings > Computer > Remote*, enter `http://<host>:8765` and the token, **Test and switch**. Use **Take over** to log in to sites on the remote browser once; the logins persist there.
 
@@ -203,7 +203,7 @@ Containers have no credential manager, so provider keys come from environment va
 
 ## Administration presets
 
-Place a JSON file at `%PROGRAMDATA%\OpenGrokBot\admin.json` (or point `OPENGROKBOT_ADMIN` at it) to preset a managed deployment. See `admin-settings.example.json`:
+Place a JSON file at `%PROGRAMDATA%\ZerotheBot\admin.json` (or point `ZEROTHEBOT_ADMIN` at it) to preset a managed deployment. See `admin-settings.example.json`:
 
 * `network_policy` (mode, allow, deny, `locked`), `approval_defaults` (mode, `locked`, `always_ask_categories`)
 * `allowed_plugins`, `allowed_mcp_servers`, `allowed_providers`, `allow_plugin_install`, `allow_remote_mode`
@@ -215,15 +215,15 @@ Locked settings are enforced by the service, and the UI shows *managed by your o
 
 ```powershell
 pip install -r requirements-build.txt
-python build_exe.py            # dist\OpenGrokBot\OpenGrokBot.exe
-python build_exe.py --onefile  # single dist\OpenGrokBot.exe (slower to start)
+python build_exe.py            # dist\ZerotheBot\ZerotheBot.exe
+python build_exe.py --onefile  # single dist\ZerotheBot.exe (slower to start)
 ```
 
-The browser engine is not bundled: the exe offers to download it on first run, or run `OpenGrokBot.exe --install-browsers`. The exe starts its own background service with `OpenGrokBot.exe --service`.
+The browser engine is not bundled: the exe offers to download it on first run, or run `ZerotheBot.exe --install-browsers`. The exe starts its own background service with `ZerotheBot.exe --service`.
 
 ## Data locations
 
-`%APPDATA%\OpenGrokBot` (override with `OPENGROKBOT_HOME`): `opengrokbot.sqlite3`, `workspace\`, `computer\browser-profile\`, `skills\`, `plugins\`, `logs\`. Secrets are not in this folder.
+`%APPDATA%\ZerotheBot` (override with `ZEROTHEBOT_HOME`): `zerothebot.sqlite3`, `workspace\`, `computer\browser-profile\`, `skills\`, `plugins\`, `logs\`. Secrets are not in this folder.
 
 ## Tests
 

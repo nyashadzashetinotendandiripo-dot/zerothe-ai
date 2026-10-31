@@ -16,3 +16,4 @@ service_token.txt
 phone-watch.log
 *.bundle
 wheels/
+dist-ota/

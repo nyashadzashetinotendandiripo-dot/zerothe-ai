@@ -251,7 +251,15 @@ def create_app(engine: Engine, token: str) -> FastAPI:
     # ----------------------------------------------------------------- bots
     @app.get("/api/bots", dependencies=[api])
     def bots_list() -> list[dict]:
-        return eng.bots.list()
+        rows = eng.bots.list()
+        # Include the main thread id so the phone can open a chat instantly
+        # instead of waiting for a second round-trip before the screen appears.
+        for b in rows:
+            try:
+                b["thread_id"] = eng.threads.main_thread(b["id"])["id"]
+            except Exception:
+                b["thread_id"] = ""
+        return rows
 
     @app.post("/api/bots", dependencies=[api])
     def bots_create(body: dict = Body(...)) -> dict:
@@ -368,15 +376,37 @@ def create_app(engine: Engine, token: str) -> FastAPI:
         # five minutes, fire-and-forget, never blocks the send).
         host_mod.lease_soon(900)
         paths_: list[str] = []
+        notes: list[str] = []
         for im in (body.get("images") or [])[:6]:
             raw = base64.b64decode(im.get("data", ""))
-            if len(raw) > 8 * 1024 * 1024:
-                raise ValueError("Image is too large (max 8 MB).")
-            ext = ".jpg" if raw[:3] == b"\xff\xd8\xff" else ".png"
-            p = paths.screenshots_dir() / f"upload-{int(time.time() * 1000)}{ext}"
-            p.write_bytes(raw)
-            paths_.append(str(p))
-        return eng.send_user_message(tid, body.get("text", ""), paths_, parent_id=int(body.get("parent_id") or 0))
+            if len(raw) > 12 * 1024 * 1024:
+                raise ValueError("Attachment is too large (max 12 MB).")
+            name = re.sub(r"[^A-Za-z0-9._ -]", "_", str(im.get("name") or "")).strip()[:80]
+            mime = str(im.get("type") or "").lower()
+            is_image = (mime.startswith("image/") or raw[:3] == b"\xff\xd8\xff"
+                        or raw[:8] == b"\x89PNG\r\n\x1a\n" or mime in ("", "application/octet-stream") and raw[:4] == b"GIF8")
+            if is_image:
+                ext = ".png" if (mime == "image/png" or raw[:8] == b"\x89PNG\r\n\x1a\n") else ".jpg"
+                p = paths.screenshots_dir() / f"upload-{int(time.time() * 1000)}-{len(paths_)}{ext}"
+                p.write_bytes(raw)
+                paths_.append(str(p))
+            else:
+                # Any other file (PDF, docx, zip…) goes into the shared workspace so
+                # the Bot can open it with its normal file tools instead of trying
+                # to decode it as an image.
+                d = paths.workspace_dir() / "shared" / "uploads"
+                d.mkdir(parents=True, exist_ok=True)
+                base = os.path.splitext(name)[0] or "file"
+                ext = os.path.splitext(name)[1][:12] or ""
+                p = d / f"{base[:60]}-{int(time.time() * 1000)}{ext}"
+                p.write_bytes(raw)
+                rel = p.relative_to(paths.workspace_dir()).as_posix()
+                notes.append(f"[Attached file saved to {rel} - open it with read_file, "
+                             "or use python_run for binary formats.]")
+        text = body.get("text", "")
+        if notes:
+            text = (text + "\n\n" if text.strip() else "") + "\n".join(notes)
+        return eng.send_user_message(tid, text, paths_, parent_id=int(body.get("parent_id") or 0))
 
     @app.post("/api/bots/pause_all", dependencies=[api])
     def bots_pause_all(body: dict = Body(default={})) -> dict:
@@ -1336,6 +1366,23 @@ google.accounts.id.renderButton(document.getElementById('gbtn'),
     def host_desktop_revoke() -> dict:
         try:
             return host_mod.desktop_revoke()
+        except host_mod.HostError as e:
+            raise HTTPException(400, str(e))
+
+    @app.post("/api/host/type", dependencies=[api])
+    def host_type(body: dict = Body(default={})) -> dict:
+        """Type into the focused desktop window (phone live view fallback)."""
+        try:
+            return host_mod.desktop_type(str(body.get("text") or ""), bool(body.get("enter")),
+                                         int(body.get("delayMs") or 18))
+        except host_mod.HostError as e:
+            raise HTTPException(400, str(e))
+
+    @app.post("/api/host/key", dependencies=[api])
+    def host_key(body: dict = Body(default={})) -> dict:
+        """Press one key (Return, Tab, Escape, ctrl+a...) on the desktop."""
+        try:
+            return host_mod.desktop_key(str(body.get("key") or ""))
         except host_mod.HostError as e:
             raise HTTPException(400, str(e))
 

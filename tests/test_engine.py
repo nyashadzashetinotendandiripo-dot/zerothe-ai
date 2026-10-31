@@ -11,8 +11,8 @@ import unittest
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-_HOME = tempfile.mkdtemp(prefix="gbtest-")
-os.environ["OPENGROKBOT_HOME"] = _HOME
+_HOME = tempfile.mkdtemp(prefix="zttest-")
+os.environ["ZEROTHEBOT_HOME"] = _HOME
 
 from core import agent as agent_mod  # noqa: E402
 from core.engine import Engine  # noqa: E402
@@ -52,9 +52,10 @@ def wait_for(cond, timeout=20.0):
 class EngineTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        os.environ["OPENGROKBOT_HOME"] = tempfile.mkdtemp(prefix="gbtest-")   # isolated data dir per test class
+        os.environ["ZEROTHEBOT_HOME"] = tempfile.mkdtemp(prefix="zttest-")   # isolated data dir per test class
         cls.eng = Engine()
         cls.eng.settings.set("notifications.toast", False)
+        cls.eng.settings.set("memory.auto_reflect", False)   # reflection runs detached after is_busy=false and would steal scripted calls
         cls.eng.start()
 
     @classmethod
@@ -77,6 +78,7 @@ class EngineTests(unittest.TestCase):
         self.eng.send_user_message(th["id"], text)
         self.assertTrue(wait_for(lambda: not self.eng.turns.is_busy(bot["id"])), "turn did not finish")
         time.sleep(0.2)
+        self.assertTrue(wait_for(lambda: not self.eng.turns.is_busy(bot["id"]), 10), "turn restarted after finishing")
 
     def test_tool_loop_files_memory_and_log(self):
         bot, th = self.new_bot("Writer")
@@ -174,6 +176,10 @@ class EngineTests(unittest.TestCase):
         self.assertTrue(wait_for(lambda: not self.eng.turns.is_busy(chief["id"])
                                  and not self.eng.turns.is_busy(helper["id"])),
                         "group turns should finish before the test returns")
+        time.sleep(0.4)   # settle: on_turn_end may still restart a Bot on unseen messages
+        self.assertTrue(wait_for(lambda: not self.eng.turns.is_busy(chief["id"])
+                                 and not self.eng.turns.is_busy(helper["id"]), 10),
+                        "a group turn restarted after finishing")
 
     def test_export_import_roundtrip_has_no_secrets(self):
         from core import packages

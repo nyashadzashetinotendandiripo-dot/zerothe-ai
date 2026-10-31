@@ -224,6 +224,20 @@ function ZbRoot() {
   }, [signed, onEvent]);
 
   const openBot = async (bot) => {
+    // Open the chat immediately: the bot list already carries the main thread
+    // id, so the screen appears at once instead of after a second round-trip.
+    if (bot && bot.thread_id) {
+      setChat({ bot, threadId: bot.thread_id, threads: [] });
+      pushScreen('chat');
+      try {
+        const rows = await api('/api/bots/' + bot.id + '/threads');
+        const main = rows.find((r) => r.main) || rows[0];
+        setChat((c) => (c && c.bot && c.bot.id === bot.id
+          ? { bot, threadId: (main && main.id) || c.threadId, threads: rows }
+          : c));
+      } catch (e) { /* the chat still works with the thread id we already had */ }
+      return;
+    }
     try {
       const rows = await api('/api/bots/' + bot.id + '/threads');
       const main = rows.find((r) => r.main) || rows[0];
@@ -263,7 +277,7 @@ function ZbRoot() {
 
   // Chats tab: most recent chat, else the first Bot's main thread
   const openChatTab = useCallback(() => {
-    if (chat) pushScreen('chat');
+    if (chat && chat.threadId) pushScreen('chat');
     else if (bots.length) openBot(bots[0]);
     else pushScreen('home');
   }, [chat, bots, openBot]);

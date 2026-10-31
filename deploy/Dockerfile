@@ -2,7 +2,7 @@
 #   docker compose -f deploy/docker-compose.yml up -d --build
 FROM python:3.11-slim
 
-ENV PYTHONUNBUFFERED=1 PIP_NO_CACHE_DIR=1 OPENGROKBOT_HOME=/data PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
+ENV PYTHONUNBUFFERED=1 PIP_NO_CACHE_DIR=1 ZEROTHEBOT_HOME=/data PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
 
 RUN apt-get update && apt-get install -y --no-install-recommends git ca-certificates && rm -rf /var/lib/apt/lists/*
 
@@ -23,6 +23,6 @@ USER bots
 VOLUME /data
 EXPOSE 8765
 
-# The access token MUST be supplied (OPENGROKBOT_TOKEN). Provider keys come from environment variables
+# The access token MUST be supplied (ZEROTHEBOT_TOKEN). Provider keys come from environment variables
 # (ANTHROPIC_API_KEY, OPENAI_API_KEY, ...) because a headless container has no credential manager.
 CMD ["python", "main.py", "--service", "--host", "0.0.0.0", "--port", "8765"]

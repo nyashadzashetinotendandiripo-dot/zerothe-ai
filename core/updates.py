@@ -23,7 +23,7 @@ def is_newer(latest: str, current: str) -> bool:
 
 def _fetch() -> dict:
     import httpx
-    r = httpx.get(API, headers={"Accept": "application/vnd.github+json", "User-Agent": "opengrokbot-update-check"}, timeout=8.0, follow_redirects=True)
+    r = httpx.get(API, headers={"Accept": "application/vnd.github+json", "User-Agent": "zerothebot-update-check"}, timeout=8.0, follow_redirects=True)
     r.raise_for_status()
     return r.json()
 

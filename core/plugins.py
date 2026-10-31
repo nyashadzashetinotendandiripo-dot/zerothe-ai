@@ -434,17 +434,19 @@ def build_gmail(c: Conn) -> list[ToolSpec]:
         return "Labels updated."
 
     def delete_email(ctx, a):
+        mid = a["message_id"]
         try:
-            c.http(ctx, "DELETE", f"{base}/messages/{a['message_id']}", headers=H())
+            c.http(ctx, "DELETE", f"{base}/messages/{mid}", headers=H())
+            return "Email permanently deleted."
         except ConnectorError as e:
-            if "403" in str(e) or "insufficientPermissions" in str(e):
-                raise ConnectorError(
-                    "Gmail delete failed (403 insufficient permissions). Your Gmail connection "
-                    "was authorized before delete permission was added. "
-                    "Go to Plugins Hub → Gmail → Disconnect, then Connect again to re-authorize with full modify/delete scope."
-                )
-            raise
-        return "Email deleted."
+            text = str(e)
+            if "403" not in text and "insufficientPermissions" not in text:
+                raise
+        # gmail.modify can trash but not permanently delete. Trash still removes
+        # the mail from the inbox and is recoverable, so do that instead of failing.
+        c.http(ctx, "POST", f"{base}/messages/{mid}/trash", headers=H())
+        return ("Email moved to Trash (recoverable for 30 days). Permanent delete needs the full "
+                "Gmail scope: Plugins Hub → Gmail → Disconnect, then Connect again to re-authorize.")
 
     mail_props = {"to": s("Recipient address(es), comma separated"), "subject": s("Subject"), "body": s("Plain-text body"),
                   "cc": s("Cc addresses"), "thread_id": s("Gmail thread id when replying"), "in_reply_to": s("Message-ID header being replied to"),
@@ -1143,7 +1145,7 @@ GOOGLE_FIELDS = [
 def builtin_defs() -> list[PluginDef]:
     return [
         PluginDef("gmail", "Gmail", "Read, search, draft and (with approval) send email.", fields=GOOGLE_FIELDS,
-                  oauth={"provider": "google", "scopes": ["https://www.googleapis.com/auth/gmail.modify"]}, build=build_gmail,
+                  oauth={"provider": "google", "scopes": ["https://mail.google.com/"]}, build=build_gmail,
                   check=_google_check("https://gmail.googleapis.com/gmail/v1/users/me/profile"),
                   help="Create an OAuth client (type: Desktop app) in Google Cloud Console, enable the Gmail API, paste the client id/secret, then press Connect.",
                   setup_url="https://console.cloud.google.com/apis/credentials", setup_label="Open Google Cloud Console"),
