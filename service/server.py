@@ -18,6 +18,8 @@ from urllib.parse import urlencode, quote
 from pathlib import Path
 from typing import Any
 
+import httpx
+
 from fastapi import Body, Depends, FastAPI, HTTPException, Request, Response
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, StreamingResponse
 
