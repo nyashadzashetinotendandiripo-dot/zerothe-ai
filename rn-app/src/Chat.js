@@ -1,13 +1,13 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { View, Text, TextInput, Pressable, FlatList, StyleSheet, KeyboardAvoidingView, Platform, Image, ActivityIndicator, ScrollView, Clipboard } from 'react-native';
+import { View, Text, TextInput, Pressable, FlatList, StyleSheet, KeyboardAvoidingView, Platform, Image, ActivityIndicator, ScrollView, Clipboard, Alert } from 'react-native';
 import { WebView } from 'react-native-webview';
 import { api, API_BASE } from './session';
 import md from './md';
 import { aiBody, uiPlain, uiStreamText } from './widgets';
 import { breadcrumb, note, noteOnce } from './diag';
 import * as ImagePicker from 'expo-image-picker';
-import * as FileSystem from 'expo-file-system';
+import * as FileSystem from 'expo-file-system/legacy';
 
 // Grok-style chat: near-black canvas, assistant answers as plain full-width text,
 // user messages as compact right-aligned bubbles, floating pill composer.
@@ -244,28 +244,28 @@ function ChatScreen({ thread, threads, botName: propsBotName, onSwitch, onBack, 
 
   const pickImage = async () => {
     try {
-      const perm = await ImagePicker.getCameraPermissionsAsync();
-      if (perm.granted !== true) {
-        const r = await ImagePicker.requestCameraPermissionsAsync();
-        if (r.granted !== true) return;
-      }
       const result = await ImagePicker.launchImageLibraryAsync({
-        mediaTypes: ImagePicker.MediaTypeOptions.All,
+        mediaTypes: ['images', 'videos'],
         allowsMultipleSelection: true,
         maxResults: 5,
         quality: 0.7,
       });
       if (!result.canceled && result.assets) {
         const next = [];
+        let failed = 0;
         for (const a of result.assets) {
           try {
             const b64 = await FileSystem.readAsStringAsync(a.uri, { encoding: FileSystem.EncodingType.Base64 });
             next.push({ data: b64, type: a.mimeType || 'image/jpeg', name: a.fileName || 'file' });
-          } catch (e) { /* skip unreadable */ }
+          } catch (e) { failed += 1; note('upload', e, 'read attachment'); }
         }
-        setAttachments((prev) => [...prev, ...next]);
+        if (next.length) setAttachments((prev) => [...prev, ...next]);
+        if (failed) Alert.alert('Could not add file', failed + ' file(s) could not be read. Try a different file.');
       }
-    } catch (e) { note('upload', e, 'image picker'); }
+    } catch (e) {
+      note('upload', e, 'image picker');
+      Alert.alert('Could not open files', (e && e.message) || 'The file picker failed to open.');
+    }
   };
 
   const send = async () => {
