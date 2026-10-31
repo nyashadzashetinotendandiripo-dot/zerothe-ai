@@ -8,7 +8,9 @@ from __future__ import annotations
 
 import asyncio
 import concurrent.futures
+import math
 import os
+import random
 import re
 import threading
 import time
@@ -103,19 +105,90 @@ RECORDER_JS = r"""
 })();
 """
 
-# Un-flag the Playwright automation basics. Runs before any page script.
-# Keep it minimal and honest-per-domain (no fake fingerprints): Cloudflare/imperva
-# score obvious lies harsher than the defaults they patch.
+# Un-flag the Playwright automation basics + full fingerprint stealth.
+# Runs before any page script. Patches the signals anti-bot systems check first.
 STEALTH_JS = r"""
 (() => {
   try { Object.defineProperty(navigator, 'webdriver', {get: () => undefined}); } catch (e) {}
   try { if (!window.chrome) window.chrome = {runtime: {}}; } catch (e) {}
   try {
     Object.defineProperty(navigator, 'languages', {get: () => ['en-US', 'en']});
-    Object.defineProperty(navigator, 'plugins', {get: () => [{name: 'PDF Viewer'}, {name: 'Chrome PDF Viewer'}]});
+    Object.defineProperty(navigator, 'plugins', {get: () => [
+      {name: 'PDF Viewer', filename: 'internal-pdf-viewer', description: 'Portable Document Format'},
+      {name: 'Chrome PDF Viewer', filename: 'internal-pdf-viewer', description: 'Portable Document Format'},
+      {name: 'Native Client', filename: 'internal-nacl-plugin', description: 'Native Client Executable'}
+    ]});
+  } catch (e) {}
+  try {
+    Object.defineProperty(navigator, 'permissions', {get: () => ({query: () => Promise.resolve({state: 'granted'})})});
+  } catch (e) {}
+  try {
+    const getParameter = WebGLRenderingContext.prototype.getParameter;
+    WebGLRenderingContext.prototype.getParameter = function(a) {
+      if (a === 37445) return 'Intel Inc.';
+      if (a === 37446) return 'Intel Iris OpenGL Engine';
+      return getParameter.call(this, a);
+    };
+  } catch (e) {}
+  try {
+    Object.defineProperty(navigator, 'deviceMemory', {get: () => 8});
+    Object.defineProperty(navigator, 'hardwareConcurrency', {get: () => 8});
   } catch (e) {}
 })();
 """
+
+# Human-like behavior helpers -------------------------------------------------
+
+async def _human_type(page, text: str, delay_min: float = 0.05, delay_max: float = 0.3) -> None:
+    """Type character by character with human-like variance between keystrokes.
+
+    WhatsApp (and most anti-spam systems) can detect metronomic typing. This
+    types each character with a random pause, plus occasional longer 'thinking'
+    pauses, so the timing looks like a real person at the keyboard.
+    """
+    for ch in text:
+        await page.keyboard.type(ch, delay=0)
+        await asyncio.sleep(random.uniform(delay_min, delay_max))
+        if random.random() < 0.08:  # occasional longer pause (thinking)
+            await asyncio.sleep(random.uniform(0.5, 2.0))
+
+
+async def _human_click(page, x: float, y: float) -> None:
+    """Click with a bezier-curve mouse movement + micro-jitter.
+
+    Real humans don't teleport the cursor to exact coordinates and click instantly;
+    they move along a curved path with small corrections. This makes the click
+    look like a human operated the mouse.
+    """
+    # Approximate current mouse position (Playwright doesn't expose it directly;
+    # start from a sensible default and curve toward the target).
+    cur_x, cur_y = 400.0, 300.0
+    cp1x = cur_x + random.uniform(-120, 120)
+    cp1y = cur_y + random.uniform(-120, 120)
+    cp2x = x + random.uniform(-60, 60)
+    cp2y = y + random.uniform(-60, 60)
+
+    steps = random.randint(8, 16)
+    for i in range(steps + 1):
+        t = i / steps
+        # Cubic bezier interpolation
+        bx = ((1 - t) ** 3 * cur_x
+              + 3 * (1 - t) ** 2 * t * cp1x
+              + 3 * (1 - t) * t ** 2 * cp2x
+              + t ** 3 * x)
+        by = ((1 - t) ** 3 * cur_y
+              + 3 * (1 - t) ** 2 * t * cp1y
+              + 3 * (1 - t) * t ** 2 * cp2y
+              + t ** 3 * y)
+        # Micro-jitter so the path isn't mathematically perfect
+        bx += random.uniform(-2, 2)
+        by += random.uniform(-2, 2)
+        await page.mouse.move(bx, by)
+        await asyncio.sleep(random.uniform(0.008, 0.025))
+
+    await page.mouse.click(x, y)
+    await asyncio.sleep(random.uniform(0.1, 0.4))
+
 
 BLOCK_MARKERS = [
     ("captcha", "a CAPTCHA"), ("verify you are human", "a human-verification check"), ("are you a robot", "a bot check"),
@@ -371,8 +444,9 @@ class Screen:
             if element:
                 loc = page.locator(f'[data-gb-id="{int(element)}"]').first
                 await loc.click(timeout=8000, click_count=2 if double else 1, button="right" if right else "left")
+                await asyncio.sleep(random.uniform(0.1, 0.4))
             elif x is not None and y is not None:
-                await page.mouse.click(x, y, click_count=2 if double else 1, button="right" if right else "left")
+                    await _human_click(page, x, y)
             else:
                 raise BrowserError("Provide element (from browser_snapshot) or x and y.")
         except BrowserError:
@@ -396,7 +470,7 @@ class Screen:
                 if clear:
                     await page.keyboard.press("Control+A")
                     await page.keyboard.press("Delete")
-            await page.keyboard.type(text, delay=8)
+                await _human_type(page, text)
             if submit:
                 await page.keyboard.press("Enter")
         except Exception as e:  # noqa: BLE001
@@ -624,13 +698,22 @@ class BrowserHost:
             # renders some modern pages blank); channel="chrome" = the PC's installed Google Chrome,
             # same version sites expect, sharing the same persistent profile (logins carry over).
             launch_kw: dict[str, Any] = dict(
-                headless=bool(comp.get("headless", True)),
+                headless=bool(comp.get("headless", False)),
                 viewport={"width": int(comp.get("viewport_w", 1280)), "height": int(comp.get("viewport_h", 800))},
                 # Sites nag headless user-agents to "update Chrome" (the bundled build is current):
                 # identify as ordinary desktop Chrome so pages render and behave normally.
-                user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/153.0.0.0 Safari/537.36",
-                accept_downloads=True, locale="en-US", channel="chrome" if which == "chrome" else "chromium")
-            # Optional egress route for hostile ecosystems (residential gateway when the
+                user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+                accept_downloads=True, locale="en-US", channel="chrome" if which == "chrome" else "chromium",
+                args=[
+                    "--disable-blink-features=AutomationControlled",
+                    "--disable-features=IsolateOrigins,site-per-process",
+                    "--disable-dev-shm-usage",
+                    "--no-first-run",
+                    "--no-default-browser-check",
+                    "--disable-accelerated-2d-canvas",
+                ],
+            )
+            # Optional egress route for hostile ecosystems
             # host IP is a datacenter pool): settings -> computer.proxy = "http://host:port".
             proxy_url = str(comp.get("proxy") or "").strip()
             if proxy_url:
