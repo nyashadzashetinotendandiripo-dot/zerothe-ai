@@ -1205,6 +1205,14 @@ google.accounts.id.renderButton(document.getElementById('gbtn'),
         mcp_id is the server name (e.g. "quickbooks"). The port is resolved
         from MCP_PROXY_PORTS env var: a JSON map like {"quickbooks": 3333}.
         """
+        try:
+            return await _mcp_proxy_inner(request, mcp_id)
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
+            raise HTTPException(500, f"Proxy error: {type(e).__name__}: {e}")
+
+    async def _mcp_proxy_inner(request: Request, mcp_id: str):
         import json as _json
         ports_raw = os.environ.get("MCP_PROXY_PORTS", "{}")
         try:
@@ -1226,22 +1234,15 @@ google.accounts.id.renderButton(document.getElementById('gbtn'),
         for h in ("host", "content-length", "connection"):
             headers.pop(h, None)
 
-        try:
-            async with httpx.AsyncClient() as client:
-                resp = await client.request(
-                    request.method,
-                    target_url,
-                    content=body,
-                    headers=headers,
-                    params=request.query_params,
-                    timeout=60.0,
-                )
-        except httpx.ConnectError as e:
-            raise HTTPException(502, f"MCP server '{mcp_id}' not reachable on port {port}: {e}")
-        except httpx.TimeoutException as e:
-            raise HTTPException(504, f"MCP server '{mcp_id}' timed out: {e}")
-        except Exception as e:
-            raise HTTPException(500, f"Proxy error: {type(e).__name__}: {e}")
+        async with httpx.AsyncClient() as client:
+            resp = await client.request(
+                request.method,
+                target_url,
+                content=body,
+                headers=headers,
+                params=request.query_params,
+                timeout=60.0,
+            )
 
         response_headers = dict(resp.headers)
         for h in ("content-length", "connection", "transfer-encoding"):
