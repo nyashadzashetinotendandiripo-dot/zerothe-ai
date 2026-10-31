@@ -1233,7 +1233,7 @@ google.accounts.id.renderButton(document.getElementById('gbtn'),
         body = await request.body()
 
         # Use curl subprocess for reliable MCP SSE proxying
-        import subprocess
+        import asyncio
         cmd = [
             "curl", "-s", "-X", request.method,
             "-H", "Content-Type: application/json",
@@ -1245,10 +1245,15 @@ google.accounts.id.renderButton(document.getElementById('gbtn'),
         cmd.append(target_url)
 
         try:
-            result = subprocess.run(cmd, capture_output=True, timeout=60)
-            resp_data = result.stdout
-            status = result.returncode if result.returncode == 0 else 500
-        except subprocess.TimeoutExpired:
+            proc = await asyncio.create_subprocess_exec(
+                *cmd,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=60)
+            resp_data = stdout
+            status = proc.returncode if proc.returncode == 0 else 500
+        except asyncio.TimeoutExpired:
             raise HTTPException(504, f"MCP server '{mcp_id}' timed out")
         except Exception as e:
             raise HTTPException(500, f"Proxy error: {type(e).__name__}: {e}")
