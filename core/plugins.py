@@ -1349,7 +1349,44 @@ class PluginManager:
         self.reload()
 
     # -- registry -------------------------------------------------------------
+    def _sync_bundled_plugins(self) -> None:
+        """Copy newer bundled plugin files over stale copies in the data dir.
+
+        Deploys used to leave the installed copy untouched, so tools that
+        shipped in the repo never appeared in the running app. A bundled file
+        only wins when it is newer than the installed one, so edits made on
+        the box after a deploy are preserved.
+        """
+        root = paths.resource_root() / "plugins"
+        dest_root = paths.plugins_dir()
+        if not root.is_dir() or not dest_root.is_dir():
+            return
+        for src_dir in sorted(root.iterdir()):
+            mf = src_dir / "plugin.json"
+            if not mf.is_file():
+                continue
+            try:
+                m = json.loads(mf.read_text(encoding="utf-8"))
+                pid = re.sub(r"[^a-z0-9_-]", "-", str(m.get("id", "")).lower())
+                dest = dest_root / pid
+                if not pid or not dest.is_dir():
+                    continue
+                changed = False
+                for f in src_dir.iterdir():
+                    if not f.is_file() or f.suffix not in {".py", ".json", ".md", ".txt"}:
+                        continue
+                    target = dest / f.name
+                    if not target.is_file() or f.stat().st_mtime > target.stat().st_mtime + 1:
+                        shutil.copy2(f, target)
+                        changed = True
+                if changed:
+                    shutil.rmtree(dest / "__pycache__", ignore_errors=True)
+                    self.engine.log.info("Synced bundled plugin %s from %s", pid, src_dir)
+            except Exception as e:  # noqa: BLE001
+                self.engine.log.warning("Could not sync bundled plugin %s: %s", src_dir.name, e)
+
     def reload(self) -> None:
+        self._sync_bundled_plugins()
         defs = {d.id: d for d in builtin_defs()}
         for cfg in self.settings.get("rest_connectors", []) or []:
             d = rest_def(cfg)
