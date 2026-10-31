@@ -28,7 +28,8 @@ class ToolResult:
     """
     text: str = ""
     data: str = ""
-    images: list[str] = field(default_factory=list)   # file paths
+    images: list[str] = field(default_factory=list)   # file paths (images)
+    files: list[dict] = field(default_factory=list)   # file attachments: [{"path","name","size","mime"}]
     is_error: bool = False
     url: str = ""
     path: str = ""

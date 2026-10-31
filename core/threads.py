@@ -248,7 +248,8 @@ class Threads:
                         ui = blk.get("ui") or {}
                         it = tools.get(blk["tool_use_id"])
                         patch = {"status": ui.get("status", "error" if blk.get("is_error") else "ok"), "summary": ui.get("summary", ""),
-                                 "images": [os.path.basename(p) for p in ui.get("images", [])], "duration_ms": ui.get("duration_ms", 0),
+                                 "images": [os.path.basename(p) for p in ui.get("images", [])],
+                                 "files": ui.get("files") or [], "duration_ms": ui.get("duration_ms", 0),
                                  "url": ui.get("url", ""), "result_id": r["id"]}
                         if it is not None:
                             it.update(patch)

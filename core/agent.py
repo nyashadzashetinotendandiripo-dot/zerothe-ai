@@ -563,7 +563,7 @@ class AgentRun:
         eng.actions.record(bot_id=self.bot_id, thread_id=self.thread_id, turn_id=self.id, tool=tc.name, args=args, result=r.text or r.data[:300],
                            status=status, category=category, url=url, path=r.path or str(args.get("path", "")), duration_ms=dur)
         return {"type": "tool_result", "tool_use_id": tc.id, "content": content, "is_error": r.is_error,
-                "ui": {"status": status, "summary": short(r.text or r.data or "", 220), "images": list(r.images), "duration_ms": dur, "url": url,
+                "ui": {"status": status, "summary": short(r.text or r.data or "", 220), "images": list(r.images), "files": list(r.files), "duration_ms": dur, "url": url,
                        "tool": tc.name, "label": label}}
 
     # ----------------------------------------------------------- compaction

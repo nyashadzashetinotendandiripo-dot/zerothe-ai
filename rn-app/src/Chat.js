@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { View, Text, TextInput, Pressable, FlatList, StyleSheet, KeyboardAvoidingView, Platform, Image, ActivityIndicator, ScrollView, Clipboard, Alert } from 'react-native';
 import { WebView } from 'react-native-webview';
-import { api, API_BASE } from './session';
+import { api, API_BASE, conf } from './session';
 import md from './md';
 import { aiBody, uiPlain, uiStreamText } from './widgets';
 import { breadcrumb, note, noteOnce } from './diag';
@@ -46,6 +46,15 @@ function AnsRow({ onSend, placeholder }) {
 function fmtT(it) {
   const d2 = parseDate(it);
   return d2 ? d2.toTimeString().slice(0, 5) : '';
+}
+
+function _fmtSize(n) {
+  if (n == null) return '';
+  for (const unit of ['B', 'KB', 'MB', 'GB']) {
+    if (n < 1024) return unit === 'B' ? n + ' ' + unit : n.toFixed(2) + ' ' + unit;
+    n /= 1024;
+  }
+  return n.toFixed(2) + ' TB';
 }
 
 function parseDate(it) {
@@ -328,6 +337,31 @@ function ChatScreen({ thread, threads, botName: propsBotName, onSwitch, onBack, 
       setItems((prev) => prev.filter((i) => i.id !== tmp));
     }
   };
+
+  // Download URL for a workspace file (uses the same auth token as the API).
+  const fileUrl = (p) => {
+    const { base, token } = conf();
+    return base + '/api/computer/file?path=' + encodeURIComponent(p) + '&download=1&token=' + encodeURIComponent(token || '');
+  };
+
+  // A file attachment row with an icon and a download button.
+  const FileRow = ({ f }) => {
+    const mime = (f && f.mime) || 'application/octet-stream';
+    const isImage = mime.startsWith('image/');
+    return (
+      <View style={st.fileRow}>
+        <View style={st.fileIc}>{isImage ? '🖼' : '📄'}</View>
+        <View style={{ flex: 1 }}>
+          <Text style={st.fileName} numberOfLines={1}>{asText(f && f.name) || 'file'}</Text>
+          <Text style={st.fileSize}>{f && f.size ? _fmtSize(f.size) : ''}</Text>
+        </View>
+        <Pressable onPress={() => Linking.openURL(fileUrl(f && f.path)).catch(() => {})} style={st.fileBtn}>
+          <Text style={st.fileBtnT}>↓</Text>
+        </Pressable>
+      </View>
+    );
+  };
+
   const stop = async () => {
     try { await api('/api/threads/' + thread.id + '/stop', { method: 'POST', body: '{}' }); } catch (e) { /* already done */ }
     setTimeout(() => load(), 600);
@@ -411,6 +445,11 @@ function ChatScreen({ thread, threads, botName: propsBotName, onSwitch, onBack, 
       <Pressable onLongPress={() => item.id && setPick(item)} delayLongPress={350} style={st.rowIn}>
         <View style={st.answer}>
           {aiBody(asText(item.text), (t) => md(t, st.answerT), (r) => { setText(r); })}
+          {(item.files || []).length ? (
+            <View style={{ marginTop: 6 }}>
+              {(item.files || []).map((f, i) => <FileRow key={i} f={f} />)}
+            </View>
+          ) : null}
         </View>
         <MsgFoot it={item} time={fmtT(item)} />
       </Pressable>
@@ -421,7 +460,14 @@ function ChatScreen({ thread, threads, botName: propsBotName, onSwitch, onBack, 
       return (
         <View style={st.toolWrap}>
           <Text style={[st.toolIc, { color: okk ? '#6fcf97' : '#e57373' }]}>{g}</Text>
-          <Text style={st.toolT} numberOfLines={2}>{asText(item.label) || asText(item.tool)}</Text>
+          <View style={{ flex: 1 }}>
+            <Text style={st.toolT} numberOfLines={2}>{asText(item.label) || asText(item.tool)}</Text>
+            {(item.files || []).length ? (
+              <View style={{ marginTop: 4 }}>
+                {(item.files || []).map((f, i) => <FileRow key={i} f={f} />)}
+              </View>
+            ) : null}
+          </View>
           {asList(item.images).map((n, i) => <Image key={i} style={st.shot}
             source={{ uri: API_BASE + '/api/files/shots/' + encodeURIComponent(asText(n)) }} />)}
         </View>
@@ -895,4 +941,10 @@ const st = StyleSheet.create({
   typeIn: { flex: 1, backgroundColor: '#1c1c1c', borderRadius: 20, borderWidth: 1, borderColor: '#2a2a2a', color: TEXT, paddingHorizontal: 14, paddingVertical: 9, fontSize: 14 },
   typeSend: { backgroundColor: '#00a884', borderRadius: 999, paddingHorizontal: 16, paddingVertical: 10 },
   typeSendT: { color: '#fff', fontSize: 13, fontWeight: '800' },
+  fileRow: { flexDirection: 'row', alignItems: 'center', gap: 8, backgroundColor: '#1c1c1c', borderWidth: 1, borderColor: '#2a2a2a', borderRadius: 10, paddingHorizontal: 10, paddingVertical: 8, marginVertical: 4 },
+  fileIc: { fontSize: 20, width: 32, textAlign: 'center' },
+  fileName: { color: TEXT, fontSize: 13, fontWeight: '600', numberOfLines: 1 },
+  fileSize: { color: MUTED, fontSize: 11 },
+  fileBtn: { backgroundColor: '#2a2a2a', borderRadius: 8, borderWidth: 1, borderColor: '#333', alignItems: 'center', justifyContent: 'center', paddingHorizontal: 10, paddingVertical: 6 },
+  fileBtnT: { color: '#6ea8ff', fontSize: 14, fontWeight: '700' },
 });

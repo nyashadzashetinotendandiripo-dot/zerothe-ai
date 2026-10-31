@@ -708,6 +708,70 @@ def build_documents(c: Conn) -> list[ToolSpec]:
         rel = c.mgr.engine.computer.rel(fp)
         return f"Created DOCX {rel}."
 
+    def _fmt_size(n: int) -> str:
+        for unit in ("B", "KB", "MB", "GB"):
+            if n < 1024:
+                return f"{n:.0f} {unit}" if unit == "B" else f"{n:.2f} {unit}"
+            n /= 1024
+        return f"{n:.2f} TB"
+
+    def file_attach(ctx, a):
+        """Attach an existing workspace file to the bot's reply so the user can view/download it in chat."""
+        fp = _ws_path(a)
+        if not fp.is_file():
+            raise ConnectorError(f"No such file: {fp}")
+        st = fp.stat()
+        mime = mimetypes.guess_type(fp.name)[0] or "application/octet-stream"
+        rel = c.mgr.engine.computer.rel(fp)
+        return ToolResult(
+            text=f"Attached {fp.name} ({_fmt_size(st.st_size)}).",
+            files=[{"path": rel, "name": fp.name, "size": st.st_size, "mime": mime}],
+        )
+
+    def read_file(ctx, a):
+        """Read a workspace file: PDF/DOCX/TXT/CSV return extracted text; images return format/size/mode."""
+        fp = _ws_path(a)
+        if not fp.is_file():
+            raise ConnectorError(f"No such file: {fp}")
+        ext = fp.suffix.lower()
+        if ext == ".pdf":
+            try:
+                from pypdf import PdfReader
+            except ImportError:
+                raise ConnectorError("pypdf is not installed on the server.")
+            reader = PdfReader(str(fp))
+            parts = []
+            for i, page in enumerate(reader.pages):
+                t = page.extract_text() or ""
+                parts.append(f"--- page {i + 1} ---\n{t}")
+            return "\n".join(parts)[:200000] or "No text extracted."
+        if ext == ".docx":
+            try:
+                from docx import Document
+            except ImportError:
+                raise ConnectorError("python-docx is not installed on the server.")
+            doc = Document(str(fp))
+            out = []
+            for para in doc.paragraphs:
+                if para.text.strip():
+                    out.append(para.text)
+            for table in doc.tables:
+                for row in table.rows:
+                    out.append(" | ".join(cell.text for cell in row.cells))
+            return "\n".join(out)[:200000] or "No text extracted."
+        if ext in (".txt", ".csv", ".md", ".json", ".py", ".html", ".xml", ".yaml", ".yml", ".log"):
+            return fp.read_text(encoding="utf-8", errors="replace")[:200000] or "(empty file)"
+        if ext in (".png", ".jpg", ".jpeg", ".gif", ".bmp", ".webp"):
+            try:
+                from PIL import Image
+            except ImportError:
+                raise ConnectorError("Pillow (PIL) is not installed on the server.")
+            with Image.open(fp) as im:
+                return (f"Image: {fp.name}\n"
+                        f"Format: {im.format}\nMode: {im.mode}\nSize: {im.size[0]}x{im.size[1]}\n"
+                        f"File size: {_fmt_size(fp.stat().st_size)}")
+        raise ConnectorError(f"Cannot read {ext} files. Supported: PDF, DOCX, TXT, CSV, PNG, JPG, GIF, WEBP.")
+
     return [
         T("pdf_read", "Extract text from a PDF file in the workspace.",
           {"path": s("Workspace path to the PDF file")}, ["path"], pdf_read, read=True,
@@ -727,6 +791,16 @@ def build_documents(c: Conn) -> list[ToolSpec]:
           ["path", "text"], docx_create,
           risk=R("write", lambda a: f"Create DOCX {a.get('path')}", lambda a: a.get('path') or "file"),
           label=lambda a: f"Create DOCX {a.get('path')}"),
+        T("file_attach", "Attach an existing workspace file to your reply so the user can view or download it in chat.",
+          {"path": s("Workspace path to the file (e.g. shared/report.pdf, shared/chart.png)")},
+          ["path"], file_attach,
+          risk=R("read", lambda a: f"Attach {a.get('path')}", lambda a: a.get('path') or "file"),
+          label=lambda a: f"Attach {a.get('path')}"),
+        T("read_file", "Read a file the user uploaded or a bot created: PDF, DOCX, TXT, CSV, or image. Returns extracted text (PDF/DOCX/TXT/CSV) or image info (format, size, mode).",
+          {"path": s("Workspace path to the file (e.g. shared/uploads/document.pdf, shared/uploads/photo.png)")},
+          ["path"], read_file,
+          risk=R("read", lambda a: f"Read {a.get('path')}", lambda a: a.get('path') or "file"),
+          label=lambda a: f"Read {a.get('path')}"),
         T("python_run", "Run Python code with access to pandas, openpyxl, pdfplumber, python-pptx, docxtpl, beautifulsoup4, html2text, markdown, pypdf, python-docx, reportlab and more. Code runs in the Bot workspace. Use this for data analysis, report generation, file processing, and anything the other tools don't cover.",
           {"code": s("Python code to run"), "timeout": i("Timeout in seconds (default 60, max 300)")},
           ["code"], python_run,
