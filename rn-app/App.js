@@ -396,7 +396,7 @@ function ZbRoot() {
     <Shell upd={upd} onUpd={doUpdate} updState={updState}>
       <Home bots={bots} busy={busy} apps={apps} noteBadge={noteBadge} onOpen={openBot} onPlug={() => pushScreen('plugins')} onBell={() => setNoteOpen(true)} onNew={newBot} onHire={hireBot} templates={templates} onDecide={decideApp} onBotLong={setBotModal} onMenu={() => setMenuOpen(true)} />
       <DragMenu onMenu={() => setMenuOpen(true)} />
-      {!!botModal && <BotModal bot={botModal} onClose={() => setBotModal(null)} onCloseSaved={() => { setBotModal(null); refresh(); }} />}
+      {!!botModal && <BotModal bot={botModal} onClose={() => setBotModal(null)} onCloseSaved={() => { setBotModal(null); refresh(); }} onBotDeleted={(bid) => { setBotModal(null); setScreen('home'); refresh(); }} />}
       {noteOpen && <NotifSheet onClose={() => setNoteOpen(false)} onReadAll={() => setNoteBadge(0)} />}
       {menuBlock}
     </Shell>
@@ -788,11 +788,12 @@ function NewBotModal({ onDone, onHire, templates }) {
 }
 
 // ----------------------------------------------------------------- bot settings
-function BotModal({ bot, onClose, onCloseSaved }) {
+function BotModal({ bot, onClose, onCloseSaved, onBotDeleted }) {
   const [em, setEm] = useState(bot.emoji || '🤖');
   const [mems, setMems] = useState(null);
   const [memAdd, setMemAdd] = useState('');
   const [saving, setSaving] = useState(false);
+  const [stepLimit, setStepLimit] = useState(String(bot.step_limit || 100));
   const [grants, setGrants] = useState(null);          // ["plugin:gmail", "mcp:fs", …]
   const [tools, setTools] = useState([]);             // {key,label,sub}
   const [grantBusy, setGrantBusy] = useState('');
@@ -836,7 +837,7 @@ function BotModal({ bot, onClose, onCloseSaved }) {
   const EMOJIS = ['🤖', '🧠', '📬', '🛍', '📊', '🧾', '🔍', '✍️', '📅', '🌐', '💼', '🧹'];
   const save = async () => {
     setSaving(true);
-    try { await api('/api/bots/' + bot.id, { method: 'PUT', body: JSON.stringify({ emoji: em }) }); onCloseSaved(); }
+    try { await api('/api/bots/' + bot.id, { method: 'PUT', body: JSON.stringify({ emoji: em, step_limit: parseInt(stepLimit) || 100 }) }); onCloseSaved(); }
     catch (e) { /* ignore */ }
     setSaving(false);
   };
@@ -905,10 +906,15 @@ function BotModal({ bot, onClose, onCloseSaved }) {
             placeholderTextColor={C.muted} onSubmitEditing={addMem} />
           <Pressable onPress={addMem} style={[n.hbtn, { backgroundColor: C.solid }]}><Text style={{ fontSize: 18, color: C.onSolid }}>＋</Text></Pressable>
         </View>
+        <Text style={[l.lbl, { marginTop: 6 }]}>Step limit — how many actions the Bot can take per turn</Text>
+        <View style={{ flexDirection: 'row', gap: 8 }}>
+          <TextInput style={[l.inl, { flex: 1 }]} value={stepLimit} onChangeText={setStepLimit} keyboardType="numeric" placeholder="100" placeholderTextColor={C.muted} />
+          <Text style={[l.cap, { marginTop: 20 }]}>steps per turn</Text>
+        </View>
         <Pressable onPress={() => { setSaving(false); onClose(); Alert.alert('Delete bot?', 'This permanently deletes the bot and all its chats.', [
           { text: 'Cancel', style: 'cancel' },
           { text: 'Delete', style: 'destructive', onPress: async () => {
-            try { await api('/api/bots/' + bot.id, { method: 'DELETE' }); onClose(); } catch (e) { Alert.alert('Could not delete', String(e.message || e)); }
+            try { await api('/api/bots/' + bot.id, { method: 'DELETE' }); onClose(); if (onBotDeleted) onBotDeleted(bot.id); } catch (e) { Alert.alert('Could not delete', String(e.message || e)); }
           } },
         ]) }} style={[l.btn, { backgroundColor: C.bad, borderColor: C.bad }]}><Text style={[l.btnT, { color: C.onSolid }]}>Delete this Bot</Text></Pressable>
       </ScrollView>

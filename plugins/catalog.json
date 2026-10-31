@@ -17,6 +17,7 @@
     {"id": "onshape", "name": "Onshape", "description": "CAD documents, parts and assemblies. Needs an API Access Key + Secret Key.", "kind": "python", "source": "bundled:plugins/onshape"},
     {"id": "fusion", "name": "Autodesk Fusion", "description": "Browse hubs, projects, files and versions. One Connect click.", "kind": "python", "source": "bundled:plugins/fusion"},
     {"id": "digikey", "name": "DigiKey Electronics", "description": "Search live component stock, unit pricing and datasheets on DigiKey. Free developer app credentials.", "kind": "python", "source": "bundled:plugins/digikey"},
-    {"id": "mouser", "name": "Mouser Electronics", "description": "Search live component stock, pricing and datasheets on Mouser. Free Search API key.", "kind": "declarative", "source": "bundled:plugins/mouser"}
+    {"id": "mouser", "name": "Mouser Electronics", "description": "Search live component stock, pricing and datasheets on Mouser. Free Search API key.", "kind": "declarative", "source": "bundled:plugins/mouser"},
+    {"id": "jobhunt", "name": "Job Hunt", "description": "Search for jobs on Indeed, RemoteOK, Lever, Greenhouse. Save jobs to Bot memory.", "kind": "python", "source": "bundled:plugins/jobhunt"}
   ]
 }

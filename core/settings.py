@@ -43,7 +43,7 @@ DEFAULTS: dict[str, Any] = {
     "digest": {"enabled": False, "time": "18:00", "last_sent": ""},
     "pricing": {"currency": "$", "models": {}},
     "updates": {"check": True},
-    "defaults": {"step_limit": 25},
+    "defaults": {"step_limit": 100},
     "failover": {"chain": [], "cooldown_min": 10},
     "context": {"compact_tokens": 20000, "lazy_tools": True, "lazy_top_k": 24, "max_history_tokens": 12000, "max_tokens": 4096},
     "rest_connectors": [],

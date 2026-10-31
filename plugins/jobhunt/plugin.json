@@ -1,0 +1,100 @@
+{
+  "id": "jobhunt",
+  "name": "Job Hunt",
+  "version": "1.0.0",
+  "description": "Search for jobs across job boards: Indeed, LinkedIn, remote jobs, and more. Search by keyword, location, and job type.",
+  "setup_label": "Open job boards",
+  "setup_url": "https://www.indeed.com/",
+  "entry": "plugin.py",
+  "fields": [],
+  "tools": [
+    {
+      "name": "jobhunt_search_indeed",
+      "description": "Search for jobs on Indeed by keyword and location.",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "query": { "type": "string", "description": "Job title or keyword (e.g. 'software engineer', 'marketing manager')" },
+          "location": { "type": "string", "description": "City or remote (e.g. 'New York', 'remote', 'London')" },
+          "limit": { "type": "integer", "description": "Max results (default 10, max 20)" }
+        },
+        "required": ["query"]
+      },
+      "request": {
+        "method": "GET",
+        "url": "https://www.indeed.com/jobs?q={query}&l={location}&limit={limit}"
+      },
+      "risk": "safe"
+    },
+    {
+      "name": "jobhunt_search_remote",
+      "description": "Search remote-only jobs on RemoteOK.",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "keyword": { "type": "string", "description": "Job keyword (e.g. 'python', 'react', 'product manager')" },
+          "limit": { "type": "integer", "description": "Max results (default 10, max 20)" }
+        },
+        "required": ["keyword"]
+      },
+      "request": {
+        "method": "GET",
+        "url": "https://remoteok.com/api/"
+      },
+      "risk": "safe"
+    },
+    {
+      "name": "jobhunt_search_lever",
+      "description": "Search jobs on Lever.co job boards by company or keyword.",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "site": { "type": "string", "description": "Lever job board site (e.g. 'netflix', 'shopify', 'stripe')" },
+          "keyword": { "type": "string", "description": "Job keyword to filter" },
+          "limit": { "type": "integer", "description": "Max results (default 10, max 20)" }
+        },
+        "required": ["site"]
+      },
+      "request": {
+        "method": "GET",
+        "url": "https://api.lever.co/v0/postings/{site}?mode=json&limit={limit}"
+      },
+      "risk": "safe"
+    },
+    {
+      "name": "jobhunt_search_greenhouse",
+      "description": "Search jobs on Greenhouse.io job boards.",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "token": { "type": "string", "description": "Greenhouse job board token (company name)" },
+          "keyword": { "type": "string", "description": "Job keyword to filter" },
+          "limit": { "type": "integer", "description": "Max results (default 10, max 20)" }
+        },
+        "required": ["token"]
+      },
+      "request": {
+        "method": "GET",
+        "url": "https://boards-api.greenhouse.io/v1/boards/{token}/jobs?content=true"
+      },
+      "risk": "safe"
+    },
+    {
+      "name": "jobhunt_save_job",
+      "description": "Save a job listing to the Bot's memory for later follow-up.",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "title": { "type": "string", "description": "Job title" },
+          "company": { "type": "string", "description": "Company name" },
+          "url": { "type": "string", "description": "Job application URL" },
+          "location": { "type": "string", "description": "Job location" },
+          "notes": { "type": "string", "description": "Your notes about this job" }
+        },
+        "required": ["title", "company", "url"]
+      },
+      "handler": "jobhunt_save_job",
+      "risk": "write"
+    }
+  ]
+}

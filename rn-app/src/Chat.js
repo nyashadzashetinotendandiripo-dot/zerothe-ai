@@ -128,6 +128,7 @@ function ChatScreen({ thread, threads, botName: propsBotName, onSwitch, onBack, 
   const [typeBusy, setTypeBusy] = useState(false);
   const [zoom, setZoom] = useState(1);                             // live desktop fit scale
   const [attachOpen, setAttachOpen] = useState(false);              // photo/file chooser sheet
+  const [filePrev, setFilePrev] = useState(null);                   // {name, path, mime, url} for side preview
   const [histOpen, setHistOpen] = useState(false);
   const [histQ, setHistQ] = useState('');
   const [err, setErr] = useState('');
@@ -349,16 +350,26 @@ function ChatScreen({ thread, threads, botName: propsBotName, onSwitch, onBack, 
     const mime = (f && f.mime) || 'application/octet-stream';
     const isImage = mime.startsWith('image/');
     return (
-      <View style={st.fileRow}>
+      <Pressable onPress={() => {
+        const { base, token } = conf();
+        setFilePrev({
+          name: f && f.name,
+          path: f && f.path,
+          mime,
+          url: base + '/api/computer/file?path=' + encodeURIComponent(f && f.path) + '&download=1&token=' + encodeURIComponent(token || ''),
+          isImage,
+        });
+        setAttachOpen(false);
+      }} style={st.fileRow}>
         <View style={st.fileIc}>{isImage ? '🖼' : '📄'}</View>
         <View style={{ flex: 1 }}>
           <Text style={st.fileName} numberOfLines={1}>{asText(f && f.name) || 'file'}</Text>
           <Text style={st.fileSize}>{f && f.size ? _fmtSize(f.size) : ''}</Text>
         </View>
-        <Pressable onPress={() => Linking.openURL(fileUrl(f && f.path)).catch(() => {})} style={st.fileBtn}>
+        <Pressable onPress={(e) => { e.stopPropagation(); Linking.openURL(fileUrl(f && f.path)).catch(() => {}) }} style={st.fileBtn}>
           <Text style={st.fileBtnT}>↓</Text>
         </Pressable>
-      </View>
+      </Pressable>
     );
   };
 
@@ -455,23 +466,9 @@ function ChatScreen({ thread, threads, botName: propsBotName, onSwitch, onBack, 
       </Pressable>
     );
     if (item.type === 'tool') {
-      const g = TOOL_GLYPH[item.status] || '•';
-      const okk = item.status === 'ok' || item.status === 'running';
-      return (
-        <View style={st.toolWrap}>
-          <Text style={[st.toolIc, { color: okk ? '#6fcf97' : '#e57373' }]}>{g}</Text>
-          <View style={{ flex: 1 }}>
-            <Text style={st.toolT} numberOfLines={2}>{asText(item.label) || asText(item.tool)}</Text>
-            {(item.files || []).length ? (
-              <View style={{ marginTop: 4 }}>
-                {(item.files || []).map((f, i) => <FileRow key={i} f={f} />)}
-              </View>
-            ) : null}
-          </View>
-          {asList(item.images).map((n, i) => <Image key={i} style={st.shot}
-            source={{ uri: API_BASE + '/api/files/shots/' + encodeURIComponent(asText(n)) }} />)}
-        </View>
-      );
+      // Hide raw tool command execution from chat — Intelligent UI widgets
+      // (buttons, forms, etc.) render through aiBody in assistant messages.
+      return null;
     }
     if (item.type === 'notice') return item.level === 'cmd'
       ? <View style={st.cmdNote}>{md(asText(item.text), st.noteT)}</View>
@@ -531,7 +528,13 @@ function ChatScreen({ thread, threads, botName: propsBotName, onSwitch, onBack, 
         <Pressable onPress={() => Alert.alert('Delete conversation?', 'This permanently deletes this chat and all its messages.', [
           { text: 'Cancel', style: 'cancel' },
           { text: 'Delete', style: 'destructive', onPress: async () => {
-            try { await api('/api/threads/' + thread.id, { method: 'DELETE' }); onBack(); } catch (e) { Alert.alert('Could not delete', String(e.message || e)); }
+            try { 
+              await api('/api/threads/' + thread.id, { method: 'DELETE' }); 
+              // Stay on the same bot: switch to its main thread instead of going back
+              const mainThread = (threads || []).find((t) => t.main);
+              if (mainThread) onSwitch(mainThread.id);
+              else onBack();
+            } catch (e) { Alert.alert('Could not delete', String(e.message || e)); }
           } },
         ])} hitSlop={10} style={st.hBtn}><Text style={st.hIcon}>🗑</Text></Pressable>
         <Pressable style={{ flex: 1 }} onPress={() => { setHistQ(''); setHistOpen(true); }}>
@@ -790,6 +793,33 @@ function ChatScreen({ thread, threads, botName: propsBotName, onSwitch, onBack, 
           )}
         </View>
       )}
+      
+      {filePrev && (
+        <View style={st.scrimM} onStartShouldSetResponder={() => true}>
+          <View style={[st.sheet, { paddingBottom: 16 + (ins?.bottom || 0) }]}>
+            <View style={st.grabber} />
+            <Text style={st.sheetT}>File Preview</Text>
+            <View style={{ marginTop: 10 }}>
+              {filePrev.isImage ? (
+                <Image style={st.filePrevImg} source={{ uri: filePrev.url }} />
+              ) : (
+                <View style={st.filePrevDoc}>
+                  <Text style={{ fontSize: 24 }}>📄</Text>
+                  <Text style={st.filePrevName}>{filePrev.name}</Text>
+                  <Text style={st.filePrevMime}>{filePrev.mime}</Text>
+                </View>
+              )}
+            </View>
+            <Pressable onPress={() => Linking.openURL(filePrev.url).catch(() => {})} style={st.fileBtn}>
+              <Text style={st.fileBtnT}>Open</Text>
+            </Pressable>
+            <Pressable onPress={() => setFilePrev(null)} style={[st.sheetBtn, { backgroundColor: 'transparent' }]}>
+              <Text style={[st.sheetBtnT, { color: MUTED }]}>Close</Text>
+            </Pressable>
+          </View>
+        </View>
+      )}
+      
     </KeyboardAvoidingView>
   );
 }
@@ -947,4 +977,8 @@ const st = StyleSheet.create({
   fileSize: { color: MUTED, fontSize: 11 },
   fileBtn: { backgroundColor: '#2a2a2a', borderRadius: 8, borderWidth: 1, borderColor: '#333', alignItems: 'center', justifyContent: 'center', paddingHorizontal: 10, paddingVertical: 6 },
   fileBtnT: { color: '#6ea8ff', fontSize: 14, fontWeight: '700' },
+  filePrevImg: { width: '100%', height: 300, borderRadius: 12, backgroundColor: '#121212' },
+  filePrevDoc: { alignItems: 'center', padding: 24, backgroundColor: '#121212', borderRadius: 12 },
+  filePrevName: { color: TEXT, fontSize: 16, fontWeight: '600', marginTop: 10 },
+  filePrevMime: { color: MUTED, fontSize: 12, marginTop: 4 },
 });
