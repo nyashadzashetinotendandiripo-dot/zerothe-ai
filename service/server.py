@@ -1236,10 +1236,12 @@ google.accounts.id.renderButton(document.getElementById('gbtn'),
                     params=request.query_params,
                     timeout=60.0,
                 )
-        except httpx.ConnectError:
-            raise HTTPException(502, f"MCP server '{mcp_id}' not reachable on port {port}")
-        except httpx.TimeoutException:
-            raise HTTPException(504, f"MCP server '{mcp_id}' timed out")
+        except httpx.ConnectError as e:
+            raise HTTPException(502, f"MCP server '{mcp_id}' not reachable on port {port}: {e}")
+        except httpx.TimeoutException as e:
+            raise HTTPException(504, f"MCP server '{mcp_id}' timed out: {e}")
+        except Exception as e:
+            raise HTTPException(500, f"Proxy error: {type(e).__name__}: {e}")
 
         response_headers = dict(resp.headers)
         for h in ("content-length", "connection", "transfer-encoding"):
