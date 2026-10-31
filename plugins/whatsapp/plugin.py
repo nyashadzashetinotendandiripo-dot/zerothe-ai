@@ -1076,7 +1076,7 @@ def wa_varied_text(ctx, args):
     text = (args.get("text") or "").strip()
     variation = (args.get("variation") or "auto").strip()
     if not text:
-        return _out('Give text: wa_varied_text needs {"text": "...", "variation": "auto|space|emoji|dots|comma"}.')
+        return _out('Give text: whatsapp_varied_text needs {"text": "...", "variation": "auto|space|emoji|dots|comma"}.')
     import random
     if variation == "auto":
         choice = random.choice(["space", "emoji", "dots", "comma"])
@@ -1112,9 +1112,9 @@ def wa_forward_advert(ctx, args):
     delay_max = float(args.get("delay_max", 180))
 
     if not message_id:
-        return _out('Give message_id: wa_forward_advert needs {"message_id": "...", "groups": ["g1", "g2"]}.')
+        return _out('Give message_id: whatsapp_forward_advert needs {"message_id": "...", "groups": ["g1", "g2"]}.')
     if not groups or not isinstance(groups, list):
-        return _out('Give groups: wa_forward_advert needs {"message_id": "...", "groups": ["name1", "name2", ...]}.')
+        return _out('Give groups: whatsapp_forward_advert needs {"message_id": "...", "groups": ["name1", "name2", ...]}.')
     if len(groups) > 50:
         return _out("Too many groups (max 50 per call). Split into multiple calls to look more human.")
 
@@ -1187,9 +1187,9 @@ def wa_forward_queue(ctx, args):
     delay_max = float(args.get("delay_max", 300))
 
     if not message_id:
-        return _out('Give message_id: wa_forward_queue needs {"message_id": "...", "groups": ["g1", ...]}.')
+        return _out('Give message_id: whatsapp_forward_queue needs {"message_id": "...", "groups": ["g1", ...]}.')
     if not groups or not isinstance(groups, list):
-        return _out('Give groups: wa_forward_queue needs {"message_id": "...", "groups": ["name1", ...]}.')
+        return _out('Give groups: whatsapp_forward_queue needs {"message_id": "...", "groups": ["name1", ...]}.')
     if batch_size < 1 or batch_size > 5:
         return _out("batch_size must be between 1 and 5 (WhatsApp forward limit).")
 
@@ -1414,13 +1414,13 @@ def register(api):
              "pause": {"type": "boolean", "description": "True to pause, false to resume"},
              "reason": {"type": "string", "description": "Reason for pause/resume"}}},
          "handler": wa_takeover_pause, **base},
-        {"name": "wa_varied_text",
+        {"name": "varied_text",
          "description": "Return a varied version of text to avoid identical-content detection (spam avoidance).",
          "input_schema": {"type": "object", "properties": {
              "text": {"type": "string", "description": "Text to vary"},
              "variation": {"type": "string", "description": "auto|space|emoji|dots|comma (default auto)"}}},
          "handler": wa_varied_text, "read_only": True, **base},
-        {"name": "wa_forward_advert",
+        {"name": "forward_advert",
          "description": "Forward an advert message to WhatsApp groups (max 5 per batch, human-like delays).",
          "input_schema": {"type": "object", "properties": {
              "message_id": {"type": "string", "description": "ID of the advert message to forward"},
@@ -1430,7 +1430,7 @@ def register(api):
          }},
          "required": ["message_id", "groups"],
          "handler": wa_forward_advert, "risk": "send", **base},
-        {"name": "wa_forward_queue",
+        {"name": "forward_queue",
          "description": "Queue a forward campaign across many groups with automatic batching and human delays.",
          "input_schema": {"type": "object", "properties": {
              "message_id": {"type": "string", "description": "ID of the advert message to forward"},
