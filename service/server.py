@@ -1194,6 +1194,115 @@ google.accounts.id.renderButton(document.getElementById('gbtn'),
         eng.mcp.restart(sid)
         return {"ok": True}
 
+    # --------------------------------------------------------------- MCP HTTP proxy
+    # Proxies StreamableHTTP MCP requests to locally-running MCP servers
+    # (e.g. the QuickBooks MCP server on port 3333) so they are reachable
+    # over the public HTTPS URL without exposing extra ports.
+    @app.post("/api/mcp-proxy/{mcp_id:path}")
+    async def mcp_http_proxy(request: Request, mcp_id: str):
+        """Proxy MCP HTTP requests to a local MCP server.
+
+        mcp_id is the server name (e.g. "quickbooks"). The port is resolved
+        from MCP_PROXY_PORTS env var: a JSON map like {"quickbooks": 3333}.
+        """
+        import json as _json
+        ports_raw = os.environ.get("MCP_PROXY_PORTS", "{}")
+        try:
+            ports = _json.loads(ports_raw)
+        except Exception:
+            ports = {}
+        port = ports.get(mcp_id)
+        if not port:
+            raise HTTPException(404, f"No MCP proxy port configured for '{mcp_id}'")
+
+        target_url = f"http://127.0.0.1:{port}/mcp"
+        body = await request.body()
+        headers = dict(request.headers)
+        # Remove hop-by-hop headers
+        for h in ("host", "content-length", "connection"):
+            headers.pop(h, None)
+
+        try:
+            async with httpx.AsyncClient() as client:
+                resp = await client.request(
+                    request.method,
+                    target_url,
+                    content=body,
+                    headers=headers,
+                    params=request.query_params,
+                    timeout=60.0,
+                )
+        except httpx.ConnectError:
+            raise HTTPException(502, f"MCP server '{mcp_id}' not reachable on port {port}")
+        except httpx.TimeoutException:
+            raise HTTPException(504, f"MCP server '{mcp_id}' timed out")
+
+        response_headers = dict(resp.headers)
+        for h in ("content-length", "connection", "transfer-encoding"):
+            response_headers.pop(h, None)
+
+        return Response(
+            content=resp.content,
+            status_code=resp.status_code,
+            headers=response_headers,
+            media_type=resp.headers.get("content-type"),
+        )
+
+    @app.post("/api/test-simple")
+    async def test_simple():
+        return {"ok": True}
+
+    @app.post("/api/test-simple")
+    async def test_simple():
+        return {"ok": True}
+        """Proxy MCP HTTP requests to a local MCP server.
+
+        mcp_id is the server name (e.g. "quickbooks"). The port is resolved
+        from MCP_PROXY_PORTS env var: a JSON map like {"quickbooks": 3333}.
+        """
+        import json as _json
+        ports_raw = os.environ.get("MCP_PROXY_PORTS", "{}")
+        try:
+            ports = _json.loads(ports_raw)
+        except Exception:
+            ports = {}
+        port = ports.get(mcp_id)
+        if not port:
+            raise HTTPException(404, f"No MCP proxy port configured for '{mcp_id}'")
+
+        target_url = f"http://127.0.0.1:{port}/mcp"
+        body = await request.body()
+        headers = dict(request.headers)
+        # Remove hop-by-hop headers
+        for h in ("host", "content-length", "connection"):
+            headers.pop(h, None)
+
+        try:
+            async with httpx.AsyncClient() as client:
+                resp = await client.request(
+                    request.method,
+                    target_url,
+                    content=body,
+                    headers=headers,
+                    params=request.query_params,
+                    timeout=60.0,
+                )
+        except httpx.ConnectError:
+            raise HTTPException(502, f"MCP server '{mcp_id}' not reachable on port {port}")
+        except httpx.TimeoutException:
+            raise HTTPException(504, f"MCP server '{mcp_id}' timed out")
+
+        response_headers = dict(resp.headers)
+        for h in ("content-length", "connection", "transfer-encoding"):
+            response_headers.pop(h, None)
+
+        return Response(
+            content=resp.content,
+            status_code=resp.status_code,
+            headers=response_headers,
+            media_type=resp.headers.get("content-type"),
+        )
+
     # ----------------------------------------------------- settings / secrets
     @app.get("/api/settings", dependencies=[api])
     def settings_get() -> dict:
