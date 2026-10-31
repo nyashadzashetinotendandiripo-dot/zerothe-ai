@@ -1216,8 +1216,6 @@ google.accounts.id.renderButton(document.getElementById('gbtn'),
 
     async def _mcp_proxy_inner(request: Request, mcp_id: str):
         import json as _json
-        import urllib.request
-        import urllib.error
         ports_raw = os.environ.get("MCP_PROXY_PORTS", "{}")
         try:
             ports = _json.loads(ports_raw)
@@ -1233,37 +1231,35 @@ google.accounts.id.renderButton(document.getElementById('gbtn'),
 
         target_url = f"http://127.0.0.1:{port}/mcp"
         body = await request.body()
-        headers = dict(request.headers)
-        # Remove hop-by-hop headers
-        for h in ("host", "content-length", "connection"):
-            headers.pop(h, None)
 
-        req = urllib.request.Request(
-            target_url,
-            data=body if body else None,
-            headers=headers,
-            method=request.method,
-        )
+        # Use curl subprocess for reliable MCP SSE proxying
+        import subprocess
+        cmd = [
+            "curl", "-s", "-X", request.method,
+            "-H", "Content-Type: application/json",
+            "-H", "Accept: application/json, text/event-stream",
+            "-H", "MCP-Protocol-Version: 2024-11-05",
+        ]
+        if body:
+            cmd.extend(["-d", body.decode() if isinstance(body, bytes) else body])
+        cmd.append(target_url)
+
         try:
-            with urllib.request.urlopen(req, timeout=60) as resp:
-                resp_data = resp.read()
-                status = resp.status
-                resp_headers = dict(resp.headers)
-        except urllib.error.HTTPError as e:
-            resp_data = e.read() if hasattr(e, 'read') else b''
-            resp_headers = dict(e.headers) if hasattr(e, 'headers') else {}
-            raise HTTPException(e.code, f"MCP server error: {resp_data[:200]}")
-        except urllib.error.URLError as e:
-            raise HTTPException(502, f"MCP server '{mcp_id}' not reachable: {e}")
+            result = subprocess.run(cmd, capture_output=True, timeout=60)
+            resp_data = result.stdout
+            status = result.returncode if result.returncode == 0 else 500
+        except subprocess.TimeoutExpired:
+            raise HTTPException(504, f"MCP server '{mcp_id}' timed out")
+        except Exception as e:
+            raise HTTPException(500, f"Proxy error: {type(e).__name__}: {e}")
 
-        for h in ("content-length", "connection", "transfer-encoding"):
-            resp_headers.pop(h, None)
+        resp_headers = {"content-type": "application/json, text/event-stream"}
 
         return Response(
             content=resp_data,
             status_code=status,
             headers=resp_headers,
-            media_type=resp_headers.get("content-type"),
+            media_type="application/json",
         )
 
     @app.post("/api/test-simple")
