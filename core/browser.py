@@ -706,17 +706,18 @@ class BrowserHost:
                 accept_downloads=True, locale="en-US", channel="chrome" if which == "chrome" else "chromium",
                 args=[
                     "--disable-blink-features=AutomationControlled",
-                    "--disable-features=IsolateOrigins,site-per-process",
+                    "--disable-features=IsolateOrigins,site-per-process,AudioServiceOutOfProcess",
                     "--disable-dev-shm-usage",
                     "--no-first-run",
                     "--no-default-browser-check",
                     "--disable-accelerated-2d-canvas",
-                    # Small boxes: cap renderer count, JS heap and on-disk caches so
-                    # a long session cannot eat all the RAM/disk.
-                    "--renderer-process-limit=3",
-                    "--js-flags=--max-old-space-size=384",
-                    "--disk-cache-size=52428800",
-                    "--media-cache-size=33554432",
+                    "--autoplay-policy=no-user-gesture-required",
+                    # WhatsApp Web is a heavy React SPA: give it enough JS heap and
+                    # renderer processes so it doesn't OOM-crash on load or mid-task.
+                    "--renderer-process-limit=6",
+                    "--js-flags=--max-old-space-size=1024",
+                    "--disk-cache-size=209715200",
+                    "--media-cache-size=104857600",
                     "--disable-gpu-shader-disk-cache",
                     "--disable-component-update",
                 ],
