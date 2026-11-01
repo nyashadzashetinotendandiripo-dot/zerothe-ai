@@ -32,7 +32,7 @@ from core.computer import ComputerError
 from core.engine import Engine
 from core.files import FileError
 from core.plugins import ConnectorError, google_client
-from core.providers import ProviderError, friendly_error, make_provider, model_warnings
+from core.providers import ProviderError, _fallback_keys, friendly_error, make_provider, model_warnings
 from core.routines import PRESETS
 from core.secrets import SecretStoreError
 from core.settings import PROVIDER_PRESETS
@@ -236,7 +236,10 @@ def create_app(engine: Engine, token: str) -> FastAPI:
         for pid, p in eng.settings.profiles().items():
             if allowed is not None and pid not in allowed:
                 continue
-            out.append({**p, "id": pid, "key_set": secrets.has_secret(f"provider:{pid}"), "preset": pid in PROVIDER_PRESETS})
+            out.append({**p, "id": pid, "key_set": secrets.has_secret(f"provider:{pid}"),
+                        "fallback_key_set": bool(_fallback_keys(pid)),
+                        "fallback_key_count": len(_fallback_keys(pid)),
+                        "preset": pid in PROVIDER_PRESETS})
         return out
 
     def _public_settings() -> dict:
@@ -1383,6 +1386,18 @@ google.accounts.id.renderButton(document.getElementById('gbtn'),
         eng.settings.set("providers", profs)
         if body.get("api_key"):
             secrets.set_secret(f"provider:{pid}", body["api_key"])
+        if body.get("fallback_api_key") or body.get("fallback_api_keys") is not None:
+            raw = body.get("fallback_api_keys")
+            if raw is None:
+                raw = body.get("fallback_api_key")
+            if isinstance(raw, list):
+                keys = [str(k).strip() for k in raw if str(k).strip()]
+            else:
+                keys = [k.strip() for k in re.split(r"[,\n\r]+", str(raw or "")) if k.strip()]
+            if keys:
+                secrets.set_secret(f"provider:{pid}:fallback", json.dumps(keys))
+            else:
+                secrets.delete_secret(f"provider:{pid}:fallback")
         if body.get("make_default"):
             eng.settings.set("default_profile", pid)
         return next(p for p in _profiles() if p["id"] == pid)

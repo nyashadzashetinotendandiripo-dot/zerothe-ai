@@ -10,3 +10,10 @@ APScheduler>=3.10,<4
 mcp>=1.2
 python-multipart>=0.0.9
 cryptography>=42.0
+# Job Hunt plugin: CV/cover-letter rendering, board scraping, spellcheck
+reportlab>=4.1
+python-docx>=1.1
+pyspellchecker>=0.8
+beautifulsoup4>=4.12
+lxml>=5.2
+pypdf>=4.2

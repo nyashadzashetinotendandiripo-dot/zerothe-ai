@@ -224,10 +224,12 @@ def _merge_same_role(msgs: list[dict]) -> list[dict]:
 class Provider:
     kind = ""
 
-    def __init__(self, profile: dict, model: str, api_key: str | None):
+    def __init__(self, profile: dict, model: str, api_key: str | None, api_keys: list[str] | None = None):
         self.profile = profile
         self.model = model
-        self.api_key = api_key
+        keys = [k for k in ([api_key] + list(api_keys or [])) if k]
+        self.api_keys = list(dict.fromkeys(keys))
+        self.api_key = self.api_keys[0] if self.api_keys else api_key
         self.vision = bool(profile.get("vision", True))
         self.vision_stripped = False   # set when the endpoint rejected images and we retried without them
         self.label = profile.get("label", profile.get("id", ""))
@@ -381,7 +383,11 @@ class OpenAICompatProvider(Provider):
 
     def _client(self):
         import openai
-        return openai.OpenAI(api_key=self.api_key or "not-needed", base_url=self.profile.get("base_url") or None,
+        return self._client_for(self.api_key)
+
+    def _client_for(self, key: str | None):
+        import openai
+        return openai.OpenAI(api_key=key or "not-needed", base_url=self.profile.get("base_url") or None,
                              max_retries=0, timeout=180.0)
 
     def _convert(self, system: str, messages: list[dict]) -> list[dict]:
@@ -425,7 +431,6 @@ class OpenAICompatProvider(Provider):
 
     def stream(self, system, messages, tools, on_text, should_stop, max_tokens=8192) -> LLMResult:
         import openai
-        client = self._client()
         if self.profile.get("needs_key", True) and not self.api_key:
             raise ProviderError("auth", f"No API key set for {self.label}. Add it in Settings > Providers.")
         kwargs: dict[str, Any] = dict(model=self.model, messages=self._convert(system, messages), stream=True,
@@ -433,65 +438,84 @@ class OpenAICompatProvider(Provider):
         if tools:
             kwargs["tools"] = [{"type": "function", "function": {"name": t["name"], "description": t["description"],
                                                                 "parameters": t["input_schema"]}} for t in tools]
+        keys = self.api_keys or ([self.api_key] if self.api_key else [None])
+        last_err: ProviderError | None = None
         res = LLMResult()
         acc: dict[int, dict] = {}
-        retried_stream, retried_vision = False, False
-        while True:
+        for ki, key in enumerate(keys):
+            client = self._client_for(key)
+            res, acc = LLMResult(), {}
+            retried_stream, retried_vision = False, False
             try:
-                with client.chat.completions.create(**kwargs) as stream:
-                    for chunk in stream:
-                        if should_stop():
-                            raise StopRequested()
-                        if getattr(chunk, "usage", None):
-                            res.input_tokens = chunk.usage.prompt_tokens or 0
-                            res.output_tokens = chunk.usage.completion_tokens or 0
-                        if not chunk.choices:
+                while True:
+                    try:
+                        with client.chat.completions.create(**kwargs) as stream:
+                            for chunk in stream:
+                                if should_stop():
+                                    raise StopRequested()
+                                if getattr(chunk, "usage", None):
+                                    res.input_tokens = chunk.usage.prompt_tokens or 0
+                                    res.output_tokens = chunk.usage.completion_tokens or 0
+                                if not chunk.choices:
+                                    continue
+                                ch = chunk.choices[0]
+                                d = ch.delta
+                                if d is not None and getattr(d, "content", None):
+                                    res.text += d.content
+                                    on_text(d.content)
+                                for tc in (getattr(d, "tool_calls", None) or []):
+                                    slot = acc.setdefault(tc.index, {"id": "", "name": "", "args": ""})
+                                    if tc.id:
+                                        slot["id"] = tc.id
+                                    if tc.function:
+                                        if tc.function.name:
+                                            slot["name"] += tc.function.name
+                                        if tc.function.arguments:
+                                            slot["args"] += tc.function.arguments
+                                if ch.finish_reason:
+                                    res.stop_reason = ch.finish_reason
+                        break
+                    except StopRequested:
+                        raise
+                    except openai.BadRequestError as e:
+                        msg = str(e)
+                        if not retried_stream and "stream_options" in msg:
+                            retried_stream = True
+                            kwargs.pop("stream_options", None)
+                            res, acc = LLMResult(), {}
                             continue
-                        ch = chunk.choices[0]
-                        d = ch.delta
-                        if d is not None and getattr(d, "content", None):
-                            res.text += d.content
-                            on_text(d.content)
-                        for tc in (getattr(d, "tool_calls", None) or []):
-                            slot = acc.setdefault(tc.index, {"id": "", "name": "", "args": ""})
-                            if tc.id:
-                                slot["id"] = tc.id
-                            if tc.function:
-                                if tc.function.name:
-                                    slot["name"] += tc.function.name
-                                if tc.function.arguments:
-                                    slot["args"] += tc.function.arguments
-                        if ch.finish_reason:
-                            res.stop_reason = ch.finish_reason
+                        if self.vision and not retried_vision and _is_image_msg(msg):
+                            # text-only model rejected the screenshots: strip images, retry once, remember it
+                            retried_vision = True
+                            self.vision = False
+                            self.vision_stripped = True
+                            kwargs["messages"] = self._convert(system, messages)
+                            res, acc = LLMResult(), {}
+                            continue
+                        raise self._map_status(e) from e
+                    except openai.APIStatusError as e:
+                        raise self._map_status(e) from e
+                    except (openai.APIConnectionError, openai.APITimeoutError) as e:
+                        where = self.profile.get("base_url") or "the provider"
+                        raise ProviderError("network", f"Network connection lost while contacting {where}. "
+                                                       f"Is the server running and are you online?") from e
+                    except ProviderError:
+                        raise
+                    except Exception as e:
+                        raise ProviderError("unknown", f"{type(e).__name__}: {e}") from e
+                # This key worked: keep it for the rest of the turn and future calls.
+                if key:
+                    self.api_key = key
+                last_err = None
                 break
-            except StopRequested:
-                raise
-            except openai.BadRequestError as e:
-                msg = str(e)
-                if not retried_stream and "stream_options" in msg:
-                    retried_stream = True
-                    kwargs.pop("stream_options", None)
-                    res, acc = LLMResult(), {}
+            except ProviderError as e:
+                last_err = e
+                rotate = e.kind in ("rate_limit", "quota", "auth", "billing", "server") and not res.text
+                if rotate and ki + 1 < len(keys):
                     continue
-                if self.vision and not retried_vision and _is_image_msg(msg):
-                    # text-only model rejected the screenshots: strip images, retry once, remember it
-                    retried_vision = True
-                    self.vision = False
-                    self.vision_stripped = True
-                    kwargs["messages"] = self._convert(system, messages)
-                    res, acc = LLMResult(), {}
-                    continue
-                raise self._map_status(e) from e
-            except openai.APIStatusError as e:
-                raise self._map_status(e) from e
-            except (openai.APIConnectionError, openai.APITimeoutError) as e:
-                where = self.profile.get("base_url") or "the provider"
-                raise ProviderError("network", f"Network connection lost while contacting {where}. "
-                                               f"Is the server running and are you online?") from e
-            except ProviderError:
                 raise
-            except Exception as e:
-                raise ProviderError("unknown", f"{type(e).__name__}: {e}") from e
+        if last_err is not None:
+            raise last_err
         for i in sorted(acc):
             s = acc[i]
             try:
@@ -526,6 +550,22 @@ class OpenAICompatProvider(Provider):
             raise ProviderError("network", f"Could not reach {self.profile.get('base_url')}: {e}") from e
 
 
+def _fallback_keys(pid: str) -> list[str]:
+    """Extra API keys for a provider (used when the primary is rate-limited or out of quota)."""
+    raw = secrets.get_secret(f"provider:{pid}:fallback") or ""
+    if not raw.strip():
+        return []
+    try:
+        parsed = json.loads(raw)
+        if isinstance(parsed, str):
+            parsed = [parsed]
+        if isinstance(parsed, list):
+            return [str(k).strip() for k in parsed if str(k).strip()]
+    except ValueError:
+        pass
+    return [k.strip() for k in re.split(r"[,\n\r]+", raw) if k.strip()]
+
+
 def make_provider(settings: Settings, profile_id: str | None, model: str | None) -> Provider:
     prof = settings.profile(profile_id)
     key = secrets.get_secret(f"provider:{prof['id']}")
@@ -533,7 +573,7 @@ def make_provider(settings: Settings, profile_id: str | None, model: str | None)
     if not mdl:
         raise ProviderError("bad_request", f"No model chosen for {prof.get('label', prof['id'])}. Pick one in Settings.")
     cls = AnthropicProvider if prof.get("kind") == "anthropic" else OpenAICompatProvider
-    return cls(prof, mdl, key)
+    return cls(prof, mdl, key, _fallback_keys(prof["id"]))
 
 
 def friendly_error(err: ProviderError) -> str:
