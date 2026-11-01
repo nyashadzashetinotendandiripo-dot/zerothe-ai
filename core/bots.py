@@ -45,9 +45,16 @@ class Bots:
         return bot.get("approval_mode") or self.settings.get("approval.default_mode", "ask")
 
     def effective_step_limit(self, bot: dict) -> int:
-        n = int(bot.get("step_limit") or self.settings.get("defaults.step_limit", 40))
+        """0 means unlimited (subject only to an admin cap)."""
+        raw = bot.get("step_limit")
+        try:
+            n = int(raw)
+        except (TypeError, ValueError):
+            n = int(self.settings.get("defaults.step_limit", 0) or 0)
+        if n <= 0:
+            return self.admin.max_steps() or 0
         cap = self.admin.max_steps()
-        return min(n, cap) if cap else max(1, n)
+        return min(n, cap) if cap else n
 
     # -- CRUD ------------------------------------------------------------------
     def get(self, bot_id: str) -> dict | None:
@@ -77,7 +84,8 @@ class Bots:
                "label": str(opts.get("label", "") or "").strip()[:40], "job": job.strip(), "instructions": instructions.strip(),
                "profile": opts.get("profile", ""), "model": opts.get("model", ""),
                "approval_mode": mode if mode in APPROVAL_MODES else "ask",
-               "step_limit": int(opts.get("step_limit") or self.settings.get("defaults.step_limit", 40)),
+               "step_limit": (int(opts["step_limit"]) if opts.get("step_limit") is not None
+                              else int(self.settings.get("defaults.step_limit", 0) or 0)),
                "net_mode": opts.get("net_mode", "inherit"), "net_allow": jdump(opts.get("net_allow", [])),
                "net_deny": jdump(opts.get("net_deny", [])), "grants": jdump(opts.get("grants", [])),
                "proactive": opts.get("proactive", "off"), "template": opts.get("template", ""),
@@ -109,7 +117,7 @@ class Bots:
             if k == "label":
                 v = str(v).strip()[:40]
             if k == "step_limit":
-                v = max(1, min(500, int(v)))
+                v = max(0, min(100_000, int(v)))
             if k == "daily_token_limit":
                 v = max(0, min(1_000_000_000, int(v)))
             patch[k] = v

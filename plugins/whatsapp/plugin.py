@@ -120,7 +120,9 @@ def _state(br, scr) -> dict:
 
 
 def _ensure(ctx):
-    """Land the tab on WhatsApp Web and report (paired, detail). Never raises on QR screen."""
+    """Land the tab on WhatsApp Web and report (paired, detail). Never raises on QR screen.
+    When the QR screen is up we keep watching for login for ~75s so the flow can continue
+    on its own right after the user scans — instead of forcing a re-run."""
     br, scr = _scr(ctx)
     try:
         st = _state(br, scr)
@@ -134,6 +136,23 @@ def _ensure(ctx):
     snap = br.call(scr.snapshot, 4000, timeout=30)
     text = (snap.get("text") or "").lower()
     if any(m in text for m in QR_MARKERS):
+        # Wait for the user to scan: poll the screen for up to ~75 more seconds.
+        waited = 0.0
+        while waited < 75.0:
+            try:
+                br.call(scr.wait_for, None, 5.0, timeout=30)
+            except Exception:
+                pass
+            waited += 5.0
+            try:
+                snap = br.call(scr.snapshot, 4000, timeout=30)
+                text = (snap.get("text") or "").lower()
+            except Exception:
+                continue
+            if any(m in text for m in QR_MARKERS):
+                continue
+            if "search" in text or "message" in text or "chats" in text:
+                return br, scr, True, snap
         return br, scr, False, snap
     if "search" in text:
         return br, scr, True, snap

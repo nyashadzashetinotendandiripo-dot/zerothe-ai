@@ -231,9 +231,12 @@ class Threads:
                 continue
             if r["role"] == "assistant":
                 text = blocks_text(blocks)
-                if text:
+                fblocks = [b for b in blocks if isinstance(b, dict) and b.get("type") == "file"]
+                if text or fblocks:
                     items.append({**base, "type": "assistant", "name": who.get("name", author), "emoji": who.get("emoji", ""),
-                                  "text": text, "stream_id": blocks[0].get("stream_id", "") if blocks else ""})
+                                  "text": text, "stream_id": blocks[0].get("stream_id", "") if blocks else "",
+                                  "files": [{"path": b.get("path", ""), "name": b.get("name") or (b.get("path", "").rsplit("/", 1)[-1]),
+                                             "size": b.get("size", 0), "mime": b.get("mime", "")} for b in fblocks]})
                 for blk in blocks:
                     if blk.get("type") == "tool_use":
                         it = {**base, "type": "tool", "call_id": blk["id"], "tool": blk["name"], "args": blk.get("input", {}),
@@ -267,6 +270,27 @@ class Threads:
                     else:
                         items.append({**base, "type": "system_note", "text": t})
         return items
+
+    def attach_files(self, msg_id: int, files: list[dict]) -> None:
+        """Append downloadable file blocks to an assistant message (dedup by path)."""
+        if not files or not msg_id:
+            return
+        r = self.db.one("SELECT content FROM messages WHERE id=?", (msg_id,))
+        if not r:
+            return
+        blocks = jload(r["content"], []) or []
+        have = {b.get("path", "") for b in blocks if isinstance(b, dict) and b.get("type") == "file"}
+        extra = []
+        for f in files:
+            p = (f.get("path") or "").strip()
+            if p and p not in have:
+                have.add(p)
+                extra.append({"type": "file", "path": p, "name": f.get("name") or p.rsplit("/", 1)[-1],
+                              "size": int(f.get("size") or 0), "mime": f.get("mime", "")})
+        if not extra:
+            return
+        blocks += extra
+        self.db.execute("UPDATE messages SET content=? WHERE id=?", (jdump(blocks), msg_id))
 
     def export_markdown(self, thread_id: str) -> str:
         """A readable transcript: who said what and when, with tool use as one-line notes. No tool arguments or results."""

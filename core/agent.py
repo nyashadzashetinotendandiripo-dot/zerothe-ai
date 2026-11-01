@@ -307,9 +307,11 @@ class AgentRun:
     def _loop(self, provider, history: list[dict], res: TurnResult) -> TurnResult:
         eng = self.engine
         limit = eng.bots.effective_step_limit(self.bot)
+        hard = limit if limit > 0 else 100_000   # 0 == unlimited, guarded only by a safety cap
         sys_prompt = ""
         final_text = ""
-        for step in range(1, limit + 1):
+        msg_id = None
+        for step in range(1, hard + 1):
             if self.stop.is_set():
                 raise StopRequested()
             self.steps = step
@@ -368,12 +370,44 @@ class AgentRun:
             self.last_seen = max(self.last_seen, rid)
         else:
             res.status = "limit"
-            msg = (f"I reached my step limit ({limit} steps) before finishing. Say 'continue' and I will keep going from where I stopped, "
-                   f"or raise the step limit for me in my settings.")
-            eng.threads.add(self.thread_id, self.bot_id, "assistant", [{"type": "text", "text": msg}], turn_id=self.id)
+            shown = f"{limit} steps" if limit > 0 else "my safety cap (100,000 steps)"
+            msg = (f"I worked through {shown} without finishing this goal. Say 'continue' and I will pick up right where I stopped.")
+            msg_id = eng.threads.add(self.thread_id, self.bot_id, "assistant", [{"type": "text", "text": msg}], turn_id=self.id)
             final_text = msg
+        self._attach_files_to_last(msg_id)
         res.final_text = final_text
         return res
+
+    def _attach_files_to_last(self, msg_id: int | None) -> None:
+        """Auto-surface files created during this turn on the final assistant message so they
+        show up as downloadable attachments in the chat, even if the Bot forgot file_attach."""
+        try:
+            eng = self.engine
+            if not msg_id:
+                return
+            from .db import jload
+            files, seen = [], set()
+            rows = eng.db.query("SELECT content FROM messages WHERE thread_id=? AND turn_id=? ORDER BY id", (self.thread_id, self.id))
+            for r in rows:
+                for blk in (jload(r["content"], []) or []):
+                    if not isinstance(blk, dict):
+                        continue
+                    if blk.get("type") == "file":          # already attached on a message
+                        p = blk.get("path") or ""
+                        if p and p not in seen:
+                            seen.add(p)
+                            files.append({"path": p, "name": blk.get("name", ""), "size": blk.get("size", 0), "mime": blk.get("mime", "")})
+                    if blk.get("type") == "tool_result":
+                        ui = blk.get("ui") or {}
+                        for f in ui.get("files") or []:
+                            p = (f.get("path") or "").strip()
+                            if p and p not in seen:
+                                seen.add(p)
+                                files.append(f)
+            if files:
+                eng.threads.attach_files(msg_id, files[:8])
+        except Exception:
+            self.engine.log.exception("attach turn files failed")
 
     # ------------------------------------------------------------ model calls
     def _failover_cfg(self) -> tuple[list[dict], int]:
@@ -759,7 +793,8 @@ class AgentRun:
 - Be resourceful: you have many tools (connectors, browser, python_run, file operations). If one tool fails, try another. If a website blocks you, use request_takeover. If data is in a file, read it with python_run. Never give up just because the first attempt failed.
 - Memory and skills: save stable preferences, role context, the user's voice and edge cases with memory_save as you learn them. When you work out a repeatable procedure, write it with skill_save. Follow existing skills (skill_read) when they match.
 - Follow through: if you are waiting on someone, schedule followup_schedule. Check open handoffs, and nudge a teammate whose handoff stalled with message_bot.
-- Be concise and plain. Use markdown. Screenshots you take are shown to the user in the chat.
+- Be concise and plain. Reply in flowing plain text — never narrate the commands you run or paste command output/logs into your reply; describe what you did and the result in words instead. Avoid decorative dividers and heavy markdown structure unless the user asks for a document. Screenshots you take are shown to the user in the chat.
+- Produced files: whenever you create a file for the user (PDF, Word, image, chart, export, anything they'd want to keep), call file_attach with its path before you finish — the file then shows in the chat as a downloadable card. Never just mention a path in text.
 - Current local time: {datetime.now().strftime('%A %Y-%m-%d %H:%M')}."""]
         if self.dry_run:
             parts.append("# DRY RUN\nThis is a test run. Consequential actions will be refused automatically; describe what you would have done and finish.")
@@ -799,6 +834,12 @@ Use these block types:
 - cards: product or option comparisons with images, prices, and actions.
 
 Rules: valid JSON only (double quotes); short labels; at most 4 blocks per reply; buttons/forms only send chat replies or open links — anything consequential (send, buy, delete, run, schedule) still goes through your tools and the user's approvals. When plain text answers best, use plain text.
+
+When to show widgets — your decision, never the user's:
+- Decide on your own to compose a ```ui block whenever it will genuinely help the user act. NEVER wait for the user to ask for "a form", "options", "a questionnaire" or "buttons" — if a structured choice, question, comparison or checklist would serve them, emit it unprompted.
+- Typical moments that call for a block: you need the user to pick between options; you'd otherwise ask a long list of questions (make it a form instead); you're reporting multi-step progress (steps); you have numeric results (stats/chart); you're presenting comparable things (cards/table); you finished a task with useful next actions (buttons).
+- Approvals that pause your action are shown to the user automatically as interactive Approve / Decline cards — you don't need to build those yourself; your job is to wait for the decision.
+- If the user explicitly says they don't want UI, stop using blocks for that conversation.
 
 Example:
 You: "Here are your top 3 options:"

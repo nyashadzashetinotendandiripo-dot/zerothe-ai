@@ -182,6 +182,7 @@ function Connectors() {
         </View>
       )}
       <ScrollView style={{ flex: 1 }} contentContainerStyle={st.list}>
+        <DeviceBridge onMsg={setMsg} />
         {rows.map((p) => <Row key={p.id} p={p} act={act} busyId={busyId} onMsg={setMsg} onRemove={removeOne} reload={load} />)}
 
         {!!avail.length && (
@@ -229,6 +230,62 @@ function Connectors() {
         </Text>
       </ScrollView>
       {!!overlay && <AuthModal o={overlay} onClose={() => done(overlay.auto ? overlay.pid : '')} />}
+    </View>
+  );
+}
+
+// ------------------------------------------------------- device bridge (phone)
+// Lets Bots act on this phone (open apps, tap, type) through the AccessibilityService
+// that ships inside the APK. The user must switch it on once in system settings.
+function DeviceBridge({ onMsg }) {
+  const [stt, setStt] = useState(null);
+  const [busy, setBusy] = useState('');
+  const load = useCallback(async () => {
+    try { setStt(await api('/api/device/status')); }
+    catch (e) { setStt({ connected: false, error: String(e.message || e) }); }
+  }, []);
+  useEffect(() => {
+    load();
+    const t = setInterval(load, 8000);
+    return () => clearInterval(t);
+  }, [load]);
+  const enable = async () => {
+    try {
+      if (Platform.OS === 'android') await Linking.sendIntent('android.settings.ACCESSIBILITY_SETTINGS');
+      else throw new Error('Android only');
+    } catch (e) {
+      Alert.alert('Turn on the Device Bridge', 'Open Settings > Accessibility > Downloaded apps > ZerotheBot and switch it on.');
+    }
+  };
+  const test = async () => {
+    setBusy('test');
+    try {
+      await api('/api/device/jobs', { method: 'POST', body: JSON.stringify({ cmd: 'open_app', args: { app: 'Settings' } }) });
+      onMsg && onMsg('Test queued — your phone should open Settings within a few seconds.');
+    } catch (e) { onMsg && onMsg(String(e.message || e)); }
+    setBusy('');
+  };
+  const on = !!(stt && stt.connected);
+  return (
+    <View style={st.card}>
+      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+        <Text style={[st.cardName, { flex: 1 }]}>My phone — Device Bridge</Text>
+        <View style={{ borderRadius: 999, borderWidth: 1, borderColor: on ? C.ok : C.muted, paddingHorizontal: 8, paddingVertical: 2 }}>
+          <Text style={{ color: on ? C.ok : C.muted, fontSize: 11, fontWeight: '800' }}>{on ? 'CONNECTED' : 'OFF'}</Text>
+        </View>
+      </View>
+      <Text style={l.cap}>
+        Lets your Bots open apps on this phone, tap and type for you. Switch on “ZerotheBot” in
+        Settings › Accessibility once — it stays on after that.
+      </Text>
+      {!!(stt && stt.error) && <Text style={[l.cap, { color: C.bad }]}>{stt.error}</Text>}
+      {on && <Text style={[l.cap, { color: C.ok }]}>Last seen {new Date((stt.last_seen || 0) * 1000).toLocaleTimeString()}</Text>}
+      <View style={{ flexDirection: 'row', gap: 8, marginTop: 8 }}>
+        <Pressable onPress={enable} style={[l.btn, { flex: 1, backgroundColor: C.solid }]}><Text style={[l.btnT, { color: C.onSolid }]}>Enable on this phone</Text></Pressable>
+        <Pressable onPress={test} disabled={busy === 'test'} style={[l.btn, { flex: 1, backgroundColor: C.panel2, borderWidth: 1, borderColor: C.line, opacity: busy === 'test' ? .5 : 1 }]}>
+          <Text style={[l.btnT, { color: C.text }]}>{busy === 'test' ? 'Testing…' : 'Test bridge'}</Text>
+        </Pressable>
+      </View>
     </View>
   );
 }

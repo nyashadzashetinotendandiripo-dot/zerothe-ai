@@ -492,6 +492,77 @@ def create_app(engine: Engine, token: str) -> FastAPI:
             raise HTTPException(404, "No such approval.")
         return r
 
+    # ------------------------------------------------- device bridge (phone)
+    # The ZerotheBot Android app runs an AccessibilityService poller that calls
+    # /api/device/pull, executes the job on the phone and posts the result back.
+    @app.get("/api/device/pull", dependencies=[api])
+    def device_pull(device: str = "phone") -> dict:
+        for _ in range(5):
+            row = eng.db.one("SELECT * FROM device_jobs WHERE device=? AND status='pending' "
+                             "ORDER BY created_at LIMIT 1", (device,))
+            if not row:
+                return {"job": None}
+            eng.db.execute("UPDATE device_jobs SET status='claimed', claimed_at=? WHERE id=? AND status='pending'",
+                           (time.time(), row["id"]))
+            cur = eng.db.one("SELECT * FROM device_jobs WHERE id=?", (row["id"],))
+            if cur and cur["status"] == "claimed":
+                try:
+                    args = json.loads(cur.get("args") or "{}")
+                except Exception:
+                    args = {}
+                return {"job": {"id": cur["id"], "cmd": cur["cmd"], "args": args, "bot_id": cur.get("bot_id") or ""}}
+        return {"job": None}
+
+    @app.post("/api/device/done", dependencies=[api])
+    def device_done(body: dict = Body(...)) -> dict:
+        jid = (body.get("id") or "").strip()
+        if not jid:
+            raise HTTPException(400, "id is required.")
+        failed = bool(body.get("error")) or body.get("ok") is False
+        result = str(body.get("result") or body.get("error") or "")[:8000]
+        eng.db.execute("UPDATE device_jobs SET status=?, result=?, done_at=? WHERE id=?",
+                       ("error" if failed else "done", result, time.time(), jid))
+        return {"ok": True}
+
+    @app.post("/api/device/ping", dependencies=[api])
+    def device_ping(body: dict = Body(default={})) -> dict:
+        dev = (body.get("device") or "phone").strip() or "phone"
+        info = body.get("info") or {}
+        try:
+            payload = json.dumps(info)[:4000]
+        except Exception:
+            payload = "{}"
+        eng.db.execute("INSERT INTO devices(id, last_seen, info) VALUES(?,?,?) "
+                       "ON CONFLICT(id) DO UPDATE SET last_seen=excluded.last_seen, info=excluded.info",
+                       (dev, time.time(), payload))
+        return {"ok": True}
+
+    @app.get("/api/device/status", dependencies=[api])
+    def device_status() -> dict:
+        row = eng.db.one("SELECT id, last_seen, info FROM devices WHERE id='phone'")
+        pending = eng.db.scalar("SELECT COUNT(*) FROM device_jobs WHERE status='pending'", (), 0) or 0
+        last = (row or {}).get("last_seen") or 0
+        return {"connected": bool(last and (time.time() - last) < 120), "last_seen": last,
+                "pending": int(pending), "info": (row or {}).get("info") or "{}"}
+
+    @app.post("/api/device/jobs", dependencies=[api])
+    def device_enqueue(body: dict = Body(...)) -> dict:
+        """Queue a phone action from the app itself (Device Bridge test card)."""
+        cmd = (body.get("cmd") or "").strip()
+        if cmd not in ("open_app", "tap", "text", "key"):
+            raise HTTPException(400, "Unknown command. Use open_app, tap, text or key.")
+        jid = str(int(time.time() * 1000)) + os.urandom(3).hex()
+        eng.db.insert("device_jobs", {"id": jid, "device": (body.get("device") or "phone").strip() or "phone",
+                                      "bot_id": "", "thread_id": "", "turn_id": "", "cmd": cmd,
+                                      "args": json.dumps(body.get("args") or {}), "created_at": time.time()})
+        return {"id": jid}
+
+    @app.delete("/api/device/jobs", dependencies=[api])
+    def device_clear() -> dict:
+        eng.db.execute("UPDATE device_jobs SET status='error', result='cancelled', done_at=? "
+                       "WHERE status IN ('pending','claimed')", (time.time(),))
+        return {"ok": True}
+
     # --------------------------------------------------------------- memory
     @app.get("/api/bots/{bot_id}/memory", dependencies=[api])
     def memory_list(bot_id: str) -> list[dict]:

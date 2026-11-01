@@ -29,6 +29,70 @@ fi
 log "expo prebuild"
 npx expo prebuild -p android --no-install --clean
 
+# 3b. Device Bridge — an AccessibilityService that lets Bots drive the user's phone.
+#     Written after prebuild so the generated android/ tree is not wiped.
+PKG_DIR="android/app/src/main/java/ai/zerothebot/app"
+mkdir -p "$PKG_DIR" android/app/src/main/res/xml
+cp android-bridge/ZbDeviceService.kt "$PKG_DIR/ZbDeviceService.kt"
+export ZB_API_BASE="${ZB_API_BASE:-https://8765-agquljzsz7k42vgoenj7qr6fim.instabox.tech}"
+export ZB_TOKEN="${ZB_TOKEN:-eQlVnNsfXtYQyXkX9h1XkkwVI9sxF85hzrPASQmbv_g}"
+cat > "$PKG_DIR/ZbDeviceConfig.kt" <<'EOF'
+package ai.zerothebot.app
+
+object ZbDeviceConfig {
+    const val BASE = "PLACEHOLDER_BASE"
+    const val TOKEN = "PLACEHOLDER_TOKEN"
+}
+EOF
+python3 - "$PKG_DIR/ZbDeviceConfig.kt" <<'PY'
+import os, sys
+p = sys.argv[1]
+s = open(p, encoding='utf-8').read()
+s = s.replace('PLACEHOLDER_BASE', os.environ['ZB_API_BASE']).replace('PLACEHOLDER_TOKEN', os.environ['ZB_TOKEN'])
+open(p, 'w', encoding='utf-8').write(s)
+PY
+cat > android/app/src/main/res/xml/zb_accessibility.xml <<'EOF'
+<?xml version="1.0" encoding="utf-8"?>
+<accessibility-service xmlns:android="http://schemas.android.com/apk/res/android"
+    android:accessibilityEventTypes="typeWindowStateChanged|typeWindowContentChanged"
+    android:accessibilityFeedbackType="feedbackGeneric"
+    android:accessibilityFlags="flagDefault|flagReportViewIds|flagRetrieveInteractiveWindows"
+    android:canPerformGestures="true"
+    android:canRetrieveWindowContent="true"
+    android:notificationTimeout="100" />
+EOF
+python3 - <<'PY'
+from pathlib import Path
+p = Path('android/app/src/main/AndroidManifest.xml')
+s = p.read_text(encoding='utf-8')
+if 'ZbDeviceService' not in s:
+    service = '''        <service
+            android:name=".ZbDeviceService"
+            android:exported="false"
+            android:label="ZerotheBot"
+            android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE">
+            <intent-filter>
+                <action android:name="android.accessibilityservice.AccessibilityService" />
+            </intent-filter>
+            <meta-data
+                android:name="android.accessibilityservice"
+                android:resource="@xml/zb_accessibility" />
+        </service>
+'''
+    s = s.replace('</application>', service + '    </application>', 1)
+if '<queries>' not in s:
+    queries = '''    <queries>
+        <intent>
+            <action android:name="android.intent.action.MAIN" />
+            <category android:name="android.intent.category.LAUNCHER" />
+        </intent>
+    </queries>
+'''
+    s = s.replace('<application', queries + '    <application', 1)
+p.write_text(s, encoding='utf-8')
+PY
+log "device bridge patched into android/"
+
 # 4. Sign everything with the GLOBAL ~/.android/debug.keystore — the same key the
 #    first shell APK was signed with, so this APK upgrade-installs over it.
 sed -i "s|storeFile file('debug.keystore')|storeFile file(System.getProperty(\"user.home\") + \"/.android/debug.keystore\")|" android/app/build.gradle

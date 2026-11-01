@@ -2,14 +2,14 @@
   "expo": {
     "name": "ZerotheBot",
     "slug": "zerothebot",
-    "version": "1.17.28",
+    "version": "1.17.29",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "dark",
     "scheme": "zerothebot",
     "android": {
       "package": "ai.zerothebot.app",
-      "versionCode": 91,
+      "versionCode": 92,
       "adaptiveIcon": {
         "backgroundColor": "#0f1115",
         "foregroundImage": "./assets/android-icon-foreground.png",
@@ -21,7 +21,7 @@
     "web": {
       "favicon": "./assets/favicon.png"
     },
-    "runtimeVersion": "2",
+    "runtimeVersion": "3",
     "updates": {
       "url": "https://8765-agquljzsz7k42vgoenj7qr6fim.instabox.tech/updates/manifest",
       "checkAutomatically": "ON_LOAD",

@@ -17,6 +17,7 @@ import inspect
 import io
 import json
 import mimetypes
+import os
 import re
 import secrets as pysecrets
 import shutil
@@ -690,7 +691,9 @@ def build_documents(c: Conn) -> list[ToolSpec]:
             y -= 16
         can.save()
         rel = c.mgr.engine.computer.rel(fp)
-        return f"Created PDF {rel} ({len(text.splitlines())} lines)."
+        size = fp.stat().st_size
+        return ToolResult(f"Created PDF {rel} ({len(text.splitlines())} lines).",
+                          files=[{"path": rel, "name": fp.name, "size": size, "mime": "application/pdf"}])
 
     def docx_create(ctx, a):
         try:
@@ -706,7 +709,10 @@ def build_documents(c: Conn) -> list[ToolSpec]:
             doc.add_paragraph(line)
         doc.save(str(fp))
         rel = c.mgr.engine.computer.rel(fp)
-        return f"Created DOCX {rel}."
+        size = fp.stat().st_size
+        return ToolResult(f"Created DOCX {rel}.",
+                          files=[{"path": rel, "name": fp.name, "size": size,
+                                  "mime": "application/vnd.openxmlformats-officedocument.wordprocessingml.document"}])
 
     def _fmt_size(n: int) -> str:
         for unit in ("B", "KB", "MB", "GB"):
@@ -848,6 +854,149 @@ def python_run(ctx, a):
             script_path.unlink()
         except OSError:
             pass
+
+
+def build_shell(c: Conn) -> list[ToolSpec]:
+    """Direct host shell for privileged Bots: full control of the machine the service
+    runs on — the same power an engineer has (git, pip, service restarts, file edits)."""
+
+    def run_command(ctx, a):
+        """Run a shell command on the host server (Linux VM that runs ZerotheBot)."""
+        cmd = (a.get("cmd") or "").strip()
+        if not cmd:
+            raise ConnectorError("cmd is required.")
+        try:
+            timeout = min(int(a.get("timeout", 120) or 120), 600)
+        except (TypeError, ValueError):
+            timeout = 120
+        if timeout < 1:
+            timeout = 1
+        cwd = (a.get("cwd") or "").strip()
+        if cwd:
+            full, inside = c.mgr.engine.computer.resolve(cwd)
+            if not inside:
+                raise ConnectorError("cwd must be inside the workspace.")
+        else:
+            full, _inside = c.mgr.engine.computer.resolve(".")
+        env = {k: v for k, v in os.environ.items() if "SECRET" not in k.upper() and "TOKEN" not in k.upper() and not k.startswith("GOOGLE_")}
+        env.setdefault("PYTHONUTF8", "1")
+        try:
+            proc = subprocess.run(["bash", "-lc", cmd], cwd=str(full), capture_output=True, text=True,
+                                  timeout=timeout, env=env)
+        except subprocess.TimeoutExpired:
+            raise ConnectorError(f"Command timed out after {timeout}s and was stopped.")
+        except FileNotFoundError:
+            raise ConnectorError("bash is not available on this host.")
+        out = (proc.stdout or "")
+        err = (proc.stderr or "")
+        result = f"exit code: {proc.returncode}\n"
+        if out:
+            result += f"--- stdout ---\n{out[:40000]}\n"
+        if err:
+            result += f"--- stderr ---\n{err[:12000]}\n"
+        return result or "(no output)"
+
+    return [
+        T("run_command", "Run a shell command on the host server that runs ZerotheBot (the machine with the app's code and service). "
+                         "Full Linux access: git, pip, python, curl, systemctl-like restarts, file edits. cwd is a workspace-relative folder "
+                         "(optional; defaults to the Bot's workspace). Use for fixing, building, and inspecting the app itself. "
+                         "Long builds should be started with nohup in the background and polled.",
+          {"cmd": {"type": "string", "description": "The shell command to run, e.g. 'git status' (required). "
+                                                    "Separate steps with && or ; . Redirect long output to a file in workspace and read it.",
+                   },
+           "timeout": {"type": "integer", "description": "Seconds to allow (max 600, default 120)."},
+           "cwd": {"type": "string", "description": "Optional workspace-relative working directory."}},
+          ["cmd"], run_command,
+          risk=lambda ctx, a: Risk("command", f"Run command: {short(a.get('cmd', ''), 140)}",
+                                  {"pattern": ((a.get("cmd") or "").strip().split() or ["*"])[0]}),
+          label=lambda a: f"Run command: {short(a.get('cmd', ''), 80)}"),
+    ]
+
+
+def build_android(c: Conn) -> list[ToolSpec]:
+    """Control the user's own Android phone apps through the Device Bridge on their phone.
+    The phone runs a poller (the ZerotheBot accessibility service in the app) that executes
+    queued jobs and reports results. No cloud vendor needed."""
+    from .db import jdump as _jdump
+
+    def _job(ctx: ToolContext, cmd: str, args: dict, timeout: int = 45) -> str:
+        eng = ctx.engine
+        jid = str(int(time.time() * 1000)) + os.urandom(3).hex()
+        eng.db.insert("device_jobs", {"id": jid, "device": "phone", "bot_id": ctx.bot["id"],
+                                      "thread_id": ctx.thread_id, "turn_id": ctx.turn_id,
+                                      "cmd": cmd, "args": _jdump(args), "created_at": time.time()})
+        end = time.time() + timeout
+        while time.time() < end:
+            row = eng.db.one("SELECT status, result FROM device_jobs WHERE id=?", (jid,))
+            if row and row["status"] in ("done", "error"):
+                if row["status"] == "done":
+                    return row["result"] or "Done."
+                raise ConnectorError(row["result"] or "The phone could not do that.")
+            row = eng.db.one("SELECT status FROM device_jobs WHERE id=?", (jid,))
+            if row and row["status"] == "stale":
+                raise ConnectorError("The phone did not pick this up. Open the ZerotheBot app on the phone and "
+                                     "enable ZerotheBot in Accessibility (Settings > Accessibility > ZerotheBot).")
+            time.sleep(1.0)
+        eng.db.execute("UPDATE device_jobs SET status='stale', done_at=? WHERE id=? AND status != 'done'", (time.time(), jid))
+        raise ConnectorError(f"The phone did not report back within {timeout}s. "
+                             "Check the phone: the ZerotheBot app must be installed and the Device Bridge service enabled in Accessibility settings.")
+
+    def android_open_app(ctx, a):
+        app = (a.get("app") or "").strip()
+        if not app:
+            raise ConnectorError("app is required (app name like 'WhatsApp' or package name like 'com.whatsapp').")
+        return _job(ctx, "open_app", {"app": app}, timeout=45)
+
+    def android_tap(ctx, a):
+        try:
+            x = int(a.get("x"))
+            y = int(a.get("y"))
+        except (TypeError, ValueError):
+            raise ConnectorError("x and y are required as integers (screen pixels).")
+        return _job(ctx, "tap", {"x": x, "y": y}, timeout=45)
+
+    def android_text(ctx, a):
+        t = (a.get("text") or "").strip()
+        if not t:
+            raise ConnectorError("text is required.")
+        return _job(ctx, "text", {"text": t}, timeout=45)
+
+    def android_key(ctx, a):
+        key = (a.get("key") or "").strip()
+        if key not in ("back", "home", "recents", "enter", "backspace"):
+            raise ConnectorError("key must be one of: back, home, recents, enter, backspace.")
+        return _job(ctx, "key", {"key": key}, timeout=45)
+
+    def android_status(ctx, a):
+        last = c.mgr.engine.db.one("SELECT done_at FROM device_jobs WHERE device='phone' AND status='done' ORDER BY done_at DESC LIMIT 1")
+        return (f"Device bridge last talked to the server at {last['done_at']:.0f} (unix). "
+                "If jobs are stale, ask the user to open the ZerotheBot phone app once so the bridge reconnects.") if last else \
+            "No phone has reported to the device bridge yet. The user needs the ZerotheBot Android app with the Device Bridge enabled in Accessibility settings."
+
+    return [
+        T("android_open_app", "Open an app on the user's own Android phone. Pass the app's name "
+                              "(for example 'WhatsApp', 'Instagram', 'Bank') or its package name ('com.whatsapp'). "
+                              "The phone resolves the name against installed apps.",
+          {"app": {"type": "string", "description": "App name or package id (required)."}},
+          ["app"], android_open_app, risk=R("write", lambda a: f"Open {a.get('app')} on your phone"),
+          label=lambda a: f"Open {a.get('app')} on your phone"),
+        T("android_tap", "Tap a spot on the phone screen (screen pixel coordinates). Use sparingly: you cannot see "
+                         "the phone screen in this version, so prefer android_open_app plus android_text.",
+          {"x": {"type": "integer", "description": "X in screen pixels."},
+           "y": {"type": "integer", "description": "Y in screen pixels."}},
+          ["x", "y"], android_tap, risk=R("write", lambda a: f"Tap phone screen at {a.get('x')},{a.get('y')}"),
+          label=lambda a: "Tap your phone screen"),
+        T("android_text", "Type text into the focused field on the phone (uses clipboard + paste).",
+          {"text": {"type": "string", "description": "Text to type (required)."}},
+          ["text"], android_text, risk=R("write", lambda a: "Type text on your phone"),
+          label=lambda a: "Type text on your phone"),
+        T("android_key", "Press a system key on the phone: back, home, recents, enter or backspace.",
+          {"key": {"type": "string", "description": "back | home | recents | enter | backspace (required)."}},
+          ["key"], android_key, risk=R("write", lambda a: f"Press {a.get('key')} on your phone"),
+          label=lambda a: f"Press {a.get('key')} on your phone"),
+        T("android_status", "Check whether the phone's Device Bridge is connected and when it last reported.",
+          {}, [], android_status, label=lambda a: "Check device bridge status"),
+    ]
 
 
 def build_calendar(c: Conn) -> list[ToolSpec]:
@@ -1237,6 +1386,12 @@ def builtin_defs() -> list[PluginDef]:
                   help="Uses the same Google OAuth client as Gmail if you leave the fields blank. Enable the Google Docs, Sheets, Slides and Drive APIs."),
         PluginDef("documents", "Documents (PDF & Word)", "Read text from PDF and Word files, and create new PDF/DOCX files in the workspace.",
                   build=build_documents, help="Works out of the box — no setup needed. Files are saved in the Bot workspace and show up in the Files screen."),
+        PluginDef("shell", "Host Shell (admin)", "Run commands on the server that runs ZerotheBot — the machine with the app code. For engineer Bots that fix, build and deploy things.",
+                  build=build_shell, help="Works out of the box — no setup needed. Commands run with the service user on the host VM. "
+                                          "Every command shows an approval card; press 'Always' once to trust that command type for the Bot."),
+        PluginDef("android", "My Android phone", "Open apps on the user's own phone, tap, type and press keys through the Device Bridge.",
+                  build=build_android, help="Install the ZerotheBot app on the phone, then enable 'ZerotheBot' in Settings > Accessibility. "
+                                            "The app's Device Bridge then executes tasks the Bot queues for the phone."),
         PluginDef("slack", "Slack", "Read channels and post messages (with approval).",
                   fields=[{"key": "bot_token", "label": "Bot token (xoxb-...)", "secret": True, "required": True},
                            {"key": "user_token", "label": "User token (xoxp-..., optional, for search)", "secret": True, "required": False}],

@@ -68,6 +68,15 @@ CREATE INDEX IF NOT EXISTS idx_approvals_status ON approvals(status, created_at)
 CREATE TABLE IF NOT EXISTS approval_rules(
   id INTEGER PRIMARY KEY AUTOINCREMENT, bot_id TEXT, category TEXT, pattern TEXT, created_at REAL
 );
+CREATE TABLE IF NOT EXISTS device_jobs(
+  id TEXT PRIMARY KEY, device TEXT DEFAULT '', bot_id TEXT, thread_id TEXT, turn_id TEXT,
+  cmd TEXT, args TEXT DEFAULT '{}', status TEXT DEFAULT 'pending', result TEXT DEFAULT '',
+  created_at REAL, claimed_at REAL, done_at REAL
+);
+CREATE INDEX IF NOT EXISTS idx_device_jobs_status ON device_jobs(status, created_at);
+CREATE TABLE IF NOT EXISTS devices(
+  id TEXT PRIMARY KEY, last_seen REAL DEFAULT 0, info TEXT DEFAULT '{}'
+);
 CREATE TABLE IF NOT EXISTS actions(
   id INTEGER PRIMARY KEY AUTOINCREMENT, ts REAL, bot_id TEXT, thread_id TEXT, turn_id TEXT, tool TEXT,
   args TEXT, result TEXT, status TEXT, category TEXT, url TEXT DEFAULT '', path TEXT DEFAULT '', duration_ms INTEGER DEFAULT 0

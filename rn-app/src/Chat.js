@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { View, Text, TextInput, Pressable, FlatList, StyleSheet, KeyboardAvoidingView, Platform, Image, ActivityIndicator, ScrollView, Clipboard, Alert } from 'react-native';
+import { View, Text, TextInput, Pressable, FlatList, StyleSheet, KeyboardAvoidingView, Platform, Image, ActivityIndicator, ScrollView, Clipboard, Alert, Linking, Animated, Easing } from 'react-native';
 import { WebView } from 'react-native-webview';
 import { api, API_BASE, conf } from './session';
 import md from './md';
@@ -71,6 +71,54 @@ function parseDate(it) {
 }
 
 const REACTS = ['👍', '❤️', '🎉', '😄', '🚀', '👀'];
+
+// Replies should read as raw text: strip decorative rules, heading hashes and
+// runaway blank lines that models add on their own. Keeps lists, links and code.
+function plainText(src) {
+  const clean = (part) => {
+    let t = part;
+    t = t.replace(/^[ \t]*([-*_])\1{2,}[ \t]*$/gm, '');        // ---, ***, ___ rules
+    t = t.replace(/^[ \t]{0,3}#{1,6}[ \t]*/gm, '');            // ### heading hashes
+    t = t.replace(/^[ \t]*>[ \t]?/gm, '');                     // block quotes
+    t = t.replace(/[ \t]+$/gm, '');                            // trailing spaces
+    t = t.replace(/\n{3,}/g, '\n\n');                          // extra blank lines
+    return t;
+  };
+  const parts = String(src == null ? '' : src).split(/```/);
+  // Odd segments are fenced code — leave them byte-for-byte alone.
+  return parts.map((p, i) => (i % 2 ? '```' + p + '```' : clean(p))).join('').trim();
+}
+
+// Living backdrop: two slow aurora glows over near-black. Cheap (native driver),
+// non-interactive, and sits behind the message list so the chat feels alive.
+function ChatBackdrop() {
+  const a = useRef(new Animated.Value(0)).current;
+  useEffect(() => {
+    const loop = Animated.loop(Animated.sequence([
+      Animated.timing(a, { toValue: 1, duration: 11000, easing: Easing.inOut(Easing.quad), useNativeDriver: true }),
+      Animated.timing(a, { toValue: 0, duration: 11000, easing: Easing.inOut(Easing.quad), useNativeDriver: true }),
+    ]));
+    loop.start();
+    return () => loop.stop();
+  }, [a]);
+  const teal = a.interpolate({ inputRange: [0, 1], outputRange: [0.10, 0.22] });
+  const indigo = a.interpolate({ inputRange: [0, 1], outputRange: [0.16, 0.07] });
+  return (
+    <View pointerEvents="none" style={StyleSheet.absoluteFill}>
+      <Animated.View style={{
+        position: 'absolute', top: -140, left: -120, width: 380, height: 380, borderRadius: 190,
+        backgroundColor: '#00a884', opacity: teal,
+        transform: [{ scale: a.interpolate({ inputRange: [0, 1], outputRange: [0.9, 1.15] }) }],
+      }} />
+      <Animated.View style={{
+        position: 'absolute', bottom: 40, right: -150, width: 420, height: 420, borderRadius: 210,
+        backgroundColor: '#5b7cfa', opacity: indigo,
+        transform: [{ scale: a.interpolate({ inputRange: [0, 1], outputRange: [1.1, 0.92] }) }],
+      }} />
+      <View style={{ position: 'absolute', top: '34%', right: -80, width: 220, height: 220, borderRadius: 110, backgroundColor: '#00d4a0', opacity: 0.045 }} />
+    </View>
+  );
+}
 
 const TOOL_GLYPH = { running: '•', ok: '✓', error: '✕', denied: '⛔', blocked: '⛔' };
 
@@ -422,10 +470,11 @@ function ChatScreen({ thread, threads, botName: propsBotName, onSwitch, onBack, 
     setZoom(z);
     try {
       if (liveRef.current) {
+        // CSS zoom (not transform) so the VNC client's own click/pointer mapping
+        // stays valid at reduced zoom — transform:scale() makes taps land wrong.
         liveRef.current.injectJavaScript(
-          "(function(){var b=document.body;if(!b)return;b.style.transform='scale(" + z + ")';"
-          + "b.style.transformOrigin='top left';b.style.width='" + (100 / z) + "%';"
-          + "b.style.height='" + (100 / z) + "%';})();true;");
+          "(function(){var b=document.body;if(!b)return;b.style.transform='';b.style.transformOrigin='';"
+          + "b.style.width='';b.style.height='';b.style.zoom=" + z + ";})();true;");
       }
     } catch (e) { /* view not ready yet */ }
   };
@@ -455,7 +504,7 @@ function ChatScreen({ thread, threads, botName: propsBotName, onSwitch, onBack, 
     if (item.type === 'assistant') return (
       <Pressable onLongPress={() => item.id && setPick(item)} delayLongPress={350} style={st.rowIn}>
         <View style={st.answer}>
-          {aiBody(asText(item.text), (t) => md(t, st.answerT), (r) => { setText(r); })}
+          {aiBody(asText(item.text), (t) => md(plainText(t), st.answerT), (r) => { setText(r); })}
           {(item.files || []).length ? (
             <View style={{ marginTop: 6 }}>
               {(item.files || []).map((f, i) => <FileRow key={i} f={f} />)}
@@ -471,7 +520,7 @@ function ChatScreen({ thread, threads, botName: propsBotName, onSwitch, onBack, 
       return null;
     }
     if (item.type === 'notice') return item.level === 'cmd'
-      ? <View style={st.cmdNote}>{md(asText(item.text), st.noteT)}</View>
+      ? null
       : <Text style={st.noteT}>{asText(item.text)}</Text>;
     if (item.type === 'system_note') return <Text style={st.noteT}>{asText(item.text).slice(0, 200)}</Text>;
     return null;
@@ -522,6 +571,7 @@ function ChatScreen({ thread, threads, botName: propsBotName, onSwitch, onBack, 
 
   return (
     <KeyboardAvoidingView style={{ flex: 1, backgroundColor: BG }} behavior="padding" keyboardVerticalOffset={10}>
+      <ChatBackdrop />
       {/* WhatsApp-style top bar: menu · name/status (tap for chat history) */}
       <View style={[st.header, { paddingTop: (ins?.top || 0) + 6 }]}>
         <Pressable onPress={onMenu} hitSlop={10} style={st.hBtn}><Text style={st.hIcon}>☰</Text></Pressable>
@@ -556,7 +606,7 @@ function ChatScreen({ thread, threads, botName: propsBotName, onSwitch, onBack, 
         </Pressable>
       )}
 
-      <View style={{ flex: 1, backgroundColor: BG }}>
+      <View style={{ flex: 1, backgroundColor: 'transparent' }}>
         {loading ? <ActivityIndicator style={{ marginTop: 28 }} color={MUTED} /> : (
           <FlatList
             ref={listRef}
@@ -565,6 +615,10 @@ function ChatScreen({ thread, threads, botName: propsBotName, onSwitch, onBack, 
             renderItem={renderStreamAware(renderItem)}
             contentContainerStyle={[st.list, { paddingBottom: 16 }]}
             keyboardShouldPersistTaps="handled"
+            initialNumToRender={14}
+            maxToRenderPerBatch={10}
+            windowSize={9}
+            removeClippedSubviews={Platform.OS === 'android'}
             onContentSizeChange={scrollEnd}
             onLayout={scrollEnd}
             onScroll={onScroll}
@@ -831,7 +885,7 @@ function renderStreamAware(fn) {
         return (
           <View style={st.rowIn}>
             <View style={st.answer}>
-              {md(uiStreamText(item.stream) || '…', st.answerT)}
+              {md(plainText(uiStreamText(item.stream)) || '…', st.answerT)}
             </View>
           </View>
         );
@@ -859,7 +913,7 @@ function MsgFoot({ it, time, outgoing }) {
 }
 
 const st = StyleSheet.create({
-  header: { flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 10, paddingBottom: 8, backgroundColor: BG },
+  header: { flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 10, paddingBottom: 8, backgroundColor: 'rgba(9,12,11,0.92)' },
   hBtn: { width: 40, height: 40, borderRadius: 20, alignItems: 'center', justifyContent: 'center' },
   hIcon: { color: TEXT, fontSize: 19 },
   hIconSm: { color: MUTED, fontSize: 17 },
@@ -907,7 +961,7 @@ const st = StyleSheet.create({
   replyTxt: { color: MUTED, fontSize: 12.5 },
   replyX: { color: MUTED, fontSize: 15 },
 
-  composerWrap: { paddingHorizontal: 10, paddingTop: 6, backgroundColor: BG },
+  composerWrap: { paddingHorizontal: 10, paddingTop: 6, backgroundColor: 'rgba(9,12,11,0.94)' },
   composer: { flexDirection: 'row', alignItems: 'flex-end', gap: 6, backgroundColor: '#1c1c1c', borderWidth: 1, borderColor: '#2a2a2a', borderRadius: 24, paddingLeft: 14, paddingRight: 5, paddingVertical: 5 },
   uploadBtn: { width: 34, height: 34, borderRadius: 17, backgroundColor: '#2a2a2a', alignItems: 'center', justifyContent: 'center', borderWidth: 1, borderColor: '#3a3a3a' },
   uploadT: { color: TEXT, fontSize: 14, lineHeight: 16 },

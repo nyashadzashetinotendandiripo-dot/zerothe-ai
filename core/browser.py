@@ -354,7 +354,7 @@ class Screen:
             return
         try:
             await page.wait_for_load_state("domcontentloaded", timeout=4000)
-            await page.wait_for_load_state("networkidle", timeout=2500)
+            await page.wait_for_load_state("networkidle", timeout=1200)
         except Exception:
             pass
         await asyncio.sleep(extra)

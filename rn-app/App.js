@@ -793,7 +793,8 @@ function BotModal({ bot, onClose, onCloseSaved, onBotDeleted }) {
   const [mems, setMems] = useState(null);
   const [memAdd, setMemAdd] = useState('');
   const [saving, setSaving] = useState(false);
-  const [stepLimit, setStepLimit] = useState(String(bot.step_limit || 100));
+  const [stepLimit, setStepLimit] = useState(bot.step_limit == null ? '0' : String(bot.step_limit));
+  const [approvalMode, setApprovalMode] = useState(bot.approval_mode || 'ask');
   const [grants, setGrants] = useState(null);          // ["plugin:gmail", "mcp:fs", …]
   const [tools, setTools] = useState([]);             // {key,label,sub}
   const [grantBusy, setGrantBusy] = useState('');
@@ -837,8 +838,13 @@ function BotModal({ bot, onClose, onCloseSaved, onBotDeleted }) {
   const EMOJIS = ['🤖', '🧠', '📬', '🛍', '📊', '🧾', '🔍', '✍️', '📅', '🌐', '💼', '🧹'];
   const save = async () => {
     setSaving(true);
-    try { await api('/api/bots/' + bot.id, { method: 'PUT', body: JSON.stringify({ emoji: em, step_limit: parseInt(stepLimit) || 100 }) }); onCloseSaved(); }
-    catch (e) { /* ignore */ }
+    const n = parseInt(stepLimit, 10);
+    const steps = isFinite(n) && n > 0 ? Math.min(n, 100000) : 0;   // 0 = unlimited
+    try {
+      await api('/api/bots/' + bot.id, { method: 'PUT', body: JSON.stringify({ emoji: em, step_limit: steps, approval_mode: approvalMode }) });
+      onCloseSaved();
+    }
+    catch (e) { Alert.alert('Could not save', String(e.message || e)); }
     setSaving(false);
   };
   const addMem = async () => {
@@ -906,11 +912,37 @@ function BotModal({ bot, onClose, onCloseSaved, onBotDeleted }) {
             placeholderTextColor={C.muted} onSubmitEditing={addMem} />
           <Pressable onPress={addMem} style={[n.hbtn, { backgroundColor: C.solid }]}><Text style={{ fontSize: 18, color: C.onSolid }}>＋</Text></Pressable>
         </View>
-        <Text style={[l.lbl, { marginTop: 6 }]}>Step limit — how many actions the Bot can take per turn</Text>
-        <View style={{ flexDirection: 'row', gap: 8 }}>
-          <TextInput style={[l.inl, { flex: 1 }]} value={stepLimit} onChangeText={setStepLimit} keyboardType="numeric" placeholder="100" placeholderTextColor={C.muted} />
-          <Text style={[l.cap, { marginTop: 20 }]}>steps per turn</Text>
+        <Text style={[l.lbl, { marginTop: 6 }]}>Steps per turn — 0 means unlimited</Text>
+        <View style={{ flexDirection: 'row', gap: 8, alignItems: 'center' }}>
+          <TextInput style={[l.inl, { flex: 1 }]} value={stepLimit} onChangeText={setStepLimit} keyboardType="numeric" placeholder="0" placeholderTextColor={C.muted} />
+          <Pressable onPress={() => setStepLimit('0')} style={[m.toolRow, { paddingHorizontal: 14 }, (!stepLimit || parseInt(stepLimit, 10) <= 0) && m.toolOn]}>
+            <Text style={{ color: (!stepLimit || parseInt(stepLimit, 10) <= 0) ? C.ok : C.muted, fontWeight: '800', fontSize: 12.5 }}>Unlimited</Text>
+          </Pressable>
         </View>
+        <Text style={l.cap}>{(!stepLimit || parseInt(stepLimit, 10) <= 0)
+          ? 'Unlimited — the Bot keeps taking actions until the job is finished.'
+          : 'The Bot pauses after this many actions and asks you to continue.'}</Text>
+        <Text style={[l.lbl, { marginTop: 6 }]}>Approvals</Text>
+        <Text style={l.cap}>Choose how often this Bot has to ask you before it acts.</Text>
+        <View style={{ gap: 6 }}>
+          {[
+            { k: 'ask', t: 'Ask every time', s: 'Every consequential action waits for your tap.' },
+            { k: 'auto_review', t: 'Auto-review', s: 'Routine steps run; risky ones still ask.' },
+            { k: 'full_access', t: 'Full access', s: 'Runs on its own. Use for trusted engineer Bots.' },
+          ].map((o) => (
+            <Pressable key={o.k} onPress={() => setApprovalMode(o.k)} style={[m.toolRow, approvalMode === o.k && m.toolOn]}>
+              <View style={{ flex: 1 }}>
+                <Text style={[l.cap, { marginBottom: 0, color: C.text }]}>{o.t}</Text>
+                <Text style={[l.cap, { marginBottom: 0, fontSize: 11 }]}>{o.s}</Text>
+              </View>
+              <Text style={{ color: approvalMode === o.k ? C.ok : C.muted, fontWeight: '800', fontSize: 12.5 }}>
+                {approvalMode === o.k ? 'ON' : ''}
+              </Text>
+            </Pressable>
+          ))}
+        </View>
+        <Pressable onPress={save} disabled={saving} style={[l.btn, { opacity: saving ? .5 : 1 }]}><Text style={l.btnT}>Save settings</Text></Pressable>
+        <Text style={l.cap}>Tip: when an approval card appears, tap “Always” once to stop it asking for that kind of action.</Text>
         <Pressable onPress={() => { setSaving(false); onClose(); Alert.alert('Delete bot?', 'This permanently deletes the bot and all its chats.', [
           { text: 'Cancel', style: 'cancel' },
           { text: 'Delete', style: 'destructive', onPress: async () => {
