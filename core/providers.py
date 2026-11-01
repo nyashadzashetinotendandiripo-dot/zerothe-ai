@@ -506,6 +506,8 @@ class OpenAICompatProvider(Provider):
                 # This key worked: keep it for the rest of the turn and future calls.
                 if key:
                     self.api_key = key
+                    if self.api_keys and self.api_keys[0] != key:
+                        self.api_keys = [key] + [k for k in self.api_keys if k != key]
                 last_err = None
                 break
             except ProviderError as e:
