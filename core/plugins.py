@@ -914,6 +914,29 @@ def build_shell(c: Conn) -> list[ToolSpec]:
     ]
 
 
+def _bump_app_version(repo: str) -> tuple[str, str, int] | None:
+    """Increment rn-app/app.json patch version + versionCode so a rebuild installs as an update.
+    Returns (old_version, new_version, new_code) or None when the file is missing/invalid."""
+    path = Path(repo) / "rn-app" / "app.json"
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        expo = data.setdefault("expo", {})
+        old = str(expo.get("version") or "0.0.0")
+        parts = [int(x) for x in re.findall(r"\d+", old)[:3]]
+        while len(parts) < 3:
+            parts.append(0)
+        parts[2] += 1
+        new = ".".join(str(p) for p in parts)
+        expo["version"] = new
+        android = expo.setdefault("android", {})
+        code = int(android.get("versionCode") or 1) + 1
+        android["versionCode"] = code
+        path.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
+        return old, new, code
+    except Exception:  # noqa: BLE001
+        return None
+
+
 def build_release(c: Conn) -> list[ToolSpec]:
     """Ship the app from inside a Bot turn: build the APK, publish it for download,
     restart the service on the new code, and push commits to GitHub.
@@ -997,6 +1020,9 @@ def build_release(c: Conn) -> list[ToolSpec]:
             wait = min(max(int(a.get("wait", 90) or 90), 5), 540)
         except (TypeError, ValueError):
             wait = 90
+        bumped = None
+        if a.get("bump", True):
+            bumped = _bump_app_version(repo)
         script = f"""#!/usr/bin/env bash
 cd {shlex.quote(repo + '/rn-app')} || {{ echo "__ZB_BUILD_EXIT:90"; exit 90; }}
 bash build.sh
@@ -1021,10 +1047,14 @@ fi
                 break
         log = _tail(build_log, 200)
         m = re.search(r"__ZB_BUILD_EXIT:(\d+)", log)
+        bump_note = ""
+        if bumped:
+            bump_note = (f"\nVersion bumped {bumped[0]} -> {bumped[1]} (versionCode {bumped[2]}) in rn-app/app.json. "
+                         "Include rn-app/app.json in release_push if you want the bump recorded.\n")
         if not m:
             return ("The APK build is running in the background. It usually takes 6-20 minutes.\n"
-                    "Ask me to check with release_status, or call release_status yourself.\n\n"
-                    "Latest build output:\n" + _tail(build_log, 20))
+                    "Ask me to check with release_status, or call release_status yourself.\n"
+                    + bump_note + "\nLatest build output:\n" + _tail(build_log, 20))
         build_rc = int(m.group(1))
         if build_rc != 0:
             raise ConnectorError(f"The APK build failed (exit {build_rc}).\n\nLast lines:\n" + _tail(build_log, 40))
@@ -1037,8 +1067,9 @@ fi
             return "The APK built and published, but I could not read update.json.\n\n" + _tail(build_log, 20)
         return (f"APK built and published: {man.get('version')} (code {man.get('code')})\n"
                 f"Download: {man.get('apk')}\nsha256: {man.get('sha256')}\n\n"
-                "Android installs it over the old version (same signing key).\n\n"
-                "Build tail:\n" + _tail(build_log, 12))
+                "Android installs it over the old version (same signing key).\n"
+                + bump_note +
+                "\nBuild tail:\n" + _tail(build_log, 12))
 
     def release_deploy(ctx, a):
         """Reset the VM to origin/main and restart the service (detached)."""
@@ -1120,9 +1151,11 @@ fi
                             "running, the published APK version/download link, and whether the service answers.",
           {}, [], release_status, risk=lambda ctx, a: Risk("read", "Check app release status")),
         T("release_build_apk", "Build a new Android APK from the current code, publish it for download and return the "
-                               "download link, version and sha256. The build runs detached and is polled; if it is still "
-                               "going you get the log tail and can check again with release_status.",
-          {"wait": {"type": "integer", "description": "Seconds to wait for the build before returning (default 90, max 540)."}},
+                               "download link, version and sha256. Bumps the patch version and versionCode first so phones "
+                               "see it as an update. The build runs detached and is polled; if it is still going you get the "
+                               "log tail and can check again with release_status.",
+          {"wait": {"type": "integer", "description": "Seconds to wait for the build before returning (default 90, max 540)."},
+           "bump": {"type": "boolean", "description": "Bump rn-app/app.json version + versionCode first (default true)."}},
           [], release_build_apk,
           risk=lambda ctx, a: Risk("command", "Build and publish a new APK"),
           label=lambda a: "Build and publish the app APK"),
