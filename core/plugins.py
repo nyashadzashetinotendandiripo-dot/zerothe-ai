@@ -1086,7 +1086,15 @@ fi
             remote = f"https://github.com/{path}"
         if not remote:
             raise ConnectorError("This repo has no 'origin' remote.")
-        _sh("git add -A -- . ':(exclude)mcp-deploy'", 60)
+        # Only tracked edits by default: the VM has big untracked build artifacts
+        # (android/, node_modules/, mcp-deploy/) that must never be committed.
+        paths = (a.get("paths") or "").strip()
+        if paths:
+            wanted = [p.strip() for p in re.split(r"[,\n]+", paths) if p.strip()]
+            for p in wanted:
+                _sh(f"git add -A -- {shlex.quote(p)}", 60)
+        else:
+            _sh("git add -u -- . ':(exclude)mcp-deploy'", 60)
         _rc, staged = _sh("git diff --cached --name-only | head -30", 20)
         commit = ""
         if staged:
@@ -1126,9 +1134,12 @@ fi
           [], release_deploy,
           risk=lambda ctx, a: Risk("command", "Deploy the app and restart the service"),
           label=lambda a: "Deploy to the VM and restart"),
-        T("release_push", "Commit the working tree and push it to GitHub using the saved token. Excludes mcp-deploy.",
+        T("release_push", "Commit and push to GitHub using the saved token. By default it commits only edits to files that "
+                          "are already tracked (safe: VM build artifacts stay out). List extra paths to include new files. "
+                          "mcp-deploy is always excluded.",
           {"message": {"type": "string", "description": "Commit message (required)."},
-           "branch": {"type": "string", "description": "Ignored; pushes to main."}},
+           "paths": {"type": "string", "description": "Optional comma-separated files/folders to add, including new ones. "
+                                                     "Leave empty to commit only tracked-file edits."}},
           ["message"], release_push,
           risk=lambda ctx, a: Risk("command", f"Commit and push: {short(a.get('message', ''), 120)}",
                                   {"pattern": "git push"}),
