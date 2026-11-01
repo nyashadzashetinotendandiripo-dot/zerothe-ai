@@ -1046,7 +1046,7 @@ fi
         branch = (a.get("branch") or "main").strip() or "main"
         lines = [
             "#!/usr/bin/env bash",
-            "sleep 4",
+            "sleep 12",
             f"cd {shlex.quote(repo)} || exit 1",
         ]
         if reset:
