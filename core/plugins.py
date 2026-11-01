@@ -967,6 +967,15 @@ def build_android(c: Conn) -> list[ToolSpec]:
             raise ConnectorError("key must be one of: back, home, recents, enter, backspace.")
         return _job(ctx, "key", {"key": key}, timeout=45)
 
+    def android_ui(ctx, a):
+        return _job(ctx, "ui", {}, timeout=45)
+
+    def android_tap_text(ctx, a):
+        t = (a.get("text") or "").strip()
+        if not t:
+            raise ConnectorError("text is required.")
+        return _job(ctx, "tap_text", {"text": t}, timeout=45)
+
     def android_status(ctx, a):
         last = c.mgr.engine.db.one("SELECT done_at FROM device_jobs WHERE device='phone' AND status='done' ORDER BY done_at DESC LIMIT 1")
         return (f"Device bridge last talked to the server at {last['done_at']:.0f} (unix). "
@@ -980,12 +989,21 @@ def build_android(c: Conn) -> list[ToolSpec]:
           {"app": {"type": "string", "description": "App name or package id (required)."}},
           ["app"], android_open_app, risk=R("write", lambda a: f"Open {a.get('app')} on your phone"),
           label=lambda a: f"Open {a.get('app')} on your phone"),
-        T("android_tap", "Tap a spot on the phone screen (screen pixel coordinates). Use sparingly: you cannot see "
-                         "the phone screen in this version, so prefer android_open_app plus android_text.",
+        T("android_tap", "Tap a spot on the phone screen (screen pixel coordinates). Prefer android_tap_text or "
+                         "android_ui first: those use the accessibility tree and are far more reliable.",
           {"x": {"type": "integer", "description": "X in screen pixels."},
            "y": {"type": "integer", "description": "Y in screen pixels."}},
           ["x", "y"], android_tap, risk=R("write", lambda a: f"Tap phone screen at {a.get('x')},{a.get('y')}"),
           label=lambda a: "Tap your phone screen"),
+        T("android_ui", "Read the phone's current screen as a text list: every visible label, its class, whether it is "
+                        "clickable/editable, and its tap point. Call this after android_open_app to see what is on screen "
+                        "and decide what to tap or type next.",
+          {}, [], android_ui, label=lambda a: "Read your phone screen"),
+        T("android_tap_text", "Find an element on the phone screen by its visible text or accessibility label and tap it. "
+                              "This is the safest way to press buttons in apps.",
+          {"text": {"type": "string", "description": "Visible text or label to tap (required)."}},
+          ["text"], android_tap_text, risk=R("write", lambda a: f"Tap '{a.get('text')}' on your phone"),
+          label=lambda a: f"Tap '{a.get('text')}' on your phone"),
         T("android_text", "Type text into the focused field on the phone (uses clipboard + paste).",
           {"text": {"type": "string", "description": "Text to type (required)."}},
           ["text"], android_text, risk=R("write", lambda a: "Type text on your phone"),

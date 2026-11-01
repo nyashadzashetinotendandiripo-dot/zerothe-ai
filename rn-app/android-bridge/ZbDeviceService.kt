@@ -7,6 +7,7 @@ import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
 import android.graphics.Path
+import android.graphics.Rect
 import android.os.Build
 import android.os.Bundle
 import android.view.accessibility.AccessibilityEvent
@@ -124,6 +125,8 @@ class ZbDeviceService : AccessibilityService() {
         return when (cmd) {
             "open_app" -> openApp(args.optString("app"))
             "tap" -> tap(args.optInt("x"), args.optInt("y"))
+            "tap_text" -> tapText(args.optString("text"))
+            "ui" -> dumpUi()
             "text" -> typeText(args.optString("text"))
             "key" -> pressKey(args.optString("key"))
             else -> throw IllegalArgumentException("Unknown command: $cmd")
@@ -181,6 +184,60 @@ class ZbDeviceService : AccessibilityService() {
             if (found != null) return found
         }
         return null
+    }
+
+    /** Readable dump of the current screen: text, class, clickable/editable and tap point. */
+    private fun dumpUi(): String {
+        val root = rootInActiveWindow ?: throw RuntimeException("No active window on the phone.")
+        val out = StringBuilder()
+        fun walk(node: AccessibilityNodeInfo, depth: Int) {
+            val text = node.text?.toString()?.trim().orEmpty()
+            val desc = node.contentDescription?.toString()?.trim().orEmpty()
+            if (text.isNotEmpty() || desc.isNotEmpty() || node.isClickable || node.isEditable) {
+                val r = Rect()
+                node.getBoundsInScreen(r)
+                repeat(minOf(depth, 8)) { out.append("  ") }
+                if (text.isNotEmpty()) out.append('"').append(text.take(80)).append("\" ")
+                if (desc.isNotEmpty()) out.append("desc=\"").append(desc.take(60)).append("\" ")
+                out.append('[').append(node.className?.toString()?.substringAfterLast('.') ?: "?").append(']')
+                if (node.isEditable) out.append(" EDIT")
+                if (node.isClickable) out.append(" CLICK")
+                out.append(" @").append(r.centerX()).append(',').append(r.centerY())
+                out.append('\n')
+            }
+            for (i in 0 until node.childCount) {
+                val child = node.getChild(i) ?: continue
+                walk(child, depth + 1)
+            }
+        }
+        walk(root, 0)
+        return out.toString().ifEmpty { "The screen has no readable text." }.take(6000)
+    }
+
+    /** Find an on-screen element by its text and click it (falls back to a coordinate tap). */
+    private fun tapText(text: String): String {
+        val want = text.trim().lowercase()
+        if (want.isEmpty()) throw IllegalArgumentException("text is required.")
+        val root = rootInActiveWindow ?: throw RuntimeException("No active window on the phone.")
+        fun find(node: AccessibilityNodeInfo): AccessibilityNodeInfo? {
+            val label = ((node.text?.toString() ?: "") + " " + (node.contentDescription?.toString() ?: "")).lowercase()
+            if (label.contains(want)) return node
+            for (i in 0 until node.childCount) {
+                val child = node.getChild(i) ?: continue
+                find(child)?.let { return it }
+            }
+            return null
+        }
+        val node = find(root) ?: throw RuntimeException("No on-screen element matches '$text'.")
+        var target: AccessibilityNodeInfo? = node
+        while (target != null && !target.isClickable) target = target.parent
+        val hit = target ?: node
+        if (hit.performAction(AccessibilityNodeInfo.ACTION_CLICK)) {
+            return "Tapped '$text' on the phone."
+        }
+        val r = Rect()
+        hit.getBoundsInScreen(r)
+        return tap(r.centerX(), r.centerY())
     }
 
     private fun typeText(text: String): String {

@@ -549,8 +549,8 @@ def create_app(engine: Engine, token: str) -> FastAPI:
     def device_enqueue(body: dict = Body(...)) -> dict:
         """Queue a phone action from the app itself (Device Bridge test card)."""
         cmd = (body.get("cmd") or "").strip()
-        if cmd not in ("open_app", "tap", "text", "key"):
-            raise HTTPException(400, "Unknown command. Use open_app, tap, text or key.")
+        if cmd not in ("open_app", "tap", "tap_text", "ui", "text", "key"):
+            raise HTTPException(400, "Unknown command. Use open_app, tap, tap_text, ui, text or key.")
         jid = str(int(time.time() * 1000)) + os.urandom(3).hex()
         eng.db.insert("device_jobs", {"id": jid, "device": (body.get("device") or "phone").strip() or "phone",
                                       "bot_id": "", "thread_id": "", "turn_id": "", "cmd": cmd,
