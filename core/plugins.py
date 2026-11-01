@@ -1050,7 +1050,7 @@ fi
         bump_note = ""
         if bumped:
             bump_note = (f"\nVersion bumped {bumped[0]} -> {bumped[1]} (versionCode {bumped[2]}) in rn-app/app.json. "
-                         "Include rn-app/app.json in release_push if you want the bump recorded.\n")
+                         "The bump is committed locally; release_push publishes it.\n")
         if not m:
             return ("The APK build is running in the background. It usually takes 6-20 minutes.\n"
                     "Ask me to check with release_status, or call release_status yourself.\n"
@@ -1065,6 +1065,9 @@ fi
         man = _manifest()
         if not man:
             return "The APK built and published, but I could not read update.json.\n\n" + _tail(build_log, 20)
+        if bumped:
+            _sh(f'git -c user.name="ZerotheBot" -c user.email="bot@zerothebot.local" '
+                f'commit -m "release: {bumped[1]} (code {bumped[2]})" -- rn-app/app.json', 60)
         return (f"APK built and published: {man.get('version')} (code {man.get('code')})\n"
                 f"Download: {man.get('apk')}\nsha256: {man.get('sha256')}\n\n"
                 "Android installs it over the old version (same signing key).\n"
