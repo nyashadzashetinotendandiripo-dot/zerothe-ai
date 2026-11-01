@@ -20,6 +20,7 @@ import mimetypes
 import os
 import re
 import secrets as pysecrets
+import shlex
 import shutil
 import subprocess
 import threading
@@ -913,6 +914,228 @@ def build_shell(c: Conn) -> list[ToolSpec]:
     ]
 
 
+def build_release(c: Conn) -> list[ToolSpec]:
+    """Ship the app from inside a Bot turn: build the APK, publish it for download,
+    restart the service on the new code, and push commits to GitHub.
+
+    Builds are detached (setsid nohup) because an APK build outlives a tool call;
+    deploy is detached with a short delay because restarting the service kills the
+    process that is answering this tool call.
+    """
+    repo = (c.cfg("repo_path") or "/data/home/zerothebot").strip().rstrip("/")
+    apk_base = (c.cfg("apk_base") or "https://8888-agquljzsz7k42vgoenj7qr6fim.instabox.tech").strip().rstrip("/")
+    token = (c.cfg("github_token") or "").strip()
+    build_log = "/tmp/zb-build.log"
+    build_script = "/tmp/zb-build.sh"
+    deploy_log = "/tmp/zb-deploy.log"
+
+    def _sh(cmd: str, timeout: int = 120, extra_env: dict | None = None, redact: tuple = ()):
+        env = dict(os.environ)
+        env.pop("GIT_ASKPASS", None)
+        if extra_env:
+            env.update(extra_env)
+        try:
+            p = subprocess.run(["bash", "-lc", cmd], cwd=repo, capture_output=True, text=True,
+                               timeout=timeout, env=env)
+        except subprocess.TimeoutExpired:
+            raise ConnectorError(f"That took longer than {timeout}s and was stopped.")
+        except FileNotFoundError:
+            raise ConnectorError("bash is not available on this host.")
+        out = (p.stdout or "")
+        if p.stderr:
+            out += ("\n" if out else "") + p.stderr
+        for s in redact:
+            if s:
+                out = out.replace(s, "***")
+        return p.returncode, out.strip()
+
+    def _building() -> tuple[bool, str]:
+        _rc, out = _sh("pgrep -af 'zb-build[.]sh|gradlew assembleRelease' | grep -v pgrep || true", 20)
+        return bool(out.strip()), out.strip()
+
+    def _manifest() -> dict | None:
+        try:
+            return json.loads(Path("/tmp/apkserve/update.json").read_text(encoding="utf-8"))
+        except Exception:  # noqa: BLE001
+            pass
+        _rc, out = _sh(f"curl -s --max-time 8 {shlex.quote(apk_base + '/update.json')}", 20)
+        try:
+            return json.loads(out)
+        except Exception:  # noqa: BLE001
+            return None
+
+    def _tail(path: str, lines: int = 40) -> str:
+        _rc, out = _sh(f"tail -n {int(lines)} {shlex.quote(path)} 2>/dev/null || true", 20)
+        return out
+
+    def release_status(ctx, a):
+        """Report the repo, a running build, the published APK and the service."""
+        parts: list[str] = []
+        _rc, log = _sh("git log --oneline -3", 20)
+        parts.append(f"Repo: {repo}\n{log or '(no commits)'}")
+        _rc, dirty = _sh("git status --porcelain | head -20", 20)
+        parts.append("Uncommitted changes: " + ("none" if not dirty else "\n" + dirty))
+        busy, procs = _building()
+        parts.append("APK build running: " + (f"yes\n{procs}" if busy else "no"))
+        m = _manifest()
+        if m:
+            parts.append(f"Published APK: {m.get('version')} (code {m.get('code')}), "
+                         f"sha256 {str(m.get('sha256', ''))[:16]}...\nDownload: {m.get('apk')}")
+        if busy:
+            parts.append("Build log tail:\n" + (_tail(build_log, 12) or "(no output yet)"))
+        _rc, svc = _sh("curl -s -o /dev/null -w '%{http_code}' --max-time 8 http://127.0.0.1:8765/ || true", 20)
+        parts.append("Service HTTP: " + (svc or "no answer"))
+        return "\n\n".join(parts)
+
+    def release_build_apk(ctx, a):
+        """Start a detached APK build and poll it for a while."""
+        busy, procs = _building()
+        if busy:
+            return ("An APK build is already running, so I did not start another.\n" + procs +
+                    "\nUse release_status to watch it.")
+        try:
+            wait = min(max(int(a.get("wait", 90) or 90), 5), 540)
+        except (TypeError, ValueError):
+            wait = 90
+        script = f"""#!/usr/bin/env bash
+cd {shlex.quote(repo + '/rn-app')} || {{ echo "__ZB_BUILD_EXIT:90"; exit 90; }}
+bash build.sh
+rc=$?
+echo "__ZB_BUILD_EXIT:$rc"
+if [ "$rc" -eq 0 ]; then
+  bash publish.sh
+  echo "__ZB_PUBLISH_EXIT:$?"
+fi
+"""
+        try:
+            Path(build_script).write_text(script, encoding="utf-8")
+        except OSError as exc:
+            raise ConnectorError(f"Could not write the build script: {exc}")
+        _sh(f"rm -f {build_log}; setsid nohup bash {build_script} > {build_log} 2>&1 < /dev/null & echo started", 30)
+        end = time.time() + wait
+        log = ""
+        while time.time() < end:
+            time.sleep(3)
+            log = _tail(build_log, 200)
+            if "__ZB_BUILD_EXIT:" in log:
+                break
+        log = _tail(build_log, 200)
+        m = re.search(r"__ZB_BUILD_EXIT:(\d+)", log)
+        if not m:
+            return ("The APK build is running in the background. It usually takes 6-20 minutes.\n"
+                    "Ask me to check with release_status, or call release_status yourself.\n\n"
+                    "Latest build output:\n" + _tail(build_log, 20))
+        build_rc = int(m.group(1))
+        if build_rc != 0:
+            raise ConnectorError(f"The APK build failed (exit {build_rc}).\n\nLast lines:\n" + _tail(build_log, 40))
+        pm = re.search(r"__ZB_PUBLISH_EXIT:(\d+)", log)
+        if pm and int(pm.group(1)) != 0:
+            raise ConnectorError(f"The APK built but publishing failed (exit {pm.group(1)}).\n\n"
+                                 + _tail(build_log, 40))
+        man = _manifest()
+        if not man:
+            return "The APK built and published, but I could not read update.json.\n\n" + _tail(build_log, 20)
+        return (f"APK built and published: {man.get('version')} (code {man.get('code')})\n"
+                f"Download: {man.get('apk')}\nsha256: {man.get('sha256')}\n\n"
+                "Android installs it over the old version (same signing key).\n\n"
+                "Build tail:\n" + _tail(build_log, 12))
+
+    def release_deploy(ctx, a):
+        """Reset the VM to origin/main and restart the service (detached)."""
+        reset = bool(a.get("reset", True))
+        branch = (a.get("branch") or "main").strip() or "main"
+        lines = [
+            "#!/usr/bin/env bash",
+            "sleep 4",
+            f"cd {shlex.quote(repo)} || exit 1",
+        ]
+        if reset:
+            lines += [f"git fetch origin {shlex.quote(branch)} --quiet",
+                      f"git reset --hard origin/{shlex.quote(branch)} --quiet"]
+        lines += [
+            "pkill -f 'main[.]py --service' || true",
+            "sleep 3",
+            "PORT=8765 ZEROTHEBOT_HOST=0.0.0.0 PLAYWRIGHT_BROWSERS_PATH=/data/home/.cache/ms-playwright "
+            "setsid nohup bash run-host.sh > /tmp/zb-service.log 2>&1 < /dev/null &",
+        ]
+        try:
+            Path("/tmp/zb-deploy.sh").write_text("\n".join(lines) + "\n", encoding="utf-8")
+        except OSError as exc:
+            raise ConnectorError(f"Could not write the deploy script: {exc}")
+        _sh(f"rm -f {deploy_log}; setsid nohup bash /tmp/zb-deploy.sh > {deploy_log} 2>&1 < /dev/null & echo scheduled", 30)
+        _rc, head = _sh(f"git rev-parse --short HEAD", 20)
+        return (f"Deploy scheduled. In about 15 seconds the service restarts on {branch}"
+                + (" (hard reset to origin)." if reset else " (local changes kept).") +
+                f"\nCurrent commit: {head}\n"
+                "This chat stays open. Ask me to check release_status to confirm the service is back.")
+
+    def release_push(ctx, a):
+        """Commit local changes and push them to GitHub using the stored token."""
+        msg = (a.get("message") or "").strip()
+        if not msg:
+            raise ConnectorError("message is required, e.g. 'fix: chat list scroll'.")
+        if not token:
+            raise ConnectorError("No GitHub token is saved for this plugin. Add a personal access token "
+                                 "(repo scope) in the Release connector settings, then try again.")
+        redact = (token, f"x-access-token:{token}")
+        _rc, remote = _sh("git remote get-url origin", 20)
+        if remote.startswith("git@"):
+            # Normalise SSH remotes to HTTPS so the token can be used.
+            path = remote.split(":", 1)[-1]
+            _sh(f"git remote set-url origin https://github.com/{shlex.quote(path)}", 20)
+            remote = f"https://github.com/{path}"
+        if not remote:
+            raise ConnectorError("This repo has no 'origin' remote.")
+        _sh("git add -A -- . ':(exclude)mcp-deploy'", 60)
+        _rc, staged = _sh("git diff --cached --name-only | head -30", 20)
+        commit = ""
+        if staged:
+            body = msg.replace('"', "'")
+            rc, out = _sh(f'git -c user.name="ZerotheBot" -c user.email="bot@zerothebot.local" '
+                          f'commit -m "{body}"', 60, redact=redact)
+            if rc != 0:
+                raise ConnectorError("Commit failed:\n" + out)
+            _rc, commit = _sh("git rev-parse --short HEAD", 20)
+        else:
+            commit = "(nothing new to commit)"
+        helper = "'!f() { echo username=x-access-token; echo \"password=$ZB_GH_TOKEN\"; }; f'"
+        rc, out = _sh(f"git -c credential.helper={helper} push origin HEAD:main --verbose",
+                      180, extra_env={"ZB_GH_TOKEN": token}, redact=redact)
+        if rc != 0:
+            raise ConnectorError("Push failed:\n" + out[-4000:])
+        files = ("\nFiles: " + staged.replace("\n", ", ")) if staged else ""
+        return (f"Pushed to GitHub: {commit}{files}\n\n" + out[-2000:] +
+                "\n\nRun release_deploy to put this on the VM, or release_build_apk to ship a new APK.")
+
+    return [
+        T("release_status", "Show the app release state: current commit, uncommitted changes, whether an APK build is "
+                            "running, the published APK version/download link, and whether the service answers.",
+          {}, [], release_status, risk=lambda ctx, a: Risk("read", "Check app release status")),
+        T("release_build_apk", "Build a new Android APK from the current code, publish it for download and return the "
+                               "download link, version and sha256. The build runs detached and is polled; if it is still "
+                               "going you get the log tail and can check again with release_status.",
+          {"wait": {"type": "integer", "description": "Seconds to wait for the build before returning (default 90, max 540)."}},
+          [], release_build_apk,
+          risk=lambda ctx, a: Risk("command", "Build and publish a new APK"),
+          label=lambda a: "Build and publish the app APK"),
+        T("release_deploy", "Put the code on the VM and restart the service. By default it hard-resets the VM repo to "
+                            "origin/main first, then restarts detached (the restart happens a few seconds after this "
+                            "reply is sent).",
+          {"reset": {"type": "boolean", "description": "Reset to origin/main first (default true). Set false to deploy local changes."},
+           "branch": {"type": "string", "description": "Branch to deploy (default main)."}},
+          [], release_deploy,
+          risk=lambda ctx, a: Risk("command", "Deploy the app and restart the service"),
+          label=lambda a: "Deploy to the VM and restart"),
+        T("release_push", "Commit the working tree and push it to GitHub using the saved token. Excludes mcp-deploy.",
+          {"message": {"type": "string", "description": "Commit message (required)."},
+           "branch": {"type": "string", "description": "Ignored; pushes to main."}},
+          ["message"], release_push,
+          risk=lambda ctx, a: Risk("command", f"Commit and push: {short(a.get('message', ''), 120)}",
+                                  {"pattern": "git push"}),
+          label=lambda a: f"Push to GitHub: {short(a.get('message', ''), 60)}"),
+    ]
+
+
 def build_android(c: Conn) -> list[ToolSpec]:
     """Control the user's own Android phone apps through the Device Bridge on their phone.
     The phone runs a poller (the ZerotheBot accessibility service in the app) that executes
@@ -1410,6 +1633,15 @@ def builtin_defs() -> list[PluginDef]:
         PluginDef("android", "My Android phone", "Open apps on the user's own phone, tap, type and press keys through the Device Bridge.",
                   build=build_android, help="Install the ZerotheBot app on the phone, then enable 'ZerotheBot' in Settings > Accessibility. "
                                             "The app's Device Bridge then executes tasks the Bot queues for the phone."),
+        PluginDef("release", "App Release (build & deploy)", "Build the Android APK, publish it for download, deploy the code to the VM and push to GitHub.",
+                  fields=[{"key": "github_token", "label": "GitHub token (repo scope, for push)", "secret": True, "required": False},
+                          {"key": "repo_path", "label": "Repo path on the host", "secret": False, "required": False,
+                           "placeholder": "/data/home/zerothebot"},
+                          {"key": "apk_base", "label": "APK host URL", "secret": False, "required": False,
+                           "placeholder": "https://8888-....instabox.tech"}],
+                  build=build_release,
+                  help="Works out of the box for building, publishing and deploying on the host VM (node, Java and the Android SDK are "
+                       "already installed). Add a GitHub personal access token with 'repo' scope if you also want push to work."),
         PluginDef("slack", "Slack", "Read channels and post messages (with approval).",
                   fields=[{"key": "bot_token", "label": "Bot token (xoxb-...)", "secret": True, "required": True},
                            {"key": "user_token", "label": "User token (xoxp-..., optional, for search)", "secret": True, "required": False}],
