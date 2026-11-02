@@ -28,14 +28,11 @@ export let API_BASE = '';
 let TOKEN = '';
 
 export async function loadKey() { TOKEN = (await cfgGet(K_TOKEN)) || ''; }
-// instabox-port --private requires ?_token= in the URL, not just the Authorization header.
-export function _tokenSuffix(base: string, token: string): string {
-  const hasQuery = base.includes('?');
-  return base + (hasQuery ? '&' : '?') + '_token=' + encodeURIComponent(token || '');
-}
 
-export async function saveConf(base, token, email, pass) {
-  API_BASE = _tokenSuffix(String(base || '').replace(/\/+$/, ''), token);
+// instabox-port --private requires ?_token= in each request URL (not just the Bearer header).
+// API_BASE is kept clean; the token is appended per-request in api().
+export function saveConf(base, token, email, pass) {
+  API_BASE = String(base || '').replace(/\/+$/, '');
   TOKEN = String(token || '').trim();
   await cfgSet(K_SERVER, API_BASE);
   await cfgSet(K_TOKEN, TOKEN);
@@ -60,7 +57,10 @@ export async function api(path, opts = {}) {
     timer = setTimeout(() => { try { ctl.abort(); } catch (e) { /* ignore */ } }, timeout);
   }
   try {
-    const r = await fetch(API_BASE + path, {
+    // instabox-port --private requires ?_token= in the URL
+    const sep = API_BASE.includes('?') ? '&' : '?';
+    const url = API_BASE + path + sep + '_token=' + encodeURIComponent(TOKEN);
+    const r = await fetch(url, {
       ...rest,
       signal: ctl ? ctl.signal : undefined,
       headers: {
@@ -141,7 +141,9 @@ export function connectEvents({ since, onEvent, onConn, onSince }) {
   let es = null, last = since || 0, stop = false, timer = null;
   const open = () => {
     if (stop) return;
-    es = new EventSource(`${API_BASE}/api/events?kind=mobile&since=${last}`, {
+    // instabox-port --private requires ?_token= in the URL
+    const sep = API_BASE.includes('?') ? '&' : '?';
+    es = new EventSource(`${API_BASE}/api/events?kind=mobile&since=${last}${sep}_token=${encodeURIComponent(TOKEN)}`, {
       headers: { Authorization: 'Bearer ' + TOKEN },
     });
     es.addEventListener('open', () => onConn(true));
