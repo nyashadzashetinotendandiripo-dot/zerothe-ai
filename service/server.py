@@ -1301,7 +1301,7 @@ google.accounts.id.renderButton(document.getElementById('gbtn'),
     # Proxies StreamableHTTP MCP requests to locally-running MCP servers
     # (e.g. the QuickBooks MCP server on port 3333) so they are reachable
     # over the public HTTPS URL without exposing extra ports.
-    @app.post("/api/mcp-proxy/{mcp_id:path}")
+    @app.post("/api/mcp-proxy/{mcp_id:path}", dependencies=[api])
     async def mcp_http_proxy(request: Request, mcp_id: str):
         """Proxy MCP HTTP requests to a local MCP server.
 
@@ -1367,14 +1367,6 @@ google.accounts.id.renderButton(document.getElementById('gbtn'),
             headers=resp_headers,
             media_type="application/json",
         )
-
-    @app.post("/api/test-simple")
-    async def test_simple():
-        return {"ok": True}
-
-    @app.post("/api/test-simple")
-    async def test_simple():
-        return {"ok": True}
 
     # ----------------------------------------------------- settings / secrets
     @app.get("/api/settings", dependencies=[api])

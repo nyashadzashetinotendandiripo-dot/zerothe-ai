@@ -15,8 +15,11 @@ except ImportError:  # pragma: no cover
 
 try:
     from core import secrets as _secrets
+    from core.plugins import ConnectorError, _OAUTH2_CACHE
 except ImportError:  # pragma: no cover
     _secrets = None
+    ConnectorError = Exception
+    _OAUTH2_CACHE = None
 
 SCOPES = "offline_access openid profile User.Read Chat.ReadWrite Chat.Create OnlineMeetings.ReadWrite"
 GRAPH = "https://graph.microsoft.com/v1.0"
@@ -82,14 +85,11 @@ def connect_finish(ctx, args, api):
             if rt and _secrets is not None:
                 try:
                     _secrets.set_secret("plugin:teams:refresh_token", rt)
-                except Exception:
-                    pass
+                except Exception as e:  # noqa: BLE001 - never let pairing look done when the token was not saved
+                    raise ConnectorError(f"Teams sign-in succeeded but the refresh token could not be saved ({e}); pairing is incomplete.")
             _PENDING.pop(bid, None)
-            try:
-                from core.plugins import _OAUTH2_CACHE
+            if _OAUTH2_CACHE is not None:
                 _OAUTH2_CACHE.pop("teams", None)
-            except Exception:
-                pass
             who = data.get("id_token_claims", {})
             return "Teams is paired and remembered." + (f" Signed in as {who.get('preferred_username', '')}." if who.get("preferred_username") else "")
         err = (data or {}).get("error", "")
