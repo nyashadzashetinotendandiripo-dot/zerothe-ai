@@ -100,6 +100,25 @@ export async function loginEmail(base, email, pass) {
   return { ok: true, email: d.email || email, session: d.session || '' };
 }
 
+// Create a new account (first-run only — the server allows one account per instance).
+export async function signupEmail(base, email, pass) {
+  const b = String(base || '').replace(/\/+$/, '');
+  const r = await fetch(b + '/api/signup', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ email: String(email || '').trim().toLowerCase(), password: String(pass || '') }) });
+  const d = await r.json().catch(() => ({}));
+  if (r.status !== 200) throw new Error(d.error || 'Could not create account.');
+  return { ok: true, email: d.email || email, session: d.session || '' };
+}
+
+// Check whether the server already has an account (first-run vs sign-in).
+export async function authStatus(base) {
+  const b = String(base || '').replace(/\/+$/, '');
+  const r = await fetch(b + '/api/auth_status', { headers: { 'Content-Type': 'application/json' } });
+  const d = await r.json().catch(() => ({}));
+  if (r.status !== 200) throw new Error('Could not reach the server.');
+  return d;
+}
+
 // Sign in with Google: the reader app hands the verified Google ID token here
 // and the server returns { ok, email, session } usable as the Bearer token.
 export async function loginGoogle(base, idToken) {

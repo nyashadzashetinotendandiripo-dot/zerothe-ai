@@ -2,7 +2,7 @@ import React, { useEffect, useRef, useState, useCallback } from 'react';
 import { SafeAreaProvider, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Animated, Modal, View, Text, TextInput, Pressable, FlatList, StyleSheet, Linking, Alert, ScrollView, BackHandler } from 'react-native';
 import { StatusBar as ExpoStatus } from 'expo-status-bar';
-import { api, connectEvents, loadKey, saveConf, tryConf, clearConf, conf, cfgGet, K_SERVER, K_TOKEN, K_EMAIL, K_PASS, loginEmail, loginGoogle } from './src/session';
+import { api, connectEvents, loadKey, saveConf, tryConf, clearConf, conf, cfgGet, K_SERVER, K_TOKEN, K_EMAIL, K_PASS, loginEmail, signupEmail, loginGoogle, authStatus } from './src/session';
 import { C } from './src/theme';
 import { checkUpdate, installUpdate, applyOta, otaStatus, APP_VERSION, APP_CODE } from './src/updates';
 import { lastError, send as reportNow, resend as resendLast, hydrate, note, noteOnce, breadcrumb } from './src/diag';
@@ -533,25 +533,42 @@ function Login({ onDone }) {
   const [base, setBase] = useState('https://8765-agquljzsz7k42vgoenj7qr6fim.instabox.tech');
   const [mail, setMail] = useState('');
   const [pass, setPass] = useState('');
+  const [pass2, setPass2] = useState('');            // signup: confirm password
   const [err, setErr] = useState('');
   const [go, setGo] = useState(false);
-  const [ov, setOv] = useState(null);         // Google sign-in overlay (unused now; kept for AuthModal webview fallback)
+  const [signup, setSignup] = useState(false);       // signup mode vs sign-in mode
+  const [needsSetup, setNeedsSetup] = useState(null); // null = checking, true = no account yet, false = account exists
+  const [ov, setOv] = useState(null);
   const gDone = useRef(false);
   const baseRef = useRef(base);
   baseRef.current = base;
+
+  // Check whether the server already has an account, so we show signup or sign-in accordingly.
+  useEffect(() => {
+    (async () => {
+      try {
+        const st = await authStatus(base);
+        setNeedsSetup(!!st.needs_setup);
+      } catch (e) { /* if we can't reach the server, default to sign-in mode */ }
+    })();
+  }, [base]);
+
   const save = async () => {
     setErr(''); setGo(true);
     try {
-      const d = await loginEmail(base, mail, pass);       // cookie session + signed session token
-      await saveConf(base, d.session || '', mail, d.session ? '' : pass);
+      if (signup) {
+        const d = await signupEmail(base, mail, pass);
+        await saveConf(base, d.session || '', mail, d.session ? '' : pass);
+      } else {
+        const d = await loginEmail(base, mail, pass);
+        await saveConf(base, d.session || '', mail, d.session ? '' : pass);
+      }
       onDone();
     }
     catch (e) { setErr(e.message || 'Could not connect.'); }
     setGo(false);
   };
   const google = () => {
-    // System-browser flow: Google refuses embedded webviews, so sign in in real Chrome.
-    // The server bounces back to the app via the zerothebot:// deep link.
     setErr('');
     const b = String(base || '').replace(/\/+$/, '');
     if (!/^https?:\/\/.+/.test(b)) { setErr('Enter the server address first.'); return; }
@@ -563,13 +580,12 @@ function Login({ onDone }) {
     const b = String(baseRef.current || '').replace(/\/+$/, '');
     try {
       if (String(tok).includes('.')) {
-        // google-app flow: the server verified + bound the owner; tok IS the session
         await saveConf(b, tok, email || '', '');
         onDone();
         return;
       }
       const d = await loginGoogle(b, tok);
-      await saveConf(b, d.session, d.email || email || '', '');   // session token, no password
+      await saveConf(b, d.session, d.email || email || '', '');
       onDone();
     } catch (e) { setErr(e.message || 'Google sign-in failed.'); }
   };
@@ -587,7 +603,6 @@ function Login({ onDone }) {
     let sub = { remove: () => {} };
     try { sub = Linking.addEventListener('url', handle); } catch (e) { /* older RN */ }
     Linking.getInitialURL().then((u) => handle({ url: u })).catch(() => {});
-    // remember the last server/email so a re-install or sign-out is one tap away
     (async () => {
       const s = await cfgGet(K_SERVER), m = await cfgGet(K_EMAIL);
       if (s) setBase(s);
@@ -595,21 +610,34 @@ function Login({ onDone }) {
     })();
     return () => sub.remove && sub.remove();
   }, []);
-  const ready = !!mail.trim() && !!pass;
+  const ready = signup
+    ? (!!mail.trim() && !!pass && !!pass2 && pass === pass2)
+    : (!!mail.trim() && !!pass);
   return (
     <View style={[l.box, { justifyContent: 'flex-start', paddingTop: 80 }]}>
       <Text style={l.h1}>ZerotheBot</Text>
-      <Text style={l.cap}>Sign in with the same email and password as the web app.</Text>
+      <Text style={l.cap}>{signup ? 'Create your account.' : 'Sign in with the same email and password as the web app.'}</Text>
       <Text style={l.lbl}>Server</Text>
       <TextInput style={l.inl} value={base} autoCapitalize="none" autoCorrect={false} keyboardType="url" onChangeText={setBase} />
       <Text style={l.lbl}>Email</Text>
       <TextInput style={l.inl} value={mail} autoCapitalize="none" autoCorrect={false} keyboardType="email-address" onChangeText={setMail} />
       <Text style={l.lbl}>Password</Text>
       <TextInput style={l.inl} value={pass} secureTextEntry onChangeText={setPass} />
+      {signup && (
+        <>
+          <Text style={l.lbl}>Confirm password</Text>
+          <TextInput style={l.inl} value={pass2} secureTextEntry onChangeText={setPass2} />
+        </>
+      )}
       {!!err && <Text style={l.err}>{err}</Text>}
       <Pressable onPress={save} disabled={!ready || go} style={({ pressed }) => [l.btn, !ready && { opacity: .5 }, pressed && { opacity: .9 }]}>
-        <Text style={l.btnT}>{go ? 'Checking…' : 'Sign in'}</Text>
+        <Text style={l.btnT}>{go ? 'Checking…' : (signup ? 'Create account' : 'Sign in')}</Text>
       </Pressable>
+      {needsSetup === null ? null : (
+        <Pressable onPress={() => setSignup(!signup)} hitSlop={8} style={l.toggle}>
+          <Text style={l.toggleT}>{signup ? 'Already have an account? Sign in' : 'New here? Create an account'}</Text>
+        </Pressable>
+      )}
       <Pressable onPress={google} disabled={go} style={({ pressed }) => [l.btnG, pressed && { opacity: .9 }]}>
         <Text style={l.btnGT}>Continue with Google</Text>
       </Pressable>
@@ -1220,6 +1248,8 @@ const l = StyleSheet.create({
   btnG: { backgroundColor: '#fff', borderRadius: 12, borderWidth: 1, borderColor: C.line, padding: 13, alignItems: 'center', marginTop: 6 },
   btnGT: { color: '#1f1f1f', fontWeight: '800', fontSize: 15 },
   err: { color: C.bad, fontSize: 13 },
+  toggle: { flexDirection: 'row', justifyContent: 'center', marginTop: 6 },
+  toggleT: { color: C.muted, fontSize: 13, textDecorationLine: 'underline' },
 });
 
 const n = StyleSheet.create({
