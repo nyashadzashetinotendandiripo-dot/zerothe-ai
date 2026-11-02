@@ -580,12 +580,13 @@ function Login({ onDone }) {
     const b = String(baseRef.current || '').replace(/\/+$/, '');
     try {
       if (String(tok).includes('.')) {
+        // google-app flow: the server verified + bound the owner; tok IS the session
         await saveConf(b, tok, email || '', '');
         onDone();
         return;
       }
       const d = await loginGoogle(b, tok);
-      await saveConf(b, d.session, d.email || email || '', '');
+      await saveConf(b, d.session, d.email || email || '', '');   // session token, no password
       onDone();
     } catch (e) { setErr(e.message || 'Google sign-in failed.'); }
   };
@@ -616,9 +617,7 @@ function Login({ onDone }) {
   return (
     <View style={[l.box, { justifyContent: 'flex-start', paddingTop: 80 }]}>
       <Text style={l.h1}>ZerotheBot</Text>
-      <Text style={l.cap}>{signup ? 'Create your account.' : 'Sign in with the same email and password as the web app.'}</Text>
-      <Text style={l.lbl}>Server</Text>
-      <TextInput style={l.inl} value={base} autoCapitalize="none" autoCorrect={false} keyboardType="url" onChangeText={setBase} />
+      <Text style={l.cap}>{signup ? 'Create your account.' : 'Sign in to your account.'}</Text>
       <Text style={l.lbl}>Email</Text>
       <TextInput style={l.inl} value={mail} autoCapitalize="none" autoCorrect={false} keyboardType="email-address" onChangeText={setMail} />
       <Text style={l.lbl}>Password</Text>
@@ -633,11 +632,9 @@ function Login({ onDone }) {
       <Pressable onPress={save} disabled={!ready || go} style={({ pressed }) => [l.btn, !ready && { opacity: .5 }, pressed && { opacity: .9 }]}>
         <Text style={l.btnT}>{go ? 'Checking…' : (signup ? 'Create account' : 'Sign in')}</Text>
       </Pressable>
-      {needsSetup === null ? null : (
-        <Pressable onPress={() => setSignup(!signup)} hitSlop={8} style={l.toggle}>
-          <Text style={l.toggleT}>{signup ? 'Already have an account? Sign in' : 'New here? Create an account'}</Text>
-        </Pressable>
-      )}
+      <Pressable onPress={() => setSignup(!signup)} hitSlop={8} style={l.toggle}>
+        <Text style={l.toggleT}>{signup ? 'Already have an account? Sign in' : 'New here? Create an account'}</Text>
+      </Pressable>
       <Pressable onPress={google} disabled={go} style={({ pressed }) => [l.btnG, pressed && { opacity: .9 }]}>
         <Text style={l.btnGT}>Continue with Google</Text>
       </Pressable>
@@ -650,9 +647,7 @@ function Login({ onDone }) {
       )}
     </View>
   );
-}
-
-// ----------------------------------------------------------------- home
+}// ----------------------------------------------------------------- home
 function Home({ bots, busy, apps, noteBadge, onOpen, onPlug, onBell, onNew, onHire, templates, onDecide, onBotLong, onMenu }) {
   const ins = useSafeAreaInsets();
   const [modal, setModal] = useState(null);
