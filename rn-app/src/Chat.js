@@ -10,15 +10,15 @@ import * as ImagePicker from 'expo-image-picker';
 import * as DocumentPicker from 'expo-document-picker';
 import * as FileSystem from 'expo-file-system/legacy';
 
-// Grok-style chat: near-black canvas, assistant answers as plain full-width text,
+// Chat: white canvas (light theme), assistant answers as plain full-width text,
 // user messages as compact right-aligned bubbles, floating pill composer.
-const BG = '#0a0a0a';
-const PANEL = '#121212';
-const BUBBLE = '#2b2b2b';
-const TEXT = '#ececec';
-const MUTED = '#8f8f8f';
-const LINE = '#1f1f1f';
-const ACCENT = '#ffffff';
+const BG = '#ffffff';
+const PANEL = '#f2f2f2';
+const BUBBLE = '#e7e7e7';
+const TEXT = '#111111';
+const MUTED = '#666666';
+const LINE = '#cccccc';
+const ACCENT = '#000000';
 
 function AnsRow({ onSend, placeholder }) {
   const [v, setV] = useState('');
@@ -678,7 +678,7 @@ function ChatScreen({ thread, threads, botName: propsBotName, onSwitch, onBack, 
         ])} hitSlop={10} style={st.hBtn}><Text style={st.hIcon}>🗑</Text></Pressable>
         <Pressable style={{ flex: 1 }} onPress={() => { setHistQ(''); setHistOpen(true); }}>
           <Text style={st.htitle} numberOfLines={1}>{botName}</Text>
-          <Text style={[st.hstatus, err && { color: '#e57373' }]} numberOfLines={1}>{status}</Text>
+          <Text style={[st.hstatus, err && { color: '#b00020' }]} numberOfLines={1}>{status}</Text>
         </Pressable>
       </View>
 
@@ -933,7 +933,7 @@ function ChatScreen({ thread, threads, botName: propsBotName, onSwitch, onBack, 
                   returnKeyType="done"
                 />
                 <Pressable onPress={() => desktopType(false)} disabled={typeBusy || !typeText}
-                  style={[st.typeSend, (typeBusy || !typeText) && { backgroundColor: '#2a2a2a' }]}>
+                  style={[st.typeSend, (typeBusy || !typeText) && { backgroundColor: '#e7e7e7' }]}>
                   <Text style={st.typeSendT}>{typeBusy ? '…' : 'Send'}</Text>
                 </Pressable>
               </View>
@@ -986,7 +986,7 @@ function ChatScreen({ thread, threads, botName: propsBotName, onSwitch, onBack, 
               <Pressable onPress={() => Linking.openURL(filePrev.url).catch(() => {})} style={[st.fileBtn, { flex: 1 }]}>
                 <Text style={st.fileBtnT}>Download</Text>
               </Pressable>
-              <Pressable onPress={() => setFilePrev(null)} style={[st.fileBtn, { backgroundColor: '#1c1c1c', flex: 1 }]}>
+              <Pressable onPress={() => setFilePrev(null)} style={[st.fileBtn, { backgroundColor: '#f2f2f2', flex: 1 }]}>
                 <Text style={st.fileBtnT}>Close</Text>
               </Pressable>
             </View>
@@ -1106,15 +1106,15 @@ function MsgFoot({ it, time, outgoing }) {
 }
 
 const st = StyleSheet.create({
-  header: { flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 10, paddingBottom: 8, backgroundColor: 'rgba(9,12,11,0.92)' },
+  header: { flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 10, paddingBottom: 8, backgroundColor: '#ffffff' },
   hBtn: { width: 40, height: 40, borderRadius: 20, alignItems: 'center', justifyContent: 'center' },
   hIcon: { color: TEXT, fontSize: 19 },
   hIconSm: { color: MUTED, fontSize: 17 },
   htitle: { color: TEXT, fontSize: 16, fontWeight: '700', textAlign: 'center' },
   hstatus: { color: MUTED, fontSize: 11.5, marginTop: 1, textAlign: 'center' },
 
-  errBar: { backgroundColor: '#2a1414', borderTopWidth: 1, borderBottomWidth: 1, borderColor: '#3a1a1a', paddingHorizontal: 14, paddingVertical: 8 },
-  errT: { color: '#f0a0a0', fontSize: 12.5 },
+  errBar: { backgroundColor: '#fdeceb', borderTopWidth: 1, borderBottomWidth: 1, borderColor: '#d92d20', paddingHorizontal: 14, paddingVertical: 8 },
+  errT: { color: '#b00020', fontSize: 12.5 },
 
   list: { paddingHorizontal: 14, paddingTop: 8, gap: 2 },
   empty: { color: MUTED, fontSize: 15, textAlign: 'center', marginTop: 60 },
@@ -1147,23 +1147,23 @@ const st = StyleSheet.create({
   dayT: { color: MUTED, fontSize: 11, fontWeight: '600' },
 
   busyRow: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingHorizontal: 16, paddingBottom: 2 },
-  stop: { color: '#e57373', fontWeight: '700', fontSize: 13 },
+  stop: { color: '#b00020', fontWeight: '700', fontSize: 13 },
 
   replyBar: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingHorizontal: 14, paddingVertical: 7, backgroundColor: PANEL, borderTopWidth: 1, borderColor: LINE },
   replyWho: { color: ACCENT, fontSize: 12, fontWeight: '700' },
   replyTxt: { color: MUTED, fontSize: 12.5 },
   replyX: { color: MUTED, fontSize: 15 },
 
-  composerWrap: { paddingHorizontal: 10, paddingTop: 6, backgroundColor: 'rgba(9,12,11,0.94)' },
-  composer: { flexDirection: 'row', alignItems: 'flex-end', gap: 6, backgroundColor: '#1c1c1c', borderWidth: 1, borderColor: '#2a2a2a', borderRadius: 24, paddingLeft: 14, paddingRight: 5, paddingVertical: 5 },
-  uploadBtn: { width: 34, height: 34, borderRadius: 17, backgroundColor: '#2a2a2a', alignItems: 'center', justifyContent: 'center', borderWidth: 1, borderColor: '#3a3a3a' },
+  composerWrap: { paddingHorizontal: 10, paddingTop: 6, backgroundColor: '#ffffff' },
+  composer: { flexDirection: 'row', alignItems: 'flex-end', gap: 6, backgroundColor: '#f2f2f2', borderWidth: 1, borderColor: '#e7e7e7', borderRadius: 24, paddingLeft: 14, paddingRight: 5, paddingVertical: 5 },
+  uploadBtn: { width: 34, height: 34, borderRadius: 17, backgroundColor: '#e7e7e7', alignItems: 'center', justifyContent: 'center', borderWidth: 1, borderColor: '#cccccc' },
   uploadT: { color: TEXT, fontSize: 14, lineHeight: 16 },
   input: { flex: 1, color: TEXT, fontSize: 15.5, lineHeight: 21, paddingVertical: 9, maxHeight: 120 },
   sendBtn: { width: 38, height: 38, borderRadius: 19, backgroundColor: '#00a884', alignItems: 'center', justifyContent: 'center' },
-  sendBtnOff: { backgroundColor: '#2a2a2a' },
+  sendBtnOff: { backgroundColor: '#e7e7e7' },
   sendT: { color: '#ffffff', fontSize: 17, fontWeight: '800', lineHeight: 19, marginLeft: 1 },
   attachRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 6, paddingHorizontal: 4, paddingBottom: 6 },
-  attachChip: { backgroundColor: '#222', borderRadius: 999, paddingHorizontal: 10, paddingVertical: 5, borderWidth: 1, borderColor: '#333' },
+  attachChip: { backgroundColor: '#e7e7e7', borderRadius: 999, paddingHorizontal: 10, paddingVertical: 5, borderWidth: 1, borderColor: '#999999' },
   attachChipT: { color: TEXT, fontSize: 12 },
 
   emojiPanel: { flexDirection: 'row', flexWrap: 'wrap', gap: 4, backgroundColor: BG, paddingHorizontal: 10, paddingTop: 8 },
@@ -1176,67 +1176,67 @@ const st = StyleSheet.create({
   reasonEmpty: { color: MUTED, fontSize: 12.5, paddingVertical: 4 },
 
   live: { backgroundColor: PANEL, borderBottomWidth: 1, borderColor: LINE },
-  liveLbl: { color: '#9ad3b0', fontSize: 12.5, fontWeight: '600', paddingHorizontal: 14, paddingTop: 7, paddingBottom: 4 },
+  liveLbl: { color: '#0066cc', fontSize: 12.5, fontWeight: '600', paddingHorizontal: 14, paddingTop: 7, paddingBottom: 4 },
   liveImgSm: { width: '100%', height: 90 },
 
-  appCard: { backgroundColor: '#1a1710', borderTopWidth: 1, borderColor: '#332a16' },
+  appCard: { backgroundColor: '#f2f2f2', borderTopWidth: 1, borderColor: '#cccccc' },
   appRow: { paddingHorizontal: 14, paddingVertical: 10, gap: 8 },
-  appT: { color: '#e6d3a3', fontSize: 13, lineHeight: 18 },
+  appT: { color: '#000000', fontSize: 13, lineHeight: 18 },
   appBtns: { flexDirection: 'row', gap: 8 },
-  appBtn: { backgroundColor: '#2a2415', borderRadius: 999, paddingHorizontal: 14, paddingVertical: 8 },
-  appOk: { color: '#9ad3b0', fontSize: 13, fontWeight: '800' },
-  appNo: { color: '#e57373', fontSize: 13, fontWeight: '800' },
-  ansIn: { flex: 1, color: TEXT, fontSize: 14, borderWidth: 1, borderColor: '#3a3120', borderRadius: 12, paddingHorizontal: 10, paddingVertical: 8 },
-  ansBtn: { backgroundColor: '#2a2415', borderRadius: 12, paddingHorizontal: 14, justifyContent: 'center' },
-  ansBtnT: { color: '#e6d3a3', fontSize: 13, fontWeight: '800' },
+  appBtn: { backgroundColor: '#e7e7e7', borderRadius: 999, paddingHorizontal: 14, paddingVertical: 8 },
+  appOk: { color: '#006400', fontSize: 13, fontWeight: '800' },
+  appNo: { color: '#b00020', fontSize: 13, fontWeight: '800' },
+  ansIn: { flex: 1, color: TEXT, fontSize: 14, borderWidth: 1, borderColor: '#cccccc', borderRadius: 12, paddingHorizontal: 10, paddingVertical: 8 },
+  ansBtn: { backgroundColor: '#e7e7e7', borderRadius: 12, paddingHorizontal: 14, justifyContent: 'center' },
+  ansBtnT: { color: '#000000', fontSize: 13, fontWeight: '800' },
 
   scrimM: { position: 'absolute', inset: 0, backgroundColor: 'rgba(0,0,0,.66)', alignItems: 'center', justifyContent: 'flex-end' },
-  sheet: { width: '100%', backgroundColor: '#161616', borderTopLeftRadius: 22, borderTopRightRadius: 22, padding: 16, gap: 6, borderTopWidth: 1, borderColor: '#2a2a2a' },
-  grabber: { alignSelf: 'center', width: 38, height: 4, borderRadius: 2, backgroundColor: '#333', marginBottom: 8 },
+  sheet: { width: '100%', backgroundColor: '#f2f2f2', borderTopLeftRadius: 22, borderTopRightRadius: 22, padding: 16, gap: 6, borderTopWidth: 1, borderColor: '#e7e7e7' },
+  grabber: { alignSelf: 'center', width: 38, height: 4, borderRadius: 2, backgroundColor: '#999999', marginBottom: 8 },
   sheetT: { color: TEXT, fontSize: 13, fontWeight: '700' },
   sheetSub: { color: MUTED, fontSize: 13, lineHeight: 18 },
-  sheetBtn: { borderRadius: 14, padding: 13, alignItems: 'center', backgroundColor: '#222', marginTop: 6 },
+  sheetBtn: { borderRadius: 14, padding: 13, alignItems: 'center', backgroundColor: '#e7e7e7', marginTop: 6 },
   sheetBtnT: { color: TEXT, fontSize: 14, fontWeight: '700' },
-  histIn: { backgroundColor: '#222', borderRadius: 999, color: TEXT, paddingHorizontal: 14, paddingVertical: 10, fontSize: 14, marginBottom: 8 },
+  histIn: { backgroundColor: '#e7e7e7', borderRadius: 999, color: TEXT, paddingHorizontal: 14, paddingVertical: 10, fontSize: 14, marginBottom: 8 },
   histRow: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingVertical: 12, paddingHorizontal: 8, borderRadius: 10 },
   histT: { color: TEXT, fontSize: 14.5, flex: 1 },
 
   fullScr: { position: 'absolute', inset: 0, backgroundColor: '#000' },
   fullBar: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 14, paddingTop: 40, paddingBottom: 8, backgroundColor: BG, gap: 12 },
   fullT: { color: TEXT, fontSize: 15, fontWeight: '800' },
-  fullBtn: { width: 34, height: 34, borderRadius: 17, backgroundColor: '#2a2a2a', alignItems: 'center', justifyContent: 'center', borderWidth: 1, borderColor: '#3a3a3a' },
+  fullBtn: { width: 34, height: 34, borderRadius: 17, backgroundColor: '#e7e7e7', alignItems: 'center', justifyContent: 'center', borderWidth: 1, borderColor: '#cccccc' },
   fullBtnT: { color: TEXT, fontSize: 13, fontWeight: '600', lineHeight: 15 },
   fullX: { color: TEXT, fontSize: 15, fontWeight: '700' },
   fullErr: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: 20, gap: 8 },
-  fullErrT: { color: '#e57373', fontSize: 13.5, textAlign: 'center' },
+  fullErrT: { color: '#b00020', fontSize: 13.5, textAlign: 'center' },
   fullErrS: { color: MUTED, fontSize: 12 },
   typeBar: { backgroundColor: BG, borderTopWidth: 1, borderColor: LINE, paddingHorizontal: 10, paddingTop: 6, gap: 6 },
   typeKeys: { flexDirection: 'row', gap: 6 },
-  typeKey: { backgroundColor: '#222', borderRadius: 8, paddingHorizontal: 12, paddingVertical: 6, borderWidth: 1, borderColor: '#333' },
+  typeKey: { backgroundColor: '#e7e7e7', borderRadius: 8, paddingHorizontal: 12, paddingVertical: 6, borderWidth: 1, borderColor: '#999999' },
   typeKeyT: { color: TEXT, fontSize: 12.5, fontWeight: '600' },
   typeRow: { flexDirection: 'row', gap: 8, alignItems: 'center' },
-  typeIn: { flex: 1, backgroundColor: '#1c1c1c', borderRadius: 20, borderWidth: 1, borderColor: '#2a2a2a', color: TEXT, paddingHorizontal: 14, paddingVertical: 9, fontSize: 14 },
+  typeIn: { flex: 1, backgroundColor: '#f2f2f2', borderRadius: 20, borderWidth: 1, borderColor: '#e7e7e7', color: TEXT, paddingHorizontal: 14, paddingVertical: 9, fontSize: 14 },
   typeSend: { backgroundColor: '#00a884', borderRadius: 999, paddingHorizontal: 16, paddingVertical: 10 },
   typeSendT: { color: '#fff', fontSize: 13, fontWeight: '800' },
-  fileRow: { flexDirection: 'row', alignItems: 'center', gap: 8, backgroundColor: '#1c1c1c', borderWidth: 1, borderColor: '#2a2a2a', borderRadius: 10, paddingHorizontal: 10, paddingVertical: 8, marginVertical: 4 },
+  fileRow: { flexDirection: 'row', alignItems: 'center', gap: 8, backgroundColor: '#f2f2f2', borderWidth: 1, borderColor: '#e7e7e7', borderRadius: 10, paddingHorizontal: 10, paddingVertical: 8, marginVertical: 4 },
   fileIc: { fontSize: 20, width: 32, textAlign: 'center' },
   fileName: { color: TEXT, fontSize: 13, fontWeight: '600', numberOfLines: 1 },
   fileSize: { color: MUTED, fontSize: 11 },
-  fileBtn: { backgroundColor: '#2a2a2a', borderRadius: 8, borderWidth: 1, borderColor: '#333', alignItems: 'center', justifyContent: 'center', paddingHorizontal: 10, paddingVertical: 6 },
-  fileBtnT: { color: '#6ea8ff', fontSize: 14, fontWeight: '700' },
-  filePrevImg: { width: '100%', height: 300, borderRadius: 12, backgroundColor: '#121212' },
-  filePrevDoc: { alignItems: 'center', padding: 24, backgroundColor: '#121212', borderRadius: 12 },
-  fpPage: { width: '100%', height: 420, borderRadius: 8, backgroundColor: '#101010' },
+  fileBtn: { backgroundColor: '#e7e7e7', borderRadius: 8, borderWidth: 1, borderColor: '#999999', alignItems: 'center', justifyContent: 'center', paddingHorizontal: 10, paddingVertical: 6 },
+  fileBtnT: { color: '#0066cc', fontSize: 14, fontWeight: '700' },
+  filePrevImg: { width: '100%', height: 300, borderRadius: 12, backgroundColor: '#ffffff' },
+  filePrevDoc: { alignItems: 'center', padding: 24, backgroundColor: '#ffffff', borderRadius: 12 },
+  fpPage: { width: '100%', height: 420, borderRadius: 8, backgroundColor: '#f2f2f2' },
   fpPager: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 14, paddingVertical: 8 },
-  fpBtn: { width: 40, height: 32, borderRadius: 8, backgroundColor: '#1c1c1c', alignItems: 'center', justifyContent: 'center' },
+  fpBtn: { width: 40, height: 32, borderRadius: 8, backgroundColor: '#f2f2f2', alignItems: 'center', justifyContent: 'center' },
   fpBtnT: { color: TEXT, fontSize: 18, fontWeight: '700' },
   fpPageLbl: { color: MUTED, fontSize: 13 },
-  fpTextWrap: { maxHeight: 380, backgroundColor: '#101010', borderRadius: 12 },
+  fpTextWrap: { maxHeight: 380, backgroundColor: '#f2f2f2', borderRadius: 12 },
   fpTextPad: { padding: 14 },
-  fpText: { color: '#d6d6d6', fontSize: 13.5, lineHeight: 20 },
+  fpText: { color: '#000000', fontSize: 13.5, lineHeight: 20 },
   fpLoading: { padding: 22, alignItems: 'center', gap: 8 },
   fpNote: { color: MUTED, fontSize: 12.5 },
-  toolRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', backgroundColor: '#141414', borderWidth: 1, borderColor: '#222', borderRadius: 8, paddingHorizontal: 10, paddingVertical: 6, marginVertical: 5 },
+  toolRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', backgroundColor: '#f2f2f2', borderWidth: 1, borderColor: '#e7e7e7', borderRadius: 8, paddingHorizontal: 10, paddingVertical: 6, marginVertical: 5 },
   toolName: { color: ACCENT, fontSize: 12, fontWeight: '700' },
   toolStatus: { color: MUTED, fontSize: 11.5 },
   filePrevName: { color: TEXT, fontSize: 16, fontWeight: '600', marginTop: 10 },

@@ -219,8 +219,8 @@ function Connectors() {
         )}
         <Pressable onPress={load} style={[l.btn, { backgroundColor: C.panel2, borderWidth: 1, borderColor: C.line }]}><Text style={[l.btnT, { color: C.text }]}>↻ Refresh</Text></Pressable>
         {!!externalUrl && (
-          <Pressable onPress={() => Linking.openURL(externalUrl).catch(()=>{})} style={[l.btn, { backgroundColor: '#111b21', borderWidth: 1, borderColor: C.line }]}>
-            <Text style={[l.btnT, { color: '#53bdeb' }]}>Open last link in browser ↗</Text>
+          <Pressable onPress={() => Linking.openURL(externalUrl).catch(()=>{})} style={[l.btn, { backgroundColor: '#e7e7e7', borderWidth: 1, borderColor: C.line }]}>
+            <Text style={[l.btnT, { color: '#0066cc' }]}>Open last link in browser ↗</Text>
           </Pressable>
         )}
         <Text style={st.foot}>
@@ -544,7 +544,7 @@ const st = StyleSheet.create({
   pbT: { color: C.text, fontSize: 13.5, fontWeight: '600' },
   form: { marginTop: 10, borderTopWidth: 1, borderColor: C.line, paddingTop: 8 },
   foot: { color: C.muted, fontSize: 12, lineHeight: 17, marginTop: 4 },
-  statusBar: { flexDirection: 'row', alignItems: 'center', gap: 8, backgroundColor: '#132a24', borderBottomWidth: 1, borderColor: '#1f4438', paddingHorizontal: 14, paddingVertical: 9 },
+  statusBar: { flexDirection: 'row', alignItems: 'center', gap: 8, backgroundColor: '#f2f2f2', borderBottomWidth: 1, borderColor: '#cccccc', paddingHorizontal: 14, paddingVertical: 9 },
   statusT: { color: '#7ee2a8', fontSize: 12.5, lineHeight: 17, flex: 1 },
   statusX: { color: '#7ee2a8', fontSize: 14, fontWeight: '800' },
 });

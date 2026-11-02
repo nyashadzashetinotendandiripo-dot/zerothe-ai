@@ -31,7 +31,7 @@ const S = StyleSheet.create({
   btnBad: { borderColor: C.bad, backgroundColor: C.badSoft },
   btnBadT: { color: C.bad },
   inp: { backgroundColor: C.bg, borderWidth: 1, borderColor: C.line, borderRadius: 12, paddingHorizontal: 12, paddingVertical: 10, color: C.text, fontSize: 13.5 },
-  mono: { backgroundColor: '#0a0c10', borderWidth: 1, borderColor: C.line, borderRadius: 12, padding: 10, color: '#c9e6d3', fontSize: 11.5, fontFamily: 'monospace' },
+  mono: { backgroundColor: '#f2f2f2', borderWidth: 1, borderColor: C.line, borderRadius: 12, padding: 10, color: '#000000', fontSize: 11.5, fontFamily: 'monospace' },
   barBg: { height: 5, borderRadius: 3, backgroundColor: C.panel2, overflow: 'hidden', marginTop: 4 },
   barFill: { height: 5 },
   kv: { color: C.text, fontSize: 12.5 },
@@ -642,13 +642,13 @@ export default function ServerScreen({ onMenu }) {
 
       <Modal visible={live} animationType="slide" onRequestClose={closeLive}>
         <View style={{ flex: 1, backgroundColor: '#000' }}>
-          <View style={{ flexDirection: 'row', alignItems: 'center', paddingTop: (ins.top || 0) + 10, paddingHorizontal: 14, paddingBottom: 10, backgroundColor: '#111' }}>
-            <Text style={{ color: '#fff', fontSize: 15, fontWeight: '800', flex: 1 }}>Live server screen</Text>
-            <Pressable onPress={closeLive} hitSlop={8}><Text style={{ color: '#e57373', fontSize: 13, fontWeight: '800' }}>Close</Text></Pressable>
+          <View style={{ flexDirection: 'row', alignItems: 'center', paddingTop: (ins.top || 0) + 10, paddingHorizontal: 14, paddingBottom: 10, backgroundColor: '#f2f2f2' }}>
+            <Text style={{ color: '#000000', fontSize: 15, fontWeight: '800', flex: 1 }}>Live server screen</Text>
+            <Pressable onPress={closeLive} hitSlop={8}><Text style={{ color: '#b00020', fontSize: 13, fontWeight: '800' }}>Close</Text></Pressable>
           </View>
           {!!liveErr ? (
             <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center', padding: 24, gap: 10 }}>
-              <Text style={{ color: '#e57373', textAlign: 'center' }}>{liveErr}</Text>
+              <Text style={{ color: '#b00020', textAlign: 'center' }}>{liveErr}</Text>
               <Btn label="Try again" tone="ok" onPress={openLive} />
             </View>
           ) : liveUrl ? (
