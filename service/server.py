@@ -21,6 +21,7 @@ from typing import Any
 import httpx
 
 from fastapi import Body, Depends, FastAPI, HTTPException, Request, Response
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, StreamingResponse
 
 from core import APP_NAME, VERSION, backup as backup_mod, commands, packages, paths, secrets, skills as skills_mod
@@ -68,8 +69,36 @@ def lan_addresses() -> list[str]:
 
 def create_app(engine: Engine, token: str) -> FastAPI:
     app = FastAPI(title=f"{APP_NAME} service", version=VERSION, docs_url=None, redoc_url=None, openapi_url=None)
+
+    # CORS — restrict to your own app origins. The phone app and PWA call from
+    # instabox URLs; add any additional public origins here.
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=[
+            "https://8765-agquljzsz7k42vgoenj7qr6fim.instabox.tech",
+            "https://8888-agquljzsz7k42vgoenj7qr6fim.instabox.tech",
+        ],
+        allow_credentials=True,
+        allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+        allow_headers=["Authorization", "Content-Type"],
+        max_age=600,
+    )
+
     eng = engine
     fails: dict[str, list[float]] = {}
+    login_fails: dict[str, list[float]] = {}
+
+    # Security headers on every response.
+    @app.middleware("http")
+    async def security_headers(request: Request, call_next):
+        response = await call_next(request)
+        response.headers["X-Frame-Options"] = "DENY"
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        response.headers["Referrer-Policy"] = "no-referrer"
+        response.headers["Permissions-Policy"] = "camera=(), microphone=(), geolocation=()"
+        if request.url.scheme == "https":
+            response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
+        return response
 
     # Sessions are signed with their own secret (kept in settings) so that rotating the
     # service token does not log everyone out and a leaked token cannot forge sessions.
@@ -136,7 +165,7 @@ def create_app(engine: Engine, token: str) -> FastAPI:
         return payload + "." + sig
 
     def issue_session(response: Response, addr: str) -> None:
-        response.set_cookie("zt_session", session_string(addr), httponly=True, samesite="strict", max_age=86400 * 30)
+        response.set_cookie("zt_session", session_string(addr), httponly=True, samesite="strict", max_age=86400 * 30, secure=True)
 
     api = Depends(auth)
 
@@ -158,11 +187,18 @@ def create_app(engine: Engine, token: str) -> FastAPI:
     @app.post("/api/login")
     def login(request: Request, response: Response, body: dict = Body(...)) -> dict:
         ip = request.client.host if request.client else "?"
+        now = time.time()
+        recent = [t for t in login_fails.get(ip, []) if now - t < 300]
+        login_fails[ip] = recent
+        if len(recent) >= 10:
+            raise HTTPException(429, "Too many failed login attempts. Wait a few minutes.")
         addr = str(body.get("email", "")).strip().lower()
         cred = str(body.get("password", "") or body.get("token", "")).strip()
         if not auth_mod.verify_password(addr, cred):
             if not check_token(cred, ip):   # service token still works for the desktop/API
+                login_fails[ip].append(now)
                 raise HTTPException(401, "That email or password is not right.")
+        login_fails.pop(ip, None)
         issue_session(response, addr or auth_mod.email() or "owner")
         return {"ok": True, "email": addr or auth_mod.email(),
                 "session": session_string(addr or auth_mod.email() or "owner")}
@@ -174,12 +210,19 @@ def create_app(engine: Engine, token: str) -> FastAPI:
 
     @app.post("/api/signup")
     def signup(request: Request, response: Response, body: dict = Body(...)) -> dict:
+        ip = request.client.host if request.client else "?"
+        now = time.time()
+        recent = [t for t in login_fails.get(ip, []) if now - t < 300]
+        if len(recent) >= 10:
+            raise HTTPException(429, "Too many signup attempts. Wait a few minutes.")
         if auth_mod.has_account():
             raise HTTPException(403, "This app already has an account. Sign in instead.")
         try:
             auth_mod.create_account(str(body.get("email", "")), str(body.get("password", "")))
         except ValueError as e:
+            login_fails[ip].append(now)
             raise HTTPException(400, str(e))
+        login_fails.pop(ip, None)
         issue_session(response, auth_mod.email())
         return {"ok": True, "email": auth_mod.email()}
 
@@ -1940,7 +1983,7 @@ google.accounts.id.renderButton(document.getElementById('gbtn'),
             ip = request.client.host if request.client else "?"
             if check_token(t, ip):
                 r = RedirectResponse("/", status_code=303)
-                r.set_cookie("zt_token", token, httponly=True, samesite="strict", max_age=86400 * 365)
+                r.set_cookie("zt_token", t, httponly=True, samesite="strict", max_age=86400 * 365, secure=True)
                 return r
         return FileResponse(web / "index.html", headers={"Cache-Control": "no-cache"})
 
