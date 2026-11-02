@@ -739,6 +739,33 @@ def create_app(engine: Engine, token: str) -> FastAPI:
             raise ValueError("That path is outside the shared workspace.")
         return full
 
+    @app.get("/api/computer/preview", dependencies=[api])
+    def preview_info(path: str) -> dict:
+        """Classify a workspace file for the clients' document previews."""
+        f = ws_path(path)
+        if not f.is_file():
+            raise HTTPException(404)
+        from core import render as render_mod
+        try:
+            info = render_mod.inspect(f)
+        except render_mod.RenderError as e:
+            raise HTTPException(415, str(e))
+        info["name"] = f.name
+        return info
+
+    @app.get("/api/computer/preview/page", dependencies=[api])
+    def preview_page(path: str, page: int = 1) -> Response:
+        """One PDF page rendered to PNG — powers the in-chat document preview."""
+        f = ws_path(path)
+        from core import render as render_mod
+        try:
+            png = render_mod.pdf_page_png(f, page=max(1, int(page)))
+        except render_mod.RenderError as e:
+            raise HTTPException(415, str(e))
+        if png is None:
+            raise HTTPException(404, "No such page")
+        return Response(png, media_type="image/png", headers={"Cache-Control": "private, max-age=600"})
+
     @app.get("/api/computer/files", dependencies=[api])
     def files_list(path: str = ".") -> dict:
         ws_path(path)

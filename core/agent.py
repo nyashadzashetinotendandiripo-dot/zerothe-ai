@@ -202,17 +202,24 @@ class AgentRun:
         self.engine.events.publish("activity", thread_id=self.thread_id, bot_id=self.bot_id, turn_id=self.id, text=text)
 
     # ----------------------------------------------------------------- screen
-    def acquire_screen(self) -> None:
-        """One Bot runs one computer-use task on its screen at a time (turn-scoped lock)."""
+    def acquire_screen(self, max_wait: float = 150.0) -> None:
+        """One Bot runs one computer-use task on its screen at a time (turn-scoped lock).
+        Waits up to ~max_wait seconds, then fails the tool (never the whole turn)."""
         if self._screen_held:
             return
         lock = self.engine.turns.screen_lock(self.bot_id)
         if not lock.acquire(blocking=False):
             self.set_status("waiting_screen")
             self.activity("Waiting for my screen: another task of mine is using the browser.")
+            waited = 0
             while not lock.acquire(timeout=1.0):
                 if self.stop.is_set():
                     raise StopRequested()
+                waited += 1
+                if waited >= max_wait:
+                    self.set_status("running")
+                    raise ConnectorError(f"My screen stayed busy with another of my tasks for {int(max_wait)}s, "
+                                         "so I gave up the wait. Try again in a moment or run it as a separate task.")
             self.set_status("running")
         self._screen_held = True
 
@@ -228,8 +235,10 @@ class AgentRun:
     def execute(self) -> TurnResult:
         eng = self.engine
         res = TurnResult(turn_id=self.id)
-        eng.db.insert("turns", {"id": self.id, "bot_id": self.bot_id, "thread_id": self.thread_id, "trigger": self.trigger, "status": "running",
-                                "started_at": now()})
+        # Upsert: this row may already exist as "queued" if the turn waited for the thread lock.
+        eng.db.execute("INSERT INTO turns(id,bot_id,thread_id,trigger,status,started_at) VALUES(?,?,?,?,?,?) "
+                       "ON CONFLICT(id) DO UPDATE SET status=excluded.status, started_at=excluded.started_at",
+                       (self.id, self.bot_id, self.thread_id, self.trigger, "running", now()))
         self.set_status("running")
         try:
             if eng.usage.over_limit():
@@ -524,6 +533,31 @@ class AgentRun:
                 attempt += 1
 
     # ------------------------------------------------------------ tool calls
+    TOOL_TIMEOUT = 300.0   # hard cap per tool call so one hung handler can't freeze the turn
+
+    def _run_handler(self, spec: ToolSpec, ctx: ToolContext, args: dict):
+        """Run a tool handler with a hard timeout (thread-per-call; hung calls detach)."""
+        timeout = getattr(spec, "timeout", 0) or self.TOOL_TIMEOUT
+        out: dict = {}
+
+        def _go():
+            try:
+                out["r"] = spec.handler(ctx, args)
+            except BaseException as e:  # noqa: BLE001 - re-raised on the turn thread below
+                out["e"] = e
+
+        th = threading.Thread(target=_go, name=f"tool-{spec.name}", daemon=True)
+        th.start()
+        th.join(timeout)
+        if th.is_alive():
+            self.engine.log.warning("Tool %s timed out after %.0fs; detaching. args=%s", spec.name, timeout, short(jdump(args), 120))
+            return ToolResult(f"The tool '{spec.name}' timed out after {int(timeout)}s and was cut off. "
+                              "It may still finish in the background. Report what you know so far or try a smaller step.",
+                              is_error=True)
+        if "e" in out:
+            raise out["e"]
+        return out.get("r") or ToolResult()
+
     def _run_tool(self, tc, specs: dict[str, ToolSpec], all_specs: dict[str, ToolSpec] | None = None) -> dict:
         eng = self.engine
         spec = specs.get(tc.name)
@@ -561,7 +595,7 @@ class AgentRun:
                         status = "denied"
                         r = ToolResult(f"ACTION NOT PERFORMED. {d.reason} Do not retry the same action; adjust the plan, ask the user, or report what is blocked.", is_error=True)
                 if status == "ok":
-                    r = spec.handler(ctx, args)
+                    r = self._run_handler(spec, ctx, args)
         except StopRequested:
             raise
         except (BrowserError, ComputerError, ConnectorError) as e:
@@ -873,6 +907,8 @@ class TurnManager:
         eng = self.engine
         bot = eng.bots.get(bot_id)
         if not bot or bot["archived"]:
+            if trigger == "user":
+                eng.threads.notice(thread_id, "No bot picked this up — it is archived or no longer exists. Restore it in Bots settings.", "warn")
             return None
         if bot["paused"] and trigger != "user":
             return None
@@ -896,11 +932,27 @@ class TurnManager:
     def _main(self, run: AgentRun) -> None:
         eng = self.engine
         try:
-            with self._tlock(run.thread_id):   # serialize turns in a thread; Bots in different threads run in parallel
+            tlock = self._tlock(run.thread_id)
+            queued = not tlock.acquire(blocking=False)
+            if queued:
+                # Another turn owns this thread: show this one as queued so the chat isn't blank.
+                eng.db.execute("INSERT INTO turns(id,bot_id,thread_id,trigger,status,started_at) VALUES(?,?,?,?,?,?) "
+                               "ON CONFLICT(id) DO UPDATE SET status=excluded.status, started_at=excluded.started_at",
+                               (run.id, run.bot_id, run.thread_id, run.trigger, "queued", now()))
+                eng.events.publish("turn", thread_id=run.thread_id, bot_id=run.bot_id, turn_id=run.id,
+                                   status="queued", trigger=run.trigger)
+                while not tlock.acquire(timeout=1.0):
+                    if run.stop.is_set():
+                        break   # stopped while queued; the execute() branch below records it
+            try:
                 if run.stop.is_set():
                     run.result = TurnResult(run.id, "stopped")
+                    if queued:
+                        eng.db.execute("UPDATE turns SET status='stopped', ended_at=? WHERE id=?", (now(), run.id))
                 else:
                     run.execute()
+            finally:
+                tlock.release()
         except Exception as e:  # noqa: BLE001
             eng.log.error("Turn thread failed: %s", e)
             run.result = run.result or TurnResult(run.id, "error", error=str(e))
@@ -916,7 +968,16 @@ class TurnManager:
     def run_sync(self, bot_id: str, thread_id: str, task: str, trigger: str = "routine", dry_run: bool = False) -> TurnResult:
         run = self.start(bot_id, thread_id, trigger, task, dry_run)
         if run is None:
-            return TurnResult("", "skipped", error="Bot is paused, archived or over its usage limit.")
+            eng = self.engine
+            bot = eng.bots.get(bot_id)
+            if bot and bot["paused"] and trigger != "user":
+                reason = "the Bot is paused"
+            elif bot and bot["archived"]:
+                reason = "the Bot is archived"
+            else:
+                reason = "the Bot is missing or over its usage limit"
+            eng.threads.notice(thread_id, f"Skipped a task ({reason}): {short(task or '', 150)}", "warn")
+            return TurnResult("", "skipped", error=f"Bot is paused, archived or over its usage limit ({reason}).")
         run.done.wait()
         return run.result or TurnResult(run.id, "error", error="No result")
 

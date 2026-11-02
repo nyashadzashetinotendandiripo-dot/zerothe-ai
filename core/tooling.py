@@ -64,6 +64,7 @@ class ToolSpec:
     group: str = "core"        # core | computer | plugin:<id> | mcp:<id>
     read_only: bool = False
     needs_screen: bool = False  # uses the Bot's screen (one computer-use task at a time)
+    timeout: float = 0.0        # hard handler timeout in seconds; 0 = engine default (300s)
 
     def schema(self) -> dict:
         return {"name": self.name, "description": self.description, "input_schema": self.input_schema}

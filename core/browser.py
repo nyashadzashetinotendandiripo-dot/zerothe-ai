@@ -31,7 +31,7 @@ SNAPSHOT_JS = r"""
 () => {
   const MAX = 150;
   document.querySelectorAll('[data-gb-id]').forEach(e => e.removeAttribute('data-gb-id'));
-  const sel = 'a[href],button,input,select,textarea,summary,[role=button],[role=link],[role=tab],[role=menuitem],[role=checkbox],[role=radio],[role=switch],[role=combobox],[role=option],[onclick],[contenteditable=true],[contenteditable=""],[tabindex]:not([tabindex="-1"])';
+  const sel = 'a[href],button,input,select,textarea,summary,[role=button],[role=link],[role=tab],[role=menuitem],[role=checkbox],[role=radio],[role=switch],[role=combobox],[role=option],[role=listitem],[role=row],[role=gridcell],[onclick],[contenteditable=true],[contenteditable=""],[tabindex]:not([tabindex="-1"])';
   const out = []; let n = 0; const vh = innerHeight, vw = innerWidth;
   for (const el of document.querySelectorAll(sel)) {
     const r = el.getBoundingClientRect();
@@ -409,6 +409,11 @@ class Screen:
         st = await self.state()
         return {**st, "text": text[:max_chars], "truncated": len(text) > max_chars}
 
+    async def evaluate(self, expression: str, arg=None):
+        """Run JavaScript in the page context (awaited via BrowserHost.call)."""
+        page = await self.ensure_page()
+        return await page.evaluate(expression, arg)
+
     async def screenshot(self, full_page: bool = False, quality: int = 70, save: bool = True) -> tuple[bytes, str]:
         page = await self.ensure_page()
         try:
@@ -702,7 +707,7 @@ class BrowserHost:
                 viewport={"width": int(comp.get("viewport_w", 1280)), "height": int(comp.get("viewport_h", 800))},
                 # Sites nag headless user-agents to "update Chrome" (the bundled build is current):
                 # identify as ordinary desktop Chrome so pages render and behave normally.
-                user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+                user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0.0.0 Safari/537.36",
                 accept_downloads=True, locale="en-US", channel="chrome" if which == "chrome" else "chromium",
                 args=[
                     "--disable-blink-features=AutomationControlled",

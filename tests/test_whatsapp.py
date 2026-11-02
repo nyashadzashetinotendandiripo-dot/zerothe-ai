@@ -32,6 +32,7 @@ class FakeScreen:
         self.calls = []
         self.snaps = []
         self.texts = {}
+        self.page = FakePage()
 
     async def goto(self, url):
         self.calls.append(("goto", url))
@@ -197,8 +198,11 @@ class SendTests(unittest.TestCase):
         ctx, scr = self._ctx()
         out = wa.wa_send(ctx, {"chat": "Mom", "text": "Hello Mom"})
         self.assertIn("Sent to 'Mom'", out.text)
-        types = [c for c in scr.calls if c[0] == "type"]
-        self.assertTrue(any(t[2] == "Hello Mom" and t[3] is True for t in types), types)
+        kb = scr.page.keyboard
+        typed = "".join(t for t, _d in kb.typed)
+        self.assertIn("Hello Mom", typed, typed)
+        self.assertIn("Enter", kb.pressed)
+        self.assertIn('[data-gb-id="9"]', scr.page.selector)  # message box was located
 
     def test_send_needs_text(self):
         ctx, _scr = self._ctx()
@@ -208,7 +212,11 @@ class SendTests(unittest.TestCase):
         tools = {t["name"]: t for t in wa.register(None)}
         self.assertEqual(tools["send"].get("risk"), "send")
         self.assertNotIn("risk", tools["read"])
-        self.assertTrue(all(t.get("needs_screen") for t in tools.values()))
+        # Screen-driving tools keep needs_screen; pure-logic tools (varied_text, call_summary, ...) drop it.
+        self.assertTrue(tools["send"].get("needs_screen"))
+        self.assertTrue(tools["open_chat"].get("needs_screen"))
+        self.assertIsNone(tools["varied_text"].get("needs_screen"))
+        self.assertIsNone(tools["call_summary"].get("needs_screen"))
 
 
 class BuildTests(unittest.TestCase):
@@ -218,13 +226,23 @@ class BuildTests(unittest.TestCase):
         conn = SimpleNamespace(cfg=lambda key, default="": default)
         specs = build_python(ROOT / "plugins" / "whatsapp", manifest)(conn)
         by_name = {s.name: s for s in specs}
-        self.assertEqual(set(by_name), {"whatsapp_status", "whatsapp_chats", "whatsapp_open_chat",
-                                        "whatsapp_read", "whatsapp_send",
-                                        "whatsapp_send_media", "whatsapp_reply_to_message", "whatsapp_react_message",
-                                        "whatsapp_forward_message", "whatsapp_delete_message",
-                                        "whatsapp_mark_unread", "whatsapp_mute_chat", "whatsapp_archive_chat",
-                                        "whatsapp_pin_chat", "whatsapp_search_messages", "whatsapp_view_contact"})
-        self.assertTrue(all(s.needs_screen for s in specs), "whatsapp tools drive the tab")
+        self.assertEqual(set(by_name), {
+            "whatsapp_status", "whatsapp_chats", "whatsapp_open_chat",
+            "whatsapp_read", "whatsapp_send", "whatsapp_send_media",
+            "whatsapp_reply_to_message", "whatsapp_react_message",
+            "whatsapp_forward_message", "whatsapp_delete_message",
+            "whatsapp_mark_unread", "whatsapp_mute_chat", "whatsapp_archive_chat",
+            "whatsapp_pin_chat", "whatsapp_search_messages", "whatsapp_view_contact",
+            "whatsapp_create_group", "whatsapp_add_participants", "whatsapp_group_description",
+            "whatsapp_broadcast", "whatsapp_response_timer", "whatsapp_draft_reply",
+            "whatsapp_call_record", "whatsapp_call_transcribe", "whatsapp_call_summary",
+            "whatsapp_voice_reply", "whatsapp_followup", "whatsapp_takeover_pause",
+            "whatsapp_varied_text", "whatsapp_forward_advert", "whatsapp_advert_campaign",
+            "whatsapp_forward_queue", "whatsapp_groups", "whatsapp_group_members",
+            "whatsapp_contacts", "whatsapp_download_media", "whatsapp_mark_read",
+        })
+        self.assertTrue(any(s.needs_screen for s in specs), "screen tools drive the tab")
+        self.assertFalse(all(s.needs_screen for s in specs), "pure-logic tools do not need the screen")
         self.assertIsNone(by_name["whatsapp_read"].risk)
         self.assertIsNotNone(by_name["whatsapp_send"].risk)
         self.assertTrue(by_name["whatsapp_status"].read_only)
@@ -242,10 +260,10 @@ class FakeKeyboard:
         self.typed = []
         self.pressed = []
 
-    def type(self, text, delay=0):
+    async def type(self, text, delay=0):
         self.typed.append((text, delay))
 
-    def press(self, key):
+    async def press(self, key):
         self.pressed.append(key)
 
 
@@ -253,12 +271,32 @@ class FakeLoc:
     def __init__(self, keyboard):
         self.keyboard = keyboard
         self.clicked = 0
+        self.count_value = 1
+        self.filled = None
+        self.files = None
 
-    def click(self, timeout=None):
+    async def click(self, timeout=None, button="left"):
         self.clicked += 1
         return None
 
+    async def hover(self):
+        return None
+
+    async def count(self):
+        return self.count_value
+
+    async def fill(self, text):
+        self.filled = text
+        return None
+
+    async def set_input_files(self, path):
+        self.files = path
+        return None
+
     first = property(lambda self: self)
+
+    def nth(self, idx):
+        return self
 
 
 class FakePage:
@@ -266,10 +304,43 @@ class FakePage:
         self.keyboard = FakeKeyboard()
         self._loc = FakeLoc(self.keyboard)
         self.selector = ""
+        self.eval_result = None
+        self.downloads = []
 
     def locator(self, sel):
         self.selector = sel
         return self._loc
+
+    async def evaluate(self, expression, arg=None):
+        if self.eval_result is not None:
+            result, self.eval_result = self.eval_result, None
+            return result
+        return []
+
+    async def expect_download(self, timeout=20000):
+        return _FakeDLContext(self.downloads)
+
+
+class _FakeDLContext:
+    def __init__(self, downloads):
+        self.downloads = downloads
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *a):
+        return False
+
+    @property
+    def value(self):
+        return _FakeDL()
+
+
+class _FakeDL:
+    suggested_filename = "downloaded.jpg"
+
+    async def save_as(self, path):
+        pass
 
 
 class HumanTypeTests(unittest.TestCase):
@@ -292,6 +363,7 @@ class HumanTypeTests(unittest.TestCase):
 
     def test_fallback_without_page(self):
         scr = FakeScreen("https://web.whatsapp.com/")
+        scr.page = None   # force the engine type_text fallback path
         ctx = ctx_with(scr)
         wa._human_type(ctx.engine.computer.browser, scr, 9, "Hello Mom", submit=True)
         self.assertIn(("type", 9, "Hello Mom", True), scr.calls)
@@ -303,7 +375,7 @@ class HumanTypeTests(unittest.TestCase):
         scr = FakeScreen("https://web.whatsapp.com/")
         scr.page = FakePage()
         with mock.patch.object(wa.time, "sleep"):
-            wa._type_direct(scr, 9, "Hello Mom, see you soon", True, 30, 120, 0.05, 0.5, 0.12)
+            asyncio.run(wa._type_direct_async(scr, 9, "Hello Mom, see you soon", True, 30, 120, 0.05, 0.5, 0.12))
         kb = scr.page.keyboard
         self.assertEqual("".join(t for t, _d in kb.typed), "Hello Mom, see you soon")
         self.assertTrue(len(kb.typed) > 1, "must type in bursts, not one paste")
@@ -322,7 +394,7 @@ class HumanTypeTests(unittest.TestCase):
         scr = FakeScreen("https://web.whatsapp.com/")
         scr.page = FakePage()
         with mock.patch.object(wa.time, "sleep"):
-            wa._type_direct(scr, 4, "mom", False, 12, 45, 0.03, 0.2, 0.05)
+            asyncio.run(wa._type_direct_async(scr, 4, "mom", False, 12, 45, 0.03, 0.2, 0.05))
         kb = scr.page.keyboard
         self.assertEqual("".join(t for t, _d in kb.typed), "mom")
         self.assertNotIn("Enter", kb.pressed)

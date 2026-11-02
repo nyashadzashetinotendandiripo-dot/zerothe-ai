@@ -1069,9 +1069,21 @@
       case 'turn':
         if (['done', 'stopped', 'error', 'limit', 'skipped'].includes(ev.status)) delete S.busy[ev.bot_id];
         else S.busy[ev.bot_id] = { thread_id: ev.thread_id, status: ev.status, steps: ev.steps, turn_id: ev.turn_id };
-        if (S.view === 'bots') renderBots(); updateChatStatus();
+        updateChatStatus();
+        if (S.thread && ev.thread_id === S.thread.id) renderMessages();
+        if (S.view === 'bots') renderBots();
         if (['done', 'stopped', 'error', 'limit'].includes(ev.status)) { try { onTurnFinished(ev); } catch (e) { console.error(e); } }
         break;
+      case 'activity': {
+        // A background breadcrumb ("doing X…") while a turn runs — echo it into the open chat
+        // so the user sees the bot is working even on long tool-heavy turns.
+        if (ev.thread_id && S.thread && ev.thread_id === S.thread.id) {
+          const st = S.stream[ev.thread_id] || (S.stream[ev.thread_id] = { text: '', thread: ev.thread_id });
+          st.text += (st.text ? ' — ' : '') + ev.text;
+          renderMessages();
+        }
+        break;
+      }
       case 'approval': refreshApprovals(); break;
       case 'bots': case 'groups': loadBootstrap(); break;
       case 'notification':

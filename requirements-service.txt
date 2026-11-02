@@ -17,3 +17,5 @@ pyspellchecker>=0.8
 beautifulsoup4>=4.12
 lxml>=5.2
 pypdf>=4.2
+# In-app document previews: PDF pages as PNG for the phone app and web UI
+pypdfium2>=4.30

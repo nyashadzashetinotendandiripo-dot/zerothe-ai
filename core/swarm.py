@@ -102,10 +102,20 @@ def run_swarm(engine: "Engine", bot_ids: list[str], task: str,
     summary = _build_summary(task, bot_ids, engine, results)
     reply = engine.threads.get(reply_thread_id) if reply_thread_id else None
     if not reply:
+        # Fall back to the first bot's main thread so an answer always lands somewhere visible.
+        reply = engine.threads.get(engine.threads.main_thread(bot_ids[0])["id"]) if bot_ids else None
+    if not reply:
         return {"ok": False, "results": results, "summary": summary, "error": "No such reply thread."}
     try:
         engine.threads.add(reply_thread_id, "swarm", "assistant", summary)
     except Exception as e:  # noqa: BLE001
         return {"ok": False, "results": results, "summary": summary, "error": f"Could not post summary: {e}"}
+    # Mirror per-bot failures into the originating thread as notices so nothing looks dropped.
+    for bid, text in results.items():
+        if text.startswith(_FAIL_PREFIXES):
+            try:
+                engine.threads.notice(reply_thread_id, f"{_bot_name(engine, bid)}: {text}", "warn")
+            except Exception:
+                pass
     ok = bool(results) and any(not v.startswith(_FAIL_PREFIXES) for v in results.values())
     return {"ok": ok, "results": results, "summary": summary}

@@ -15,6 +15,7 @@ sounddevice>=0.4
 numpy>=1.26
 # Job Hunt plugin: CV/cover-letter rendering, board scraping, spellcheck
 reportlab>=4.1
+pypdfium2>=4.30
 python-docx>=1.1
 pyspellchecker>=0.8
 beautifulsoup4>=4.12

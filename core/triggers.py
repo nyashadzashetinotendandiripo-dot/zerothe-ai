@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import secrets
 import threading
+import traceback
 from datetime import datetime
 from typing import TYPE_CHECKING, Any
 
@@ -111,7 +112,17 @@ class Triggers:
                     f"the report short and concrete.\n\n{r['prompt']}\n\nEvent payload:\n{body}").strip()
             self.engine.turns.run_sync(bot["id"], th["id"], task, trigger="event")
             self.engine.notify("trigger", bot, th["id"], f"Event: {r['name']}", "Handled an incoming event.")
-        except Exception:  # noqa: BLE001 - a bad trigger must never kill the service
-            pass
+        except Exception:  # noqa: BLE001 - a bad trigger must never kill the service; still surface it
+            eng = self.engine
+            try:
+                eng.log.error("Trigger %s failed: %s", r.get("name"), traceback.format_exc())
+            except Exception:
+                pass
+            try:
+                bot = eng.bots.get(r["bot_id"])
+                th = eng.threads.get(r.get("thread_id") or "") if hasattr(eng, "threads") else None
+                eng.notify("error", bot, th.get("id") if th else None, f"Trigger '{r.get('name')}' failed", "A background trigger turn raised an exception; check the trigger and try again.", urgent=True)
+            except Exception:
+                pass
         finally:
             self.db.update("triggers", tid, {"last_fired_at": now(), "fire_count": int(r["fire_count"] or 0) + 1})

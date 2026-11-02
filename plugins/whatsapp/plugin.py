@@ -60,28 +60,83 @@ def _chunks(text: str, lo: int = 2, hi: int = 14) -> list[str]:
     return out
 
 
-def _type_direct(scr, element: int, text: str, submit: bool, klo: int, khi: int,
-                 plo: float, phi: float, think_p: float) -> None:
-    """Type through the page keyboard with uneven key delays and thinking pauses.
+# ------------------------------------------------------------------ async page helpers
+# Every Playwright call must run through BrowserHost.call() as an async function, because
+# the plugin's tool handlers are sync while the page lives on the browser's asyncio loop.
+# Calling scr.page.locator(...).click() etc. from sync code returns an un-awaited coroutine
+# (a no-op); br.call(_helper, ...) schedules it properly.
+async def _el_click(scr, selector: str, idx: int | None = None, button: str = "left") -> None:
+    loc = scr.page.locator(selector)
+    loc = loc.nth(idx) if idx is not None else loc.first
+    await loc.click(timeout=6000, button=button)
 
-    Mirrors what engine type_text does (click, select-all, delete) but with human
-    rhythm instead of a fixed 8ms/key. Runs inside br.call like _js_click_icon.
-    """
+
+async def _el_hover(scr, selector: str, idx: int | None = None) -> None:
+    loc = scr.page.locator(selector)
+    loc = loc.nth(idx) if idx is not None else loc.first
+    await loc.hover()
+
+
+async def _el_count(scr, selector: str) -> int:
+    return await scr.page.locator(selector).count()
+
+
+async def _el_fill(scr, selector: str, text: str) -> None:
+    loc = scr.page.locator(selector).first
+    await loc.click(timeout=6000)
+    await loc.fill(str(text))
+
+
+async def _el_click_last(scr, selector: str) -> None:
+    n = await scr.page.locator(selector).count()
+    if n == 0:
+        raise BrowserError(f"No element matching {selector!r}.")
+    await scr.page.locator(selector).nth(n - 1).click(timeout=6000)
+
+
+async def _set_files(scr, path: str) -> None:
+    await scr.page.locator('input[type="file"]').first.set_input_files(str(path))
+
+
+async def _kb_type(scr, text: str, delay: int = 30) -> None:
+    await scr.page.keyboard.type(text, delay=delay)
+
+
+async def _kb_press(scr, key: str) -> None:
+    await scr.page.keyboard.press(key)
+
+
+async def _grab_download(scr, out_dir: str) -> str | None:
+    """Wait for a file download triggered by a click, save it under out_dir, return its path."""
+    try:
+        async with scr.page.expect_download(timeout=20000) as dl:
+            await scr.page.locator('[data-testid="media-download"], [data-icon="download"]').first.click(timeout=6000)
+        download = await dl.value
+        fn = download.suggested_filename or f"whatsapp_{int(time.time())}.jpg"
+        p = Path(out_dir) / fn
+        await download.save_as(str(p))
+        return str(p)
+    except Exception:  # noqa: BLE001
+        return None
+
+
+async def _type_direct_async(scr, element: int, text: str, submit: bool, klo: int, khi: int,
+                             plo: float, phi: float, think_p: float) -> None:
     loc = scr.page.locator(f'[data-gb-id="{int(element)}"]').first
-    loc.click(timeout=6000)
-    scr.page.keyboard.press("Control+A")
+    await loc.click(timeout=6000)
+    await scr.page.keyboard.press("Control+A")
     _pause(0.05, 0.18)
-    scr.page.keyboard.press("Delete")
+    await scr.page.keyboard.press("Delete")
     _pause(0.08, 0.25)
     for chunk in _chunks(text):
-        scr.page.keyboard.type(chunk, delay=random.randint(klo, khi))
+        await scr.page.keyboard.type(chunk, delay=random.randint(klo, khi))
         if random.random() < think_p:
             _pause(0.7, 1.8)
         else:
             _pause(plo, phi)
     if submit:
         _pause(0.3, 0.9)
-        scr.page.keyboard.press("Enter")
+        await scr.page.keyboard.press("Enter")
 
 
 def _human_type(br, scr, element: int, text: str, submit: bool = False, fast: bool = False) -> None:
@@ -91,9 +146,9 @@ def _human_type(br, scr, element: int, text: str, submit: bool = False, fast: bo
         br.call(scr.type_text, text, element=element, clear=True, submit=submit, timeout=40)
         return
     if fast:  # search boxes: snappy but still uneven
-        br.call(_type_direct, scr, element, text, submit, 12, 45, 0.03, 0.2, 0.05, timeout=60)
+        br.call(_type_direct_async, scr, element, text, submit, 12, 45, 0.03, 0.2, 0.05, timeout=60)
     else:     # message boxes: full human rhythm
-        br.call(_type_direct, scr, element, text, submit, 30, 120, 0.05, 0.5, 0.12, timeout=90)
+        br.call(_type_direct_async, scr, element, text, submit, 30, 120, 0.05, 0.5, 0.12, timeout=90)
 
 
 def _out(text: str, url: str = WA_URL, is_error: bool = False):
@@ -371,20 +426,25 @@ def _message_box(elements):
 
 
 # ------------------------------------------------------------------ tools
-def _js_click_icon(scr, name):
-    return scr.evaluate("""(name) => {
+async def _js_click_icon(scr, name: str) -> str:
+    """Click a WhatsApp toolbar icon (send/reply/emoji/down/menu/more) via page JS."""
+    return await scr.evaluate("""(name) => {
         const el = document.querySelector('[data-icon="'+name+'"]') || document.querySelector('[data-testid="'+name+'"]');
         if (el) { el.dispatchEvent(new MouseEvent('click', {bubbles: true})); return 'ok'; }
         return 'no';
     }""", name)
 
 
-def _ctx_click(scr, row_text, item):
-    loc = scr.page.locator(f'[role="listitem"]:has-text("{row_text}")').first
-    if not loc.count():
-        raise BrowserError(f"No WhatsApp chat list row for '{row_text}'.")
-    loc.click(button="right")
-    scr.page.locator(f'[role="menuitem"]:has-text("{item}")').first.click()
+async def _ctx_click(scr, row_text: str | None, item: str | None) -> None:
+    """Right-click a WhatsApp chat row (to open its context menu) then pick a menu item.
+    Either side may be omitted: right-click only, or click the menu item directly."""
+    if row_text:
+        row = scr.page.locator(f'[role="listitem"]:has-text("{row_text}")').first
+        if await row.count():
+            await row.click(button="right")
+            _pause(0.6, 1.2)
+    if item:
+        await scr.page.locator(f'[role="menuitem"]:has-text("{item}")').first.click(timeout=6000)
 
 
 def _rate_limit(bid):
@@ -422,16 +482,14 @@ def _send_text(br, scr, text: str, submit: bool = True) -> None:
 
 
 def _attach_and_send(br, scr, path: str, caption: str = "") -> None:
-    inp = scr.page.locator('input[type="file"]').first
-    if not inp.count():
+    if br.call(_el_count, scr, 'input[type="file"]') == 0:
         raise BrowserError("The attachment input is not available in this chat.")
-    inp.set_input_files(str(path))
+    br.call(_set_files, scr, path)
     _pause(1.2, 2.0)
     if caption:
-        cap = scr.page.locator('div[contenteditable="true"]').last
-        cap.click()
+        br.call(_el_click_last, scr, 'div[contenteditable="true"]')
         for chunk in _chunks(caption):
-            scr.page.keyboard.type(chunk, delay=random.randint(30, 110))
+            br.call(_kb_type, scr, chunk, random.randint(30, 110))
             _pause(0.05, 0.4)
     r = br.call(_js_click_icon, scr, "send")
     if r == "no":
@@ -478,14 +536,14 @@ def wa_send_media(ctx, args):
             return _out(str(e))
     _think(scr, args.get("chat", ""))
     _rate_limit(ctx.bot["id"])
-    inp = scr.page.locator('input[type="file"]').first
-    inp.set_input_files(str(path))
+    if br.call(_el_count, scr, 'input[type="file"]') == 0:
+        return _out("The attachment input is not available in this chat.", is_error=True)
+    br.call(_set_files, scr, str(path))
     _pause(1.2, 2.0)
     if args.get("caption"):
-        cap = scr.page.locator('div[contenteditable="true"]').last
-        cap.click()
+        br.call(_el_click_last, scr, 'div[contenteditable="true"]')
         for chunk in _chunks(args["caption"]):
-            scr.page.keyboard.type(chunk, delay=random.randint(30, 110))
+            br.call(_kb_type, scr, chunk, random.randint(30, 110))
             _pause(0.05, 0.4)
     r = br.call(_js_click_icon, scr, "send")
     if r == "no":
@@ -506,8 +564,7 @@ def wa_reply_to_message(ctx, args):
     bubbles = [e for e in msgs if e.get("role") in ("row", "listitem", "button") and e.get("tag") == "div"]
     if idx >= len(bubbles):
         return _out(f"No message at index {idx} (only {len(bubbles)} visible).", is_error=True)
-    loc = scr.page.locator(".message-in, .message-out").nth(idx)
-    loc.hover()
+    br.call(_el_hover, scr, ".message-in, .message-out", idx=idx)
     _pause(0.6, 1.4)
     r = br.call(_js_click_icon, scr, "reply")
     if r == "no":
@@ -529,17 +586,15 @@ def wa_react_message(ctx, args):
     emoji = (args.get("emoji") or "").strip()
     if not emoji:
         return _out('Give an emoji: whatsapp_react needs {\"emoji\": \"👍\"}.', is_error=True)
-    loc = scr.page.locator(".message-in, .message-out").nth(idx)
-    loc.hover()
+    br.call(_el_hover, scr, ".message-in, .message-out", idx=idx)
     _pause(0.6, 1.4)
     r = br.call(_js_click_icon, scr, "emoji") or br.call(_js_click_icon, scr, "smiley")
     if r == "no":
         return _out("Could not find the reaction button. The layout may have changed.", is_error=True)
     _pause(0.8, 1.6)
-    btn = scr.page.locator(f'text="{emoji}"').first
-    if not btn.count():
+    if br.call(_el_count, scr, f'text="{emoji}"') == 0:
         return _out(f"Emoji '{emoji}' not visible in the reaction panel.", is_error=True)
-    btn.click()
+    br.call(_el_click, scr, f'text="{emoji}"')
     _pause(0.8, 1.6)
     return _out(f"Reacted to message {idx} with {emoji}")
 
@@ -549,25 +604,21 @@ def wa_forward_message(ctx, args):
     if not paired:
         return wa_status(ctx, args)
     idx = int(args.get("index", 0) or 0)
-    loc = scr.page.locator(".message-in, .message-out").nth(idx)
-    loc.hover()
+    br.call(_el_hover, scr, ".message-in, .message-out", idx=idx)
     _pause(0.6, 1.4)
     r = br.call(_js_click_icon, scr, "down")
     if r == "no":
         return _out("Could not find the message menu. The layout may have changed.", is_error=True)
-        _pause(0.6, 1.4)
-    scr.page.locator('[role="menuitem"]:has-text("Forward")').first.click()
+    br.call(_el_click, scr, '[role="menuitem"]:has-text("Forward")')
     _pause(0.8, 1.6)
     if args.get("chat"):
-        search = scr.page.locator('input[placeholder*="Search"]').first
-        search.fill(args["chat"])
+        br.call(_el_fill, scr, 'input[placeholder*="Search"]', args["chat"])
         _pause(0.8, 1.6)
-        scr.page.locator(f'[role="listitem"]:has-text("{args["chat"]}")').first.click()
+        br.call(_el_click, scr, f'[role="listitem"]:has-text("{args["chat"]}")')
         _pause(0.4, 0.9)
-    fwd = scr.page.locator('button:has-text("Forward")').last
-    if not fwd.count():
+    if br.call(_el_count, scr, 'button:has-text("Forward")') == 0:
         return _out("Forward button not found in the forward panel.", is_error=True)
-    fwd.click()
+    br.call(_el_click_last, scr, 'button:has-text("Forward")')
     _pause(1.2, 2.2)
     return _out(f"Forwarded message {idx}" + (f" to '{args['chat']}'" if args.get("chat") else ""))
 
@@ -577,22 +628,20 @@ def wa_delete_message(ctx, args):
     if not paired:
         return wa_status(ctx, args)
     idx = int(args.get("index", 0) or 0)
-    loc = scr.page.locator(".message-in, .message-out").nth(idx)
-    loc.hover()
+    br.call(_el_hover, scr, ".message-in, .message-out", idx=idx)
     _pause(0.6, 1.4)
     r = br.call(_js_click_icon, scr, "down")
     if r == "no":
         return _out("Could not find the message menu. The layout may have changed.", is_error=True)
-        _pause(0.6, 1.4)
-    scr.page.locator('[role="menuitem"]:has-text("Delete")').first.click()
+    br.call(_el_click, scr, '[role="menuitem"]:has-text("Delete")')
     _pause(0.6, 1.4)
     for txt in ("Delete for everyone", "Delete"):
-        cand = scr.page.locator(f'#{txt}, [role="radio"]:has-text("{txt}")').first
-        if cand.count():
-            cand.click()
-            break
-        _pause(0.4, 0.9)
-    scr.page.locator('button:has-text("Delete")').last.click()
+        if br.call(_el_count, scr, f'#{txt}, [role="radio"]:has-text("{txt}")') == 0:
+            _pause(0.4, 0.9)
+            continue
+        br.call(_el_click, scr, f'#{txt}, [role="radio"]:has-text("{txt}")')
+        break
+    br.call(_el_click_last, scr, 'button:has-text("Delete")')
     _pause(0.8, 1.6)
     return _out(f"Deleted message {idx}")
 
@@ -607,10 +656,10 @@ def wa_mark_unread(ctx, args):
         except BrowserError as e:
             return _out(str(e))
     _rate_limit(ctx.bot["id"])
-    _ctx_click(scr, "down")
+    _ctx_click(scr, args.get("chat") or None, None)
     _pause(0.6, 1.4)
     try:
-        _ctx_click(scr, "Mark as unread")
+        _ctx_click(scr, None, "Mark as unread")
     except BrowserError:
         return _out("Could not find 'Mark as unread'. The layout may have changed.", is_error=True)
     _pause(0.8, 1.6)
@@ -627,24 +676,21 @@ def wa_mute_chat(ctx, args):
         except BrowserError as e:
             return _out(str(e))
     _rate_limit(ctx.bot["id"])
-    _ctx_click(scr, "down")
+    _ctx_click(scr, args.get("chat") or None, None)
     _pause(0.6, 1.4)
     try:
-        _ctx_click(scr, "Mute notifications")
+        _ctx_click(scr, None, "Mute notifications")
     except BrowserError:
         return _out("Could not find 'Mute notifications'. The layout may have changed.", is_error=True)
-        _pause(0.6, 1.4)
     dur = str(args.get("duration", "Always")).strip().lower()
     for opt in ("Always", "1 week", "8 hours"):
         if opt.lower() == dur or opt.lower().startswith(dur):
-            radio = scr.page.locator(f'[role="radio"]:has-text("{opt}")').first
-            if radio.count():
-                radio.click()
+            if br.call(_el_count, scr, f'[role="radio"]:has-text("{opt}")'):
+                br.call(_el_click, scr, f'[role="radio"]:has-text("{opt}")')
             break
         _pause(0.4, 0.9)
-    ok = scr.page.locator('button:has-text("Mute")').last
-    if ok.count():
-        ok.click()
+    if br.call(_el_count, scr, 'button:has-text("Mute")'):
+        br.call(_el_click_last, scr, 'button:has-text("Mute")')
     _pause(0.8, 1.6)
     return _out(f"Muted '{args.get('chat') or 'the open chat'}' ({args.get('duration', 'Always')})")
 
@@ -659,10 +705,10 @@ def wa_archive_chat(ctx, args):
         except BrowserError as e:
             return _out(str(e))
     _rate_limit(ctx.bot["id"])
-    _ctx_click(scr, "down")
+    _ctx_click(scr, args.get("chat") or None, None)
     _pause(0.6, 1.4)
     try:
-        _ctx_click(scr, "Archive chat")
+        _ctx_click(scr, None, "Archive chat")
     except BrowserError:
         return _out("Could not find 'Archive chat'. The layout may have changed.", is_error=True)
     _pause(0.8, 1.6)
@@ -680,11 +726,11 @@ def wa_pin_chat(ctx, args):
         except BrowserError as e:
             return _out(str(e))
     _rate_limit(ctx.bot["id"])
-    _ctx_click(scr, "down")
+    _ctx_click(scr, name or None, None)
     _pause(0.6, 1.4)
     target = "Unpin chat" if args.get("unpin") else "Pin chat"
     try:
-        _ctx_click(scr, target)
+        _ctx_click(scr, None, target)
     except BrowserError:
         return _out(f"Could not find '{target}'. The layout may have changed.", is_error=True)
     _pause(0.8, 1.6)
@@ -698,7 +744,7 @@ def wa_search_messages(ctx, args):
     query = (args.get("query") or "").strip()
     if not query:
         return _out('Give a search text: whatsapp_search needs {\"query\": \"...\"}.', is_error=True)
-    snap = br.call(scr.state, timeout=20)
+    snap = br.call(scr.snapshot, 4000, timeout=30)
     box = _search_box(_els(snap))
     if box is None:
         raise BrowserError("Could not find the WhatsApp search box. The layout may have changed.")
@@ -708,7 +754,7 @@ def wa_search_messages(ctx, args):
     except Exception:
         pass
     _pause(1.0, 1.8)
-    texts = scr.page.evaluate("""() => {
+    texts = br.call(scr.evaluate, """() => {
         const out = [];
         document.querySelectorAll('.message-in, .message-out').forEach(m => {
             const t = (m.innerText || '').trim();
@@ -732,8 +778,7 @@ def wa_view_contact(ctx, args):
             chat = _open_chat(br, scr, chat)
         except BrowserError as e:
             return _out(str(e))
-    br.call(scr.state, timeout=20) if False else None
-    snap = br.call(scr.state, timeout=20)
+    snap = br.call(scr.snapshot, 4000, timeout=30)
     header = None
     for e in _els(snap):
         if e.get("role") in ("button", "heading") and e.get("tag") in ("div", "span") and _lab(e):
@@ -743,7 +788,7 @@ def wa_view_contact(ctx, args):
         raise BrowserError("Could not find the chat header. The layout may have changed.")
     br.call(scr.click, element=header["id"], timeout=30)
     _pause(1.2, 2.2)
-    info = scr.page.evaluate("""() => {
+    info = br.call(scr.evaluate, """() => {
         const drawer = document.querySelector('[data-testid="drawer-right"]');
         const panel = drawer || document.querySelector('div');
         return (panel ? panel.innerText : document.body.innerText).slice(0, 900);
@@ -762,30 +807,22 @@ def wa_create_group(ctx, args):
     snap = br.call(scr.snapshot, 4000, timeout=30)
     r = br.call(_js_click_icon, scr, "menu") or br.call(_js_click_icon, scr, "more")
     if r == "no":
-        menu = scr.page.locator('[data-icon="menu"], [data-testid="menu"]').first
-        if menu.count():
-            menu.click()
-        else:
+        if br.call(_el_count, scr, '[data-icon="menu"], [data-testid="menu"]') == 0:
             return _out("Could not find the menu to create a group.", is_error=True)
+        br.call(_el_click, scr, '[data-icon="menu"], [data-testid="menu"]')
     _pause(1.0, 1.8)
     snap = br.call(scr.snapshot, 4000, timeout=30)
-    box = scr.page.locator('[role="menuitem"]:has-text("New group")').first
-    if not box.count():
+    if br.call(_el_count, scr, '[role="menuitem"]:has-text("New group")') == 0:
         return _out("Could not find 'New group' in the menu.", is_error=True)
-    box.click()
+    br.call(_el_click, scr, '[role="menuitem"]:has-text("New group")')
     _pause(1.2, 2.0)
-    continue_btn = scr.page.locator('button:has-text("Continue"), [data-testid="arrow-forward"]').last
-    if continue_btn.count():
-        continue_btn.click()
+    br.call(_el_click_last, scr, 'button:has-text("Continue"), [data-testid="arrow-forward"]')
     _pause(1.0, 1.8)
-    name_box = scr.page.locator('div[contenteditable="true"], input[type="text"]').first
-    if name_box.count():
-        name_box.click()
-        name_box.fill(name)
+    if br.call(_el_count, scr, 'div[contenteditable="true"], input[type="text"]'):
+        br.call(_el_fill, scr, 'div[contenteditable="true"], input[type="text"]', name)
     _pause(0.8, 1.4)
-    create_btn = scr.page.locator('button:has-text("Create"), [data-testid="checkmark-large"]').last
-    if create_btn.count():
-        create_btn.click()
+    if br.call(_el_count, scr, 'button:has-text("Create"), [data-testid="checkmark-large"]'):
+        br.call(_el_click_last, scr, 'button:has-text("Create"), [data-testid="checkmark-large"]')
     _pause(1.5, 2.5)
     return _out(f"Created WhatsApp group '{name}'. Use whatsapp_add_participants to add members, then whatsapp_send to broadcast.")
 
@@ -798,23 +835,21 @@ def wa_add_participants(ctx, args):
     group = (args.get("group") or "").strip()
     contacts = args.get("contacts") or []
     if not group:
-        return _out('Give the group name: whatsapp_add_participants needs {"group": "...", "contacts": ["...", ...]}.", is_error=True')
+        return _out('Give the group name: whatsapp_add_participants needs {"group": "...", "contacts": ["...", ...]}.', is_error=True)
     if not isinstance(contacts, list) or not contacts:
-        return _out('Give at least one contact: {"contacts": ["+1234567890", ...]}.", is_error=True')
+        return _out('Give at least one contact: {"contacts": ["+1234567890", ...]}.', is_error=True)
     try:
         _open_chat(br, scr, group)
     except BrowserError as e:
         return _out(str(e))
     _rate_limit(ctx.bot["id"])
     _pause(1.0, 1.8)
-    header = scr.page.locator('[data-testid="conversation-header"], div[role="heading"]').first
-    if header.count():
-        header.click()
+    if br.call(_el_count, scr, '[data-testid="conversation-header"], div[role="heading"]'):
+        br.call(_el_click, scr, '[data-testid="conversation-header"], div[role="heading"]')
     _pause(1.0, 1.8)
-    add_btn = scr.page.locator('[role="menuitem"]:has-text("Add participants"), text="Add participants"').first
-    if not add_btn.count():
+    if br.call(_el_count, scr, '[role="menuitem"]:has-text("Add participants"), text="Add participants"') == 0:
         return _out("Could not find 'Add participants'. Open the group info first.", is_error=True)
-    add_btn.click()
+    br.call(_el_click, scr, '[role="menuitem"]:has-text("Add participants"), text="Add participants"')
     _pause(1.0, 1.8)
     added = 0
     for contact in contacts:
@@ -822,14 +857,12 @@ def wa_add_participants(ctx, args):
         if search_box:
             _human_type(br, scr, search_box["id"], contact, submit=False, fast=True)
             _pause(1.0, 1.5)
-            row = scr.page.locator(f'[role="listitem"]:has-text("{contact}")').first
-            if row.count():
-                row.click()
+            if br.call(_el_count, scr, f'[role="listitem"]:has-text("{contact}")'):
+                br.call(_el_click, scr, f'[role="listitem"]:has-text("{contact}")')
                 added += 1
             _pause(0.5, 1.0)
-    done_btn = scr.page.locator('button:has-text("Done"), [data-testid="checkmark-large"], text="Done"').last
-    if done_btn.count():
-        done_btn.click()
+    if br.call(_el_count, scr, 'button:has-text("Done"), [data-testid="checkmark-large"], text="Done"'):
+        br.call(_el_click_last, scr, 'button:has-text("Done"), [data-testid="checkmark-large"], text="Done"')
     _pause(1.0, 1.8)
     return _out(f"Added {added} of {len(contacts)} contacts to group '{group}'.")
 
@@ -849,9 +882,8 @@ def wa_group_description(ctx, args):
         return _out(str(e))
     _rate_limit(ctx.bot["id"])
     _pause(1.0, 1.8)
-    header = scr.page.locator('[data-testid="conversation-header"], div[role="heading"]').first
-    if header.count():
-        header.click()
+    if br.call(_el_count, scr, '[data-testid="conversation-header"], div[role="heading"]'):
+        br.call(_el_click, scr, '[data-testid="conversation-header"], div[role="heading"]')
     _pause(1.0, 1.8)
     return _out(f"Group description set for '{group}': {desc[:120]} (best effort - WhatsApp Web layout may require manual confirmation).")
 
@@ -1045,7 +1077,7 @@ def wa_call_record(ctx, args):
     if not paired:
         return wa_status(ctx, args)
     try:
-        result = scr.page.evaluate("""async () => {
+        result = br.call(scr.evaluate, """() => {
             try {
                 const stream = await navigator.mediaDevices.getDisplayMedia({
                     video: false,
@@ -1055,7 +1087,7 @@ def wa_call_record(ctx, args):
             } catch (e) {
                 return { ok: false, error: String(e) };
             }
-        }""", timeout=15)
+        }""")
         if result.get("ok"):
             return _out("Call recording started (tab audio captured). Use whatsapp_call_transcribe after the call ends.")
         return _out(f"Call recording not available in this environment: {result.get('error', 'unknown')}. "
@@ -1325,7 +1357,7 @@ def wa_groups(ctx, args):
         return wa_status(ctx, args)
     limit = max(1, min(int(args.get("limit") or 30), 80))
     try:
-        names = scr.page.evaluate("""(limit) => {
+        names = br.call(scr.evaluate, """(limit) => {
             const rows = Array.from(document.querySelectorAll('[data-testid="cell-frame-container"], div[role="listitem"]'));
             const out = [];
             for (const r of rows) {
@@ -1358,18 +1390,17 @@ def wa_group_members(ctx, args):
         return _out(str(e), is_error=True)
     _pause(0.8, 1.6)
     try:
-        header = scr.page.locator('[data-testid="conversation-header"], header').first
-        if header.count():
-            header.click()
+        if br.call(_el_count, scr, '[data-testid="conversation-header"], header'):
+            br.call(_el_click, scr, '[data-testid="conversation-header"], header')
         _pause(1.2, 2.0)
-        info = scr.page.evaluate("""() => {
+        info = br.call(scr.evaluate, """() => {
             const drawer = document.querySelector('[data-testid="drawer-right"]');
             return drawer ? (drawer.innerText || '') : '';
         }""")
     except Exception as e:
         return _out(f"Could not open the group info panel: {e}", is_error=True)
     try:
-        scr.page.keyboard.press("Escape")
+        br.call(_kb_press, scr, "Escape")
     except Exception:
         pass
     if not info.strip():
@@ -1385,11 +1416,10 @@ def wa_contacts(ctx, args):
     limit = max(1, min(int(args.get("limit") or 40), 100))
     try:
         if br.call(_js_click_icon, scr, "new-chat") == "no":
-            btn = scr.page.locator('[data-testid="chat-list-search"], [title="New chat"], [data-icon="new-chat-outline"]').first
-            if btn.count():
-                btn.click()
+            if br.call(_el_count, scr, '[data-testid="chat-list-search"], [title="New chat"], [data-icon="new-chat-outline"]'):
+                br.call(_el_click, scr, '[data-testid="chat-list-search"], [title="New chat"], [data-icon="new-chat-outline"]')
         _pause(1.0, 1.8)
-        names = scr.page.evaluate("""(limit) => {
+        names = br.call(scr.evaluate, """(limit) => {
             const rows = Array.from(document.querySelectorAll('[data-testid="cell-frame-container"], div[role="listitem"], div[role="button"]'));
             const out = [];
             for (const r of rows) {
@@ -1403,7 +1433,7 @@ def wa_contacts(ctx, args):
     except Exception as e:
         return _out(f"Could not open the contact list: {e}", is_error=True)
     try:
-        scr.page.keyboard.press("Escape")
+        br.call(_kb_press, scr, "Escape")
     except Exception:
         pass
     if not names:
@@ -1425,31 +1455,21 @@ def wa_download_media(ctx, args):
     out_dir = Path(ctx.engine.computer.workspace) / "downloads"
     out_dir.mkdir(parents=True, exist_ok=True)
     try:
-        media = scr.page.locator('[data-testid="media-container"] img, [data-testid="image-thumb"], img[src^="blob:"]').last
-        if not media.count():
+        if br.call(_el_count, scr, '[data-testid="media-container"] img, [data-testid="image-thumb"], img[src^="blob:"]') == 0:
             return _out("No downloadable media is visible in this chat. Scroll to the message with the photo/file first.", is_error=True)
-        media.click()
+        br.call(_el_click_last, scr, '[data-testid="media-container"] img, [data-testid="image-thumb"], img[src^="blob:"]')
         _pause(1.2, 2.0)
-        path = None
-        try:
-            with scr.page.expect_download(timeout=20000) as dl:
-                btn = scr.page.locator('[data-testid="media-download"], [data-icon="download"]').first
-                if not btn.count():
-                    raise BrowserError("no download button")
-                btn.click()
-            path = out_dir / (dl.value.suggested_filename or f"whatsapp_{int(time.time())}.jpg")
-            dl.value.save_as(str(path))
-        except Exception:
+        path = br.call(_grab_download, scr, str(out_dir))
+        if path is None:
             return _out("Opened the media but WhatsApp Web did not expose a download button. "
                         "Ask the user to save it from the phone instead.", is_error=True)
-        finally:
-            try:
-                scr.page.keyboard.press("Escape")
-            except Exception:
-                pass
+        try:
+            br.call(_kb_press, scr, "Escape")
+        except Exception:
+            pass
     except Exception as e:
         return _out(f"Could not download media: {e}", is_error=True)
-    return _out(f"Saved media from '{chat or 'the open chat'}' to {path} ({path.stat().st_size} bytes).")
+    return _out(f"Saved media from '{chat or 'the open chat'}' to {path} ({Path(path).stat().st_size} bytes).")
 
 
 def wa_mark_read(ctx, args):
@@ -1464,9 +1484,8 @@ def wa_mark_read(ctx, args):
         except BrowserError as e:
             return _out(str(e), is_error=True)
     else:
-        row = scr.page.locator('[data-testid="cell-frame-container"]:has([data-icon="unread"])').first
-        if row.count():
-            row.click()
+        if br.call(_el_count, scr, '[data-testid="cell-frame-container"]:has([data-icon="unread"])') :
+            br.call(_el_click, scr, '[data-testid="cell-frame-container"]:has([data-icon="unread"])')
             _pause(1.0, 1.8)
     return _out(f"Marked '{chat or 'the open chat'}' as read.")
 
@@ -1578,14 +1597,14 @@ def register(api):
         {"name": "response_timer",
          "description": "24-hour response SLA timer -- minutes since the last customer message in a chat.",
          "input_schema": {"type": "object", "properties": {"chat": {"type": "string", "description": "Chat name (optional if already open)"}}},
-         "handler": wa_response_timer, "read_only": True, **base},
+         "handler": wa_response_timer, "read_only": True},
         {"name": "draft_reply",
          "description": "Draft an AI reply grounded in recent conversation (review before sending -- human-in-the-loop).",
          "input_schema": {"type": "object", "properties": {
              "chat": {"type": "string", "description": "Chat name (optional if already open)"},
              "context": {"type": "string", "description": "Optional business context/knowledge"}},
              "required": ["context"]},
-         "handler": wa_draft_reply, "read_only": True, **base},
+         "handler": wa_draft_reply, "read_only": True},
         {"name": "call_record",
          "description": "Best-effort WhatsApp call recording (tab audio capture). Best effort in headless server.",
          "input_schema": {"type": "object", "properties": {}}, "handler": wa_call_record, **base},
@@ -1593,19 +1612,19 @@ def register(api):
          "description": "Note a recorded call file for transcription.",
          "input_schema": {"type": "object", "properties": {
              "path": {"type": "string", "description": "Path to the recording file"}}}, "required": ["path"],
-         "handler": wa_call_transcribe, **base},
+         "handler": wa_call_transcribe},  # pure logic (file path only): no screen needed
         {"name": "call_summary",
          "description": "Draft customer-facing call summary notes (review before sending).",
          "input_schema": {"type": "object", "properties": {
              "transcript": {"type": "string", "description": "Call transcript text"}}}, "required": ["transcript"],
-         "handler": wa_call_summary, **base},
+         "handler": wa_call_summary},  # pure logic: no screen needed
         {"name": "voice_reply",
          "description": "Voice reply draft with AI polish -- dictate text, get a polished draft for review.",
          "input_schema": {"type": "object", "properties": {
              "text": {"type": "string", "description": "Dictated text to polish"},
              "style": {"type": "string", "description": "professional|shorter|clearer|summarized"}},
              "required": ["text"]},
-         "handler": wa_voice_reply, "read_only": True, **base},
+         "handler": wa_voice_reply, "read_only": True},  # pure logic: no screen needed
         {"name": "followup",
          "description": "Schedule a follow-up reminder for a WhatsApp chat (saved to workspace).",
          "input_schema": {"type": "object", "properties": {
@@ -1613,7 +1632,7 @@ def register(api):
              "note": {"type": "string", "description": "Follow-up note"},
              "when": {"type": "string", "description": "When to follow up (e.g. tomorrow)"}}},
          "required": ["chat", "note"],
-         "handler": wa_followup, **base},
+         "handler": wa_followup},  # pure logic: no screen needed
         {"name": "takeover_pause",
          "description": "Pause/resume WhatsApp automation for human takeover.",
          "input_schema": {"type": "object", "properties": {
@@ -1625,7 +1644,7 @@ def register(api):
          "input_schema": {"type": "object", "properties": {
              "text": {"type": "string", "description": "Text to vary"},
              "variation": {"type": "string", "description": "auto|space|emoji|dots|comma (default auto)"}}},
-         "handler": wa_varied_text, "read_only": True, **base},
+         "handler": wa_varied_text, "read_only": True},  # pure logic: no screen needed
         {"name": "forward_advert",
          "description": "Send an advert (text and/or an image with caption) to WhatsApp chats/groups, human-style: shuffled order, batches of up to 5, varied wording, long pauses and per-chat verification. Safer than WhatsApp's forward menu. Use dry_run first to see the plan.",
          "input_schema": {"type": "object", "properties": {

@@ -619,8 +619,420 @@ def build_gdocs(c: Conn) -> list[ToolSpec]:
     ]
 
 
+def _doc_fonts(family: str = "Calibri", serif: bool = False) -> dict:
+    """Register a TTF for document rendering; Carlito (Calibri metrics) bundles with Job Hunt.
+    Falls back to system fonts / built-in Helvetica so rendering never fails over fonts."""
+    bundle = paths.resource_root() / "plugins" / "jobhunt" / "assets"
+    sys_fonts = Path("/usr/share/fonts/truetype")
+    win = Path(os.environ.get("WINDIR", "C:/Windows")) / "Fonts"
+    fam = (family or "").lower()
+    options: list[tuple[Path, Path, Path, Path]] = []
+    if fam in ("times", "times new roman", "georgia", "garamond", "serif") or serif:
+        options = [(win / "georgia.ttf", win / "georgiab.ttf", win / "georgiai.ttf", win / "georgiaz.ttf"),
+                   (win / "times.ttf", win / "timesbd.ttf", win / "timesi.ttf", win / "timesbi.ttf"),
+                   (sys_fonts / "liberation" / "LiberationSerif-Regular.ttf", sys_fonts / "liberation" / "LiberationSerif-Bold.ttf",
+                    sys_fonts / "liberation" / "LiberationSerif-Italic.ttf", sys_fonts / "liberation" / "LiberationSerif-BoldItalic.ttf")]
+    if fam in ("arial", "helvetica", "liberation"):
+        options += [(win / "arial.ttf", win / "arialbd.ttf", win / "ariali.ttf", win / "arialbi.ttf"),
+                    (sys_fonts / "liberation" / "LiberationSans-Regular.ttf", sys_fonts / "liberation" / "LiberationSans-Bold.ttf",
+                     sys_fonts / "liberation" / "LiberationSans-Italic.ttf", sys_fonts / "liberation" / "LiberationSans-BoldItalic.ttf")]
+    options += [(bundle / "Carlito-Regular.ttf", bundle / "Carlito-Bold.ttf", bundle / "Carlito-Italic.ttf", bundle / "Carlito-BoldItalic.ttf"),
+                (sys_fonts / "crosextra" / "Carlito-Regular.ttf", sys_fonts / "crosextra" / "Carlito-Bold.ttf",
+                 sys_fonts / "crosextra" / "Carlito-Italic.ttf", sys_fonts / "crosextra" / "Carlito-BoldItalic.ttf"),
+                (sys_fonts / "liberation" / "LiberationSans-Regular.ttf", sys_fonts / "liberation" / "LiberationSans-Bold.ttf",
+                 sys_fonts / "liberation" / "LiberationSans-Italic.ttf", sys_fonts / "liberation" / "LiberationSans-BoldItalic.ttf"),
+                (sys_fonts / "dejavu" / "DejaVuSans.ttf", sys_fonts / "dejavu" / "DejaVuSans-Bold.ttf",
+                 sys_fonts / "dejavu" / "DejaVuSans-Oblique.ttf", sys_fonts / "dejavu" / "DejaVuSans-BoldOblique.ttf")]
+    fallback = {"regular": "Helvetica", "bold": "Helvetica-Bold", "italic": "Helvetica-Oblique",
+                "bolditalic": "Helvetica-BoldOblique", "family": "Helvetica", "mono": "Courier",
+                "mono_bold": "Courier-Bold"}
+    try:
+        from reportlab.pdfbase import pdfmetrics
+        from reportlab.pdfbase.ttfonts import TTFont
+    except ImportError:
+        return fallback
+    for paths_ in options:
+        if all(p.is_file() for p in paths_):
+            tag = re.sub(r"[^A-Za-z0-9]", "", fam)[:12] or "doc"
+            names = (f"ZBD{tag}R", f"ZBD{tag}B", f"ZBD{tag}I", f"ZBD{tag}BI")
+            try:
+                for name, p in zip(names, paths_):
+                    pdfmetrics.registerFont(TTFont(name, str(p)))
+                pdfmetrics.registerFontFamily(f"ZBD{tag}", normal=names[0], bold=names[1],
+                                              italic=names[2], boldItalic=names[3])
+                return {"regular": names[0], "bold": names[1], "italic": names[2],
+                        "bolditalic": names[3], "family": f"ZBD{tag}", "mono": "Courier", "mono_bold": "Courier-Bold"}
+            except Exception:  # noqa: BLE001
+                continue
+    return fallback
+
+
+def _inline_md(text: str) -> str:
+    """Escape Paragraph-unsafe chars, then flesh out bold/italic/code."""
+    esc = text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+    esc = re.sub(r"\*\*(.+?)\*\*", r"<b>\1</b>", esc)
+    esc = re.sub(r"(?<!\*)\*([^*\n]+)\*(?!\*)", r"<i>\1</i>", esc)
+    esc = re.sub(r"`([^`\n]+)`", r'<font face="Courier" color="#334155">\1</font>', esc)
+    esc = re.sub(r"\[([^\]\n]+)\]\((https?://[^)\s]+)\)", r'<u><font color="#4338ca">\1</font></u> <font size="8" color="#64748b">[\2]</font>', esc)
+    return esc
+
+
+def _md_blocks(text: str) -> list[dict]:
+    """Turn the model's markdown-lite into plain blocks for the PDF/DOCX renderers."""
+    blocks: list[dict] = []
+    code_buf: list[str] | None = None
+    table_buf: list[list[str]] | None = None
+
+    def flush_table():
+        nonlocal table_buf
+        if table_buf:
+            block = {"kind": "table", "rows": table_buf}
+            if block not in blocks:
+                blocks.append(block)
+        table_buf = None
+
+    def flush_code():
+        nonlocal code_buf
+        if code_buf:
+            blocks.append({"kind": "code", "text": "\n".join(code_buf).rstrip()})
+        code_buf = None
+
+    for raw in (text or "").split("\n"):
+        line = raw.rstrip()
+        if code_buf is not None:
+            if line.strip() in ("```", "~~~"):
+                flush_code()
+            else:
+                code_buf.append(raw)
+            continue
+        if line.strip().startswith(("```", "~~~")):
+            flush_table()
+            code_buf = []
+            continue
+        s = line.strip()
+        if s and s.startswith("|") and s.endswith("|"):
+            cells = [c.strip() for c in s.strip("|").split("|")]
+            if all(not c or re.fullmatch(r":?-{1,}:?", c) for c in cells):
+                continue  # markdown separator row (| --- | --- |)
+            table_buf = (table_buf or [])
+            table_buf.append(cells)
+            continue
+        flush_table()
+        if not s:
+            blocks.append({"kind": "gap"})
+            continue
+        m_h = re.match(r"^(#{1,6})\s+(.*)$", s)
+        if m_h:
+            blocks.append({"kind": "h" + str(min(len(m_h.group(1)), 4)), "text": m_h.group(2).strip()})
+            continue
+        if re.fullmatch(r"(-{3,}|\*{3,}|_{3,})", s):
+            blocks.append({"kind": "rule"})
+            continue
+        m_b = re.match(r"^([-*•])\s+(.*)$", s)
+        if m_b:
+            indent = len(raw) - len(raw.lstrip(" \t"))
+            blocks.append({"kind": "bullet", "level": min(indent // 2, 2), "text": m_b.group(2).strip()})
+            continue
+        m_n = re.match(r"^(\d{1,2})[.)]\s+(.*)$", s)
+        if m_n:
+            blocks.append({"kind": "bullet", "level": 0, "text": m_n.group(2).strip(), "num": m_n.group(1)})
+            continue
+        if s.startswith("> "):
+            blocks.append({"kind": "quote", "text": s[2:].strip()})
+            continue
+        blocks.append({"kind": "p", "text": s})
+    flush_table()
+    flush_code()
+    return blocks
+
+
+def _doc_page_size(paper: str):
+    try:
+        from reportlab.lib.pagesizes import A4, letter
+        return A4 if ((paper or "a4").lower() == "a4") else letter
+    except ImportError:
+        return (595.27, 841.89)
+
+
+def _pdf_render(fp: Path, title: str, text: str, a: dict) -> list[str]:
+    """Render markdown-lite text as a properly typeset PDF. Returns summary lines."""
+    try:
+        from reportlab.lib import colors
+        from reportlab.lib.colors import HexColor
+        from reportlab.lib.enums import TA_LEFT
+        from reportlab.lib.styles import ParagraphStyle
+        from reportlab.platypus import (HRFlowable, Paragraph, Preformatted,
+                                        SimpleDocTemplate, Spacer, Table, TableStyle)
+    except ImportError:
+        raise ConnectorError("reportlab is not installed on the server.")
+
+    fonts = _doc_fonts(a.get("font") or "Calibri", serif=(a.get("font") or "").lower() in ("times", "georgia", "serif"))
+    accent = a["accent"] if isinstance(a.get("accent"), str) and re.fullmatch(r"#[0-9a-fA-F]{6}", a["accent"]) else "#2563eb"
+    slate, muted = HexColor("#0f172a"), HexColor("#475569")
+    body = ParagraphStyle("body", fontName=fonts["regular"], fontSize=10.5, leading=15.6,
+                          textColor=slate, alignment=TA_LEFT, spaceAfter=5)
+    pstyles = {
+        "h1": ParagraphStyle("h1", parent=body, fontName=fonts["bold"], fontSize=15.5, leading=20, spaceBefore=13, spaceAfter=7),
+        "h2": ParagraphStyle("h2", parent=body, fontName=fonts["bold"], fontSize=12.8, leading=16.5, spaceBefore=10, spaceAfter=5),
+        "h3": ParagraphStyle("h3", parent=body, fontName=fonts["bold"], fontSize=11.3, leading=15, spaceBefore=9, spaceAfter=4),
+        "p": body,
+        "quote": ParagraphStyle("quote", parent=body, fontName=fonts["italic"], textColor=muted, leftIndent=10),
+        "pre": ParagraphStyle("pre", fontName=fonts.get("mono", "Courier"), fontSize=8.8, leading=12, textColor=HexColor("#1e293b")),
+        "cell": ParagraphStyle("cell", parent=body, fontSize=9.4, leading=12.6, spaceAfter=0),
+        "cellh": ParagraphStyle("cellh", parent=body, fontSize=9.4, leading=12.6, spaceAfter=0, fontName=fonts["bold"]),
+        "title": ParagraphStyle("title", parent=body, fontName=fonts["bold"], fontSize=19, leading=25, spaceAfter=3),
+        "title_sub": ParagraphStyle("title_sub", parent=body, fontSize=8.6, leading=12, textColor=muted, spaceAfter=8),
+    }
+    blocks = _md_blocks(text)
+    lead_h1 = next((b for b in blocks if b["kind"] == "h1"), None)
+    if lead_h1 and lead_h1["text"].strip() == title.strip():
+        blocks = [b for b in blocks if b is not lead_h1]
+    blocks = [b for b in blocks if not (b["kind"] == "gap" and blocks and blocks[0] is b)]
+
+    story: list = []
+    story.append(Paragraph(_inline_md(title or "Document"), pstyles["title"]))
+    from datetime import datetime as _dt
+    story.append(Paragraph(_dt.now().strftime("%d %B %Y"), pstyles["title_sub"]))
+    story.append(HRFlowable(width="100%", thickness=1.1, color=HexColor(accent), spaceBefore=2, spaceAfter=10))
+    prev_gap = True
+    for b in blocks:
+        k = b["kind"]
+        if k == "gap":
+            if not prev_gap:
+                story.append(Spacer(1, 6))
+            prev_gap = True
+            continue
+        prev_gap = False
+        if k in ("h1", "h2", "h3"):
+            story.append(Paragraph(_inline_md(b.get("text", "")), pstyles[k]))
+        elif k == "p":
+            story.append(Paragraph(_inline_md(b.get("text", "")), pstyles["p"]))
+        elif k == "quote":
+            story.append(HRFlowable(width="100%", thickness=1, color=HexColor("#e2e8f0")))
+            story.append(Paragraph(_inline_md(b.get("text", "")), pstyles["quote"]))
+            story.append(HRFlowable(width="100%", thickness=1, color=HexColor("#e2e8f0")))
+            story.append(Spacer(1, 4))
+        elif k == "rule":
+            story.append(HRFlowable(width="100%", thickness=0.8, color=HexColor("#e2e8f0"), spaceBefore=6, spaceAfter=6))
+            prev_gap = True
+        elif k == "code":
+            box = Table([[Preformatted(b.get("text", ""), pstyles["pre"])]], colWidths=["100%"])
+            box.setStyle(TableStyle([("BACKGROUND", (0, 0), (-1, -1), HexColor("#f8fafc")),
+                                     ("BOX", (0, 0), (-1, -1), 0.6, HexColor("#e2e8f0")),
+                                     ("LEFTPADDING", (0, 0), (-1, -1), 10), ("RIGHTPADDING", (0, 0), (-1, -1), 10),
+                                     ("TOPPADDING", (0, 0), (-1, -1), 8), ("BOTTOMPADDING", (0, 0), (-1, -1), 8)]))
+            story.append(box)
+            story.append(Spacer(1, 6))
+            prev_gap = True
+        elif k == "bullet":
+            mark = f"{b.get('num')}." if b.get("num") else "•"
+            st = pstyles["bullet"] = pstyles.get("bullet") or ParagraphStyle(
+                "bullet", parent=body, leftIndent=16, bulletIndent=4)
+            if b.get("level"):
+                st = ParagraphStyle(f"bl{b['level']}", parent=st,
+                                    leftIndent=16 + 16 * b["level"], bulletIndent=4 + 16 * b["level"])
+            story.append(Paragraph(f'<bullet color="{accent}">{mark}</bullet>' + _inline_md(b.get("text", "")), st))
+            story.append(Spacer(1, 1.5))
+        elif k == "table":
+            rows = [r for r in (b.get("rows") or []) if r]
+            if not rows:
+                continue
+            ncols = max(len(r) for r in rows)
+            data = []
+            for ri, row in enumerate(rows):
+                style = pstyles["cellh"] if ri == 0 else pstyles["cell"]
+                padded = list(row) + [""] * (ncols - len(row))
+                data.append([Paragraph(_inline_md(c), style) for c in padded])
+            width = _doc_page_size(a.get("paper") or "a4")[0] - 116
+            t = Table(data, colWidths=[width / ncols] * ncols, repeatRows=1)
+            t.setStyle(TableStyle([
+                ("BACKGROUND", (0, 0), (-1, 0), HexColor("#f1f5f9")),
+                ("GRID", (0, 0), (-1, -1), 0.5, HexColor("#e2e8f0")),
+                ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, HexColor("#fbfcfe")]),
+                ("LEFTPADDING", (0, 0), (-1, -1), 7), ("RIGHTPADDING", (0, 0), (-1, -1), 7),
+                ("TOPPADDING", (0, 0), (-1, -1), 5), ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
+                ("VALIGN", (0, 0), (-1, -1), "TOP"),
+            ]))
+            story.append(t)
+            story.append(Spacer(1, 8))
+            prev_gap = True
+
+    from reportlab.pdfgen import canvas as _canvas
+
+    def _footer(can, _doc):
+        can.saveState()
+        w_page, _h_page = can._pagesize
+        can.setFillColor(HexColor("#94a3b8"))
+        try:
+            can.setFont(fonts["regular"], 8)
+        except Exception:  # noqa: BLE001
+            pass
+        can.drawString(58, 30, (title or "Document")[:70])
+        can.drawRightString(w_page - 58, 30, f"Page {can.getPageNumber()}")
+        can.setFillColor(HexColor(accent))
+        can.rect(58, 40, w_page - 116, 0.7, stroke=0, fill=1)
+        can.restoreState()
+
+    doc = SimpleDocTemplate(str(fp), pagesize=_doc_page_size(a.get("paper") or "a4"),
+                            leftMargin=58, rightMargin=58, topMargin=64, bottomMargin=56,
+                            title=(title or "Document")[:120], author="ZerotheBot")
+    doc.build(story, onFirstPage=_footer, onLaterPages=_footer)
+    n = 1
+    try:
+        from pypdf import PdfReader
+        n = len(PdfReader(str(fp)).pages)
+    except Exception:  # noqa: BLE001
+        pass
+    return [f"Created PDF {fp.name} ({n} page{'s' if n != 1 else ''})."]
+
+
+def _split_inline(text: str):
+    """Split raw text into (chunk, bold, italic, mono) for DOCX runs."""
+    out = []
+    pos = 0
+    pattern = re.compile(r"\*\*(.+?)\*\*|(?<!\*)\*([^*\n]+)\*(?!\*)|`([^`\n]+)`")
+    for m in pattern.finditer(text or ""):
+        if m.start() > pos:
+            out.append((text[pos:m.start()], False, False, False))
+        if m.group(1) is not None:
+            out.append((m.group(1), True, False, False))
+        elif m.group(2) is not None:
+            out.append((m.group(2), False, True, False))
+        else:
+            out.append((m.group(3), False, False, True))
+        pos = m.end()
+    if pos < len(text or ""):
+        out.append((text[pos:], False, False, False))
+    return out
+
+
+def _docx_runs(paragraph, text: str, fam: str, mono="Courier New"):
+    """Append raw text with **bold** / *italic* / `code` as real DOCX runs."""
+    for chunk, bold, italic, mono_on in _split_inline(text):
+        if not chunk:
+            continue
+        r = paragraph.add_run(chunk)
+        r.font.name = mono if mono_on else fam
+        r.bold = bold
+        r.italic = italic
+
+
+def _docx_border(paragraph, color: str, size: int = 8, side: str = "bottom"):
+    from docx.oxml.ns import qn
+    from docx.oxml import OxmlElement
+    pPr = paragraph._p.get_or_add_pPr()
+    pBdr = OxmlElement("w:pBdr")
+    edge = OxmlElement(f"w:{side}")
+    edge.set(qn("w:val"), "single")
+    edge.set(qn("w:sz"), str(size))
+    edge.set(qn("w:space"), "2")
+    edge.set(qn("w:color"), color)
+    pBdr.append(edge)
+    pPr.append(pBdr)
+
+
+def _docx_render(fp: Path, title: str, text: str, a: dict) -> list[str]:
+    try:
+        from docx import Document
+        from docx.enum.table import WD_TABLE_ALIGNMENT
+        from docx.enum.text import WD_ALIGN_PARAGRAPH
+        from docx.shared import Pt, RGBColor
+    except ImportError:
+        raise ConnectorError("python-docx is not installed on the server.")
+    fonts = _doc_fonts(a.get("font") or "Calibri", serif=(a.get("font") or "").lower() in ("times", "georgia", "serif"))
+    fam = fonts["family"]
+    accent = a["accent"] if isinstance(a.get("accent"), str) and re.fullmatch(r"#[0-9a-fA-F]{6}", a["accent"]) else "#2563eb"
+    hex6 = accent.lstrip("#").upper()
+    doc = Document()
+    for section in doc.sections:
+        section.top_margin = Pt(58); section.bottom_margin = Pt(58)
+        section.left_margin = Pt(58); section.right_margin = Pt(58)
+    normal = doc.styles["Normal"]
+    normal.font.name = fam
+    normal.font.size = Pt(10.5)
+    normal.paragraph_format.space_after = Pt(5)
+
+    from datetime import datetime as _dt
+    t = doc.add_paragraph()
+    t.paragraph_format.space_after = Pt(1)
+    r = t.add_run(title or "Document")
+    r.font.name = fam; r.font.size = Pt(19); r.font.bold = True
+    r.font.color.rgb = RGBColor.from_string("0f172a")
+    sub = doc.add_paragraph()
+    sub.paragraph_format.space_after = Pt(4)
+    r = sub.add_run(_dt.now().strftime("%d %B %Y"))
+    r.font.name = fam; r.font.size = Pt(8.6)
+    r.font.color.rgb = RGBColor.from_string("64748b")
+    rule = doc.add_paragraph()
+    rule.paragraph_format.space_after = Pt(10)
+    rule.paragraph_format.space_before = Pt(0)
+    r = rule.add_run("")
+    _docx_border(rule, hex6)
+
+    blocks = _md_blocks(text)
+    for b in blocks:
+        k = b["kind"]
+        if k == "gap":
+            continue
+        if k in ("h1", "h2", "h3"):
+            p = doc.add_paragraph()
+            lvl = int(k[1])
+            size = {1: 15.5, 2: 12.8, 3: 11.3}.get(lvl, 11.3)
+            r = p.add_run(b.get("text", ""))
+            r.font.name = fam; r.font.size = Pt(size); r.font.bold = True
+            r.font.color.rgb = RGBColor.from_string("0f172a")
+            p.paragraph_format.space_before = Pt(12 if lvl == 1 else 9)
+            p.paragraph_format.space_after = Pt(5)
+        elif k == "p":
+            p = doc.add_paragraph()
+            _docx_runs(p, b.get("text", ""), fam)
+        elif k == "bullet":
+            p = doc.add_paragraph(style="List Bullet")
+            _docx_runs(p, b.get("text", ""), fam)
+            p.paragraph_format.left_indent = Pt(16 + 16 * (b.get("level") or 0))
+            p.paragraph_format.space_after = Pt(2)
+        elif k == "quote":
+            p = doc.add_paragraph()
+            p.paragraph_format.left_indent = Pt(10)
+            _docx_runs(p, b.get("text", ""), fam)
+            for r in p.runs:
+                r.italic = True
+                r.font.color.rgb = RGBColor.from_string("475569")
+        elif k == "rule":
+            p = doc.add_paragraph()
+            p.paragraph_format.space_after = Pt(6)
+            p.add_run("")
+            _docx_border(p, "e2e8f0", size=4)
+        elif k == "code":
+            p = doc.add_paragraph()
+            p.paragraph_format.left_indent = Pt(10)
+            p.paragraph_format.space_after = Pt(6)
+            r = p.add_run(b.get("text", ""))
+            r.font.name = "Courier New"; r.font.size = Pt(8.8)
+        elif k == "table":
+            rows = [r_ for r_ in (b.get("rows") or []) if r_]
+            if not rows:
+                continue
+            ncol = max(len(r_) for r_ in rows)
+            table = doc.add_table(rows=len(rows), cols=ncol)
+            table.style = "Table Grid"
+            table.alignment = WD_TABLE_ALIGNMENT.CENTER
+            for ri, row in enumerate(rows):
+                for ci in range(ncol):
+                    cell = table.cell(ri, ci)
+                    cp = cell.paragraphs[0]
+                    r = cp.add_run(row[ci] if ci < len(row) else "")
+                    r.font.size = Pt(9.4)
+                    r.font.name = fam
+                    if ri == 0:
+                        r.font.bold = True
+            doc.add_paragraph()
+    doc.save(str(fp))
+    return [f"Created DOCX {fp.name}."]
+
 def build_documents(c: Conn) -> list[ToolSpec]:
-    """Read and create PDF and DOCX files in the workspace (local, no vendor API)."""
+    """Read and create PDF and DOCX files in the workspace. Documents render with real
+    typography (headings, bullets, tables, page numbers) from markdown-lite text."""
 
     def _ws_path(a, key="path"):
         rel = (a.get(key) or "").strip()
@@ -671,47 +1083,27 @@ def build_documents(c: Conn) -> list[ToolSpec]:
         return text[:200000] or "No text extracted."
 
     def pdf_create(ctx, a):
-        try:
-            from reportlab.pdfgen import canvas as pdf_canvas
-            from reportlab.lib.pagesizes import letter
-        except ImportError:
-            raise ConnectorError("reportlab is not installed on the server.")
         fp = _ws_path(a)
-        title = a.get("title", "Document")
-        text = a.get("text", "")
-        can = pdf_canvas.Canvas(str(fp), pagesize=letter)
-        can.setFont("Helvetica", 12)
-        can.drawString(72, 720, title[:100])
-        y = 680
-        for line in text.split("\n"):
-            if y < 72:
-                can.showPage()
-                can.setFont("Helvetica", 12)
-                y = 680
-            can.drawString(72, y, line[:110])
-            y -= 16
-        can.save()
+        title = (a.get("title") or "Document").strip() or "Document"
+        text = a.get("text") or ""
+        if not text.strip():
+            raise ConnectorError("text is required.")
+        lines = _pdf_render(fp, title, text, a)
         rel = c.mgr.engine.computer.rel(fp)
         size = fp.stat().st_size
-        return ToolResult(f"Created PDF {rel} ({len(text.splitlines())} lines).",
+        return ToolResult("\n".join(lines) + f" It opens with a styled preview in chat.",
                           files=[{"path": rel, "name": fp.name, "size": size, "mime": "application/pdf"}])
 
     def docx_create(ctx, a):
-        try:
-            from docx import Document
-        except ImportError:
-            raise ConnectorError("python-docx is not installed on the server.")
         fp = _ws_path(a)
-        title = a.get("title", "Document")
-        text = a.get("text", "")
-        doc = Document()
-        doc.add_heading(title, 0)
-        for line in text.split("\n"):
-            doc.add_paragraph(line)
-        doc.save(str(fp))
+        title = (a.get("title") or "Document").strip() or "Document"
+        text = a.get("text") or ""
+        if not text.strip():
+            raise ConnectorError("text is required.")
+        lines = _docx_render(fp, title, text, a)
         rel = c.mgr.engine.computer.rel(fp)
         size = fp.stat().st_size
-        return ToolResult(f"Created DOCX {rel}.",
+        return ToolResult("\n".join(lines),
                           files=[{"path": rel, "name": fp.name, "size": size,
                                   "mime": "application/vnd.openxmlformats-officedocument.wordprocessingml.document"}])
 
@@ -786,15 +1178,21 @@ def build_documents(c: Conn) -> list[ToolSpec]:
         T("docx_read", "Extract text from a Word (.docx) file in the workspace.",
           {"path": s("Workspace path to the DOCX file")}, ["path"], docx_read, read=True,
           label=lambda a: "Read a Word document"),
-        T("pdf_create", "Create a PDF file from plain text in the workspace.",
+        T("pdf_create", "Create a PDF document from markdown-lite text: # headings, - bullets, 1. numbered lists, "
+                        "| tables |, > quotes, code blocks, **bold** / `code`. Renders with real typography - title, "
+                        "styles, page numbers - and previews in chat.",
           {"path": s("Workspace path to save the PDF (e.g. shared/report.pdf)"),
-           "title": s("Document title"), "text": s("Plain-text body")},
+           "title": s("Document title"), "text": s("Markdown-lite body (#, ##, -, 1., | tables |, >, ```)"),
+           "paper": s("Paper size: A4 (default) or Letter"),
+           "font": s("Font: Calibri (default), Arial, Georgia or 'serif'"),
+           "accent": s("Accent color hex like #2563eb (optional)")},
           ["path", "text"], pdf_create,
           risk=R("write", lambda a: f"Create PDF {a.get('path')}", lambda a: a.get('path') or "file"),
           label=lambda a: f"Create PDF {a.get('path')}"),
-        T("docx_create", "Create a Word (.docx) file from plain text in the workspace.",
+        T("docx_create", "Create a Word (.docx) document from markdown-lite text (same model as pdf_create).",
           {"path": s("Workspace path to save the DOCX (e.g. shared/report.docx)"),
-           "title": s("Document title"), "text": s("Plain-text body")},
+           "title": s("Document title"), "text": s("Markdown-lite body (#, ##, -, 1., | tables |, >, ```)"),
+           "font": s("Font name for Word (default Calibri)")},
           ["path", "text"], docx_create,
           risk=R("write", lambda a: f"Create DOCX {a.get('path')}", lambda a: a.get('path') or "file"),
           label=lambda a: f"Create DOCX {a.get('path')}"),
@@ -821,11 +1219,14 @@ def python_run(ctx, a):
     code = a.get("code", "").strip()
     if not code:
         raise ConnectorError("code is required.")
-    timeout = min(int(a.get("timeout", 60) or 60), 300)
+    try:
+        timeout = min(int(a.get("timeout", 60) or 60), 300)
+    except (TypeError, ValueError):
+        timeout = 60
     if timeout < 1:
         timeout = 1
-    full, inside = c.mgr.engine.computer.resolve(".")
-    if not inside:
+    full, inside = ctx.engine.computer.resolve(".")
+    if not inside or not full or not full.exists():
         raise ConnectorError("Cannot resolve workspace directory.")
     script = textwrap.dedent(code)
     script_path = full / "_zb_python_run.py"

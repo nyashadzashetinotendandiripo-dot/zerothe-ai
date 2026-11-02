@@ -175,6 +175,17 @@ function ChatScreen({ thread, threads, botName: propsBotName, onSwitch, onBack, 
   const [typeText, setTypeText] = useState('');                    // text posted to the live desktop
   const [typeBusy, setTypeBusy] = useState(false);
   const [zoom, setZoom] = useState(1);                             // live desktop fit scale
+  // Real bot-browser takeover: screen.jpg polling + /screen/input taps.
+  // The phone streams the machine's X desktop (VNC) by default; this instead shows
+  // the Bot's own browser tab and lets the user tap/click inside it.
+  const [browserOpen, setBrowserOpen] = useState(false);           // full-screen browser view visible
+  const [controlling, setControlling] = useState(false);           // user is driving (takeover started)
+  const [browserShot, setBrowserShot] = useState(null);            // screen.jpg uri
+  const [browserW, setBrowserW] = useState(1280);                  // real screenshot width
+  const [browserH, setBrowserH] = useState(800);                   // real screenshot height
+  const [browserErr, setBrowserErr] = useState('');
+  const browserRef = useRef(null);                                 // the <Image> layout ref
+  const browserPoll = useRef(null);                                // interval id
   const [attachOpen, setAttachOpen] = useState(false);              // photo/file chooser sheet
   const [filePrev, setFilePrev] = useState(null);                   // {name, path, mime, url} for side preview
   const [histOpen, setHistOpen] = useState(false);
@@ -189,9 +200,14 @@ function ChatScreen({ thread, threads, botName: propsBotName, onSwitch, onBack, 
   const atBottom = useRef(true);        // only auto-scroll when the user is already at the bottom
   // Tell the hardware back button to close open sheets/modals instead of quitting.
   useEffect(() => {
-    const open = !!histOpen || !!pick || !!attachOpen || liveFull;
+    const open = !!histOpen || !!pick || !!attachOpen || liveFull || browserOpen;
     if (modalOpenRef) modalOpenRef.current = open;
-  }, [histOpen, pick, attachOpen, liveFull, modalOpenRef]);
+  }, [histOpen, pick, attachOpen, liveFull, browserOpen, modalOpenRef]);
+  useEffect(() => {
+    return () => {
+      if (browserPoll.current) { clearInterval(browserPoll.current); browserPoll.current = null; }
+    };
+  }, []);
   // scrollToEnd can throw when the list has no rows yet (or is mid-measure), and
   // that throw happens in a native callback where React cannot catch it.
   const scrollEnd = useCallback(() => {
@@ -397,6 +413,12 @@ function ChatScreen({ thread, threads, botName: propsBotName, onSwitch, onBack, 
   const FileRow = ({ f }) => {
     const mime = (f && f.mime) || 'application/octet-stream';
     const isImage = mime.startsWith('image/');
+    const kind = isImage ? 'image'
+      : /\.pdf$/.test((f && f.name || '').toLowerCase()) ? 'pdf'
+      : /\.docx$/.test((f && f.name || '').toLowerCase()) ? 'docx'
+      : /\.(txt|md|csv|json|log|py|xml|html|yaml|yml)$/.test((f && f.name || '').toLowerCase()) || mime.startsWith('text/') ? 'text'
+      : 'binary';
+    const icon = kind === 'image' ? '🖼' : kind === 'pdf' ? '📕' : kind === 'docx' ? '📘' : kind === 'text' ? '📄' : '📦';
     return (
       <Pressable onPress={() => {
         const { base, token } = conf();
@@ -404,12 +426,12 @@ function ChatScreen({ thread, threads, botName: propsBotName, onSwitch, onBack, 
           name: f && f.name,
           path: f && f.path,
           mime,
+          kind,
           url: base + '/api/computer/file?path=' + encodeURIComponent(f && f.path) + '&download=1&token=' + encodeURIComponent(token || ''),
-          isImage,
         });
         setAttachOpen(false);
       }} style={st.fileRow}>
-        <View style={st.fileIc}>{isImage ? '🖼' : '📄'}</View>
+        <View style={st.fileIc}>{icon}</View>
         <View style={{ flex: 1 }}>
           <Text style={st.fileName} numberOfLines={1}>{asText(f && f.name) || 'file'}</Text>
           <Text style={st.fileSize}>{f && f.size ? _fmtSize(f.size) : ''}</Text>
@@ -449,6 +471,66 @@ function ChatScreen({ thread, threads, botName: propsBotName, onSwitch, onBack, 
     setLiveFull(false); setLiveUrl(''); setLiveInteractive(false); setZoom(1);
     api('/api/host/desktop', { method: 'DELETE' }).catch(() => {});
   };
+  // ---------------------------------------------------------------- real bot-browser takeover
+  // Uses the proven /screen.jpg + /screen/input + /takeover pipeline (same as the desktop app)
+  // instead of the machine's X-desktop VNC stream, so taps land inside the Bot's browser tab.
+  const browserUrl = () => {
+    const { base, token } = conf();
+    return base + '/api/bots/' + encodeURIComponent(thread && (thread.botId || thread.bot_id || '') || '') + '/screen.jpg?q=55&token=' + encodeURIComponent(token || '') + '&t=' + Date.now();
+  };
+  const fetchBrowserShot = async () => {
+    try {
+      const u = browserUrl();
+      setBrowserShot(u);
+      const { width, height } = await new Promise((res, rej) =>
+        Image.getSize(u, (w, h) => res({ width: w, height: h }), rej));
+      setBrowserW(width || 1280);
+      setBrowserH(height || 800);
+      setBrowserErr('');
+    } catch (e) { setBrowserErr(String(e.message || e)); }
+  };
+  const startBrowserScreen = async () => {
+    setBrowserErr('');
+    setControlling(true);
+    try {
+      await api('/api/bots/' + encodeURIComponent(thread && (thread.botId || thread.bot_id || '')) + '/takeover', {
+        method: 'POST', body: JSON.stringify({ action: 'start' })
+      });
+    } catch (e) {
+      setControlling(false); setBrowserErr(String(e.message || e)); return;
+    }
+    await fetchBrowserShot();
+    setBrowserOpen(true);
+    browserPoll.current = setInterval(fetchBrowserShot, 700);
+  };
+  const stopBrowserScreen = async () => {
+    setBrowserOpen(false);
+    if (browserPoll.current) { clearInterval(browserPoll.current); browserPoll.current = null; }
+    try {
+      await api('/api/bots/' + encodeURIComponent(thread && (thread.botId || thread.bot_id || '')) + '/takeover', {
+        method: 'POST', body: JSON.stringify({ action: 'handback' })
+      });
+    } catch (e) { /* best effort */ }
+    setControlling(false); setBrowserShot(null); setBrowserErr('');
+  };
+  const onBrowserTap = (e) => {
+    if (!browserRef.current || !browserShot) return;
+    const l = browserRef.current;
+    const sc = Math.min(l.width / browserW, l.height / browserH);
+    const offX = (l.width - browserW * sc) / 2, offY = (l.height - browserH * sc) / 2;
+    const x = Math.round((e.nativeEvent.locationX - offX) / sc);
+    const y = Math.round((e.nativeEvent.locationY - offY) / sc);
+    if (x < 0 || y < 0 || x >= browserW || y >= browserH) return;
+    api('/api/bots/' + encodeURIComponent(thread && (thread.botId || thread.bot_id || '')) + '/screen/input', {
+      method: 'POST', body: JSON.stringify({ type: 'click', x, y, button: 'left', count: 1 })
+    }).catch(() => {});
+  };
+  const onBrowserScroll = (g) => {
+    api('/api/bots/' + encodeURIComponent(thread && (thread.botId || thread.bot_id || '')) + '/screen/input', {
+      method: 'POST', body: JSON.stringify({ type: 'scroll', x: 640, y: 400, dx: 0, dy: g && (g.translationY || 0) * 2 })
+    }).catch(() => {});
+  };
+
   // The VNC canvas swallows the phone keyboard, so text and special keys are
   // posted to the server and typed with xdotool into the focused window.
   const desktopType = async (enter) => {
@@ -515,9 +597,15 @@ function ChatScreen({ thread, threads, botName: propsBotName, onSwitch, onBack, 
       </Pressable>
     );
     if (item.type === 'tool') {
-      // Hide raw tool command execution from chat — Intelligent UI widgets
-      // (buttons, forms, etc.) render through aiBody in assistant messages.
-      return null;
+      // Compact tool row so the phone chat actually shows "working" per bot: what the bot
+      // is doing right now, its status, and how long it took — Claude-style tool evidence.
+      const dur = item.duration_ms ? ` · ${(item.duration_ms / 1000).toFixed(1)}s` : '';
+      return (
+        <View style={st.toolRow}>
+          <Text style={st.toolName}>{asText(item.tool || item.label || 'tool')}</Text>
+          <Text style={st.toolStatus}>{asText(item.status || item.summary || '')}{dur}</Text>
+        </View>
+      );
     }
     if (item.type === 'notice') return item.level === 'cmd'
       ? null
@@ -546,7 +634,8 @@ function ChatScreen({ thread, threads, botName: propsBotName, onSwitch, onBack, 
   const lastAct = acts[acts.length - 1] || null;
   const shotItems = acts.filter((i) => (i.images || []).length);
   const lastShot = shotItems.length ? String(shotItems[shotItems.length - 1].images.slice(-1)[0]) : null;
-  const shotUri = lastShot ? API_BASE + '/api/files/shots/' + encodeURIComponent(lastShot) : null;
+  const { base, token } = conf();
+  const shotUri = lastShot ? API_BASE + '/api/files/shots/' + encodeURIComponent(lastShot) + '?token=' + encodeURIComponent(token || '') : null;
   const today = new Date().toDateString();
   const disp = [];
   { let lastDay = '';
@@ -650,6 +739,11 @@ function ChatScreen({ thread, threads, botName: propsBotName, onSwitch, onBack, 
                     <>
                       <Pressable onPress={() => decide(a, true, true)} style={st.appBtn}><Text style={st.appOk}>✅ Always</Text></Pressable>
                       <Pressable onPress={() => decide(a, true, false)} style={st.appBtn}><Text style={st.appOk}>Approve</Text></Pressable>
+                      {(a.category === 'takeover' || a.category === 'login') && (
+                        <Pressable onPress={() => { decide(a, true, false); startBrowserScreen(); }} style={[st.appBtn, { backgroundColor: '#005a9e', borderColor: '#007acc' }]}>
+                          <Text style={st.appOk}>🌐 Open browser</Text>
+                        </Pressable>
+                      )}
                     </>
                   )}
                   <Pressable onPress={() => decide(a, false, false)} style={st.appBtn}><Text style={st.appNo}>{isAsk ? "Can't do it" : 'Deny'}</Text></Pressable>
@@ -847,34 +941,133 @@ function ChatScreen({ thread, threads, botName: propsBotName, onSwitch, onBack, 
           )}
         </View>
       )}
+      {browserOpen && (
+        <View style={st.fullScr} onStartShouldSetResponder={() => true}>
+          <View style={[st.fullBar, { paddingTop: (ins?.top || 0) + 8 }]}>
+            <Text style={st.fullT}>{controlling ? 'Browser · you are driving' : 'Browser · follow along'}</Text>
+            <View style={{ flex: 1 }} />
+            <Pressable onPress={stopBrowserScreen} hitSlop={8} style={[st.fullBtn, { backgroundColor: '#00a884', borderColor: '#00a884' }]}>
+              <Text style={[st.fullBtnT, { color: '#fff' }]}>Hand back to Bot</Text>
+            </Pressable>
+            <Pressable onPress={stopBrowserScreen} hitSlop={8}><Text style={st.fullX}>✕</Text></Pressable>
+          </View>
+          <View style={{ flex: 1, backgroundColor: '#000' }}>
+            {!browserShot ? (
+              <View style={st.fullErr}>
+                <ActivityIndicator color={MUTED} />
+                <Text style={st.fullErrT}>{browserErr || 'Fetching the Bot’s browser screen…'}</Text>
+              </View>
+            ) : (
+              <Image
+                ref={browserRef}
+                style={{ flex: 1, width: '100%', height: '100%', backgroundColor: '#000' }}
+                source={{ uri: browserShot }}
+                resizeMode="contain"
+                onStartShouldSetResponder={() => true}
+                onTouchStart={onBrowserTap}
+              />
+            )}
+          </View>
+          <View style={[st.typeBar, { paddingBottom: 8 + (ins?.bottom || 0) }]}>
+            <Text style={st.fullErrS}>Tap to click inside the browser · ✕ to hand back to the Bot</Text>
+          </View>
+        </View>
+      )}
       
       {filePrev && (
         <View style={st.scrimM} onStartShouldSetResponder={() => true}>
           <View style={[st.sheet, { paddingBottom: 16 + (ins?.bottom || 0) }]}>
             <View style={st.grabber} />
-            <Text style={st.sheetT}>File Preview</Text>
+            <Text style={st.sheetT}>{filePrev.name ? String(filePrev.name) : 'File Preview'}</Text>
             <View style={{ marginTop: 10 }}>
-              {filePrev.isImage ? (
-                <Image style={st.filePrevImg} source={{ uri: filePrev.url }} />
-              ) : (
-                <View style={st.filePrevDoc}>
-                  <Text style={{ fontSize: 24 }}>📄</Text>
-                  <Text style={st.filePrevName}>{filePrev.name}</Text>
-                  <Text style={st.filePrevMime}>{filePrev.mime}</Text>
-                </View>
-              )}
+              <FilePreviewBody f={filePrev} />
             </View>
-            <Pressable onPress={() => Linking.openURL(filePrev.url).catch(() => {})} style={st.fileBtn}>
-              <Text style={st.fileBtnT}>Open</Text>
-            </Pressable>
-            <Pressable onPress={() => setFilePrev(null)} style={[st.sheetBtn, { backgroundColor: 'transparent' }]}>
-              <Text style={[st.sheetBtnT, { color: MUTED }]}>Close</Text>
-            </Pressable>
+            <View style={{ flexDirection: 'row', gap: 8 }}>
+              <Pressable onPress={() => Linking.openURL(filePrev.url).catch(() => {})} style={[st.fileBtn, { flex: 1 }]}>
+                <Text style={st.fileBtnT}>Download</Text>
+              </Pressable>
+              <Pressable onPress={() => setFilePrev(null)} style={[st.fileBtn, { backgroundColor: '#1c1c1c', flex: 1 }]}>
+                <Text style={st.fileBtnT}>Close</Text>
+              </Pressable>
+            </View>
           </View>
         </View>
       )}
       
     </KeyboardAvoidingView>
+  );
+}
+
+// Claude-style document preview: first PDF page inline with a page switch,
+// extracted text for DOCX/TXT, image for images. Pages come from /api/computer/preview.
+function FilePreviewBody({ f }) {
+  const kind = (f && f.kind) || 'binary';
+  const path = f && f.path;
+  const [pages, setPages] = useState(null);
+  const [page, setPage] = useState(1);
+  const [text, setText] = useState('');
+  const [err, setErr] = useState('');
+  useEffect(() => {
+    let live = true;
+    (async () => {
+      if (kind === 'image') return;
+      try {
+        const info = await api('/api/computer/preview?path=' + encodeURIComponent(path));
+        if (!live) return;
+        if (info && info.pages) setPages(info.pages);
+        if (info && typeof info.text === 'string') setText(info.text.slice(0, 20000));
+        if (info && info.kind && info.kind !== kind && info.kind !== 'binary') setErr('');
+      } catch (e) { if (live) setErr(''); }
+    })();
+    return () => { live = false; };
+  }, [path, kind]);
+  const { base, token } = conf();
+  const pageUri = (p) => base + '/api/computer/preview/page?path=' + encodeURIComponent(path)
+    + '&page=' + p + '&token=' + encodeURIComponent(token || '');
+  if (kind === 'pdf') {
+    if (!pages) {
+      return (
+        <View style={st.fpLoading}><ActivityIndicator color={MUTED} /><Text style={st.fpNote}>loading preview…</Text></View>
+      );
+    }
+    return (
+      <View>
+        <Image key={'pg' + page} style={st.fpPage} source={{ uri: pageUri(page) }} resizeMode="contain" />
+        {pages > 1 ? (
+          <View style={st.fpPager}>
+            <Pressable disabled={page <= 1} onPress={() => setPage(page - 1)} style={[st.fpBtn, page <= 1 && { opacity: 0.3 }]}>
+              <Text style={st.fpBtnT}>‹</Text>
+            </Pressable>
+            <Text style={st.fpPageLbl}>{page} / {pages}</Text>
+            <Pressable disabled={page >= pages} onPress={() => setPage(page + 1)} style={[st.fpBtn, page >= pages && { opacity: 0.3 }]}>
+              <Text style={st.fpBtnT}>›</Text>
+            </Pressable>
+          </View>
+        ) : null}
+      </View>
+    );
+  }
+  if (kind === 'docx' || kind === 'text') {
+    if (!text && !err) {
+      return (
+        <View style={st.fpLoading}><ActivityIndicator color={MUTED} /><Text style={st.fpNote}>loading preview…</Text></View>
+      );
+    }
+    return (
+      <ScrollView style={st.fpTextWrap} contentContainerStyle={st.fpTextPad} showsVerticalScrollIndicator>
+        <Text selectable style={st.fpText}>{text || '(no text extracted)'}</Text>
+      </ScrollView>
+    );
+  }
+  if (kind === 'image') {
+    return <Image style={st.filePrevImg} source={{ uri: f.url }} />;
+  }
+  return (
+    <View style={st.filePrevDoc}>
+      <Text style={{ fontSize: 24 }}>📦</Text>
+      <Text style={st.filePrevName}>{f.name}</Text>
+      <Text style={st.filePrevMime}>{f.mime}</Text>
+    </View>
   );
 }
 
@@ -1033,6 +1226,19 @@ const st = StyleSheet.create({
   fileBtnT: { color: '#6ea8ff', fontSize: 14, fontWeight: '700' },
   filePrevImg: { width: '100%', height: 300, borderRadius: 12, backgroundColor: '#121212' },
   filePrevDoc: { alignItems: 'center', padding: 24, backgroundColor: '#121212', borderRadius: 12 },
+  fpPage: { width: '100%', height: 420, borderRadius: 8, backgroundColor: '#101010' },
+  fpPager: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 14, paddingVertical: 8 },
+  fpBtn: { width: 40, height: 32, borderRadius: 8, backgroundColor: '#1c1c1c', alignItems: 'center', justifyContent: 'center' },
+  fpBtnT: { color: TEXT, fontSize: 18, fontWeight: '700' },
+  fpPageLbl: { color: MUTED, fontSize: 13 },
+  fpTextWrap: { maxHeight: 380, backgroundColor: '#101010', borderRadius: 12 },
+  fpTextPad: { padding: 14 },
+  fpText: { color: '#d6d6d6', fontSize: 13.5, lineHeight: 20 },
+  fpLoading: { padding: 22, alignItems: 'center', gap: 8 },
+  fpNote: { color: MUTED, fontSize: 12.5 },
+  toolRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', backgroundColor: '#141414', borderWidth: 1, borderColor: '#222', borderRadius: 8, paddingHorizontal: 10, paddingVertical: 6, marginVertical: 5 },
+  toolName: { color: ACCENT, fontSize: 12, fontWeight: '700' },
+  toolStatus: { color: MUTED, fontSize: 11.5 },
   filePrevName: { color: TEXT, fontSize: 16, fontWeight: '600', marginTop: 10 },
   filePrevMime: { color: MUTED, fontSize: 12, marginTop: 4 },
 });

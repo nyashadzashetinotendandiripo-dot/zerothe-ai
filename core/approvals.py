@@ -185,7 +185,7 @@ class ApprovalManager:
                                short(summary, 140), urgent=True)
         ctx.run.set_status("waiting_approval")
         timeout_min = (self.settings.get("approval.routine_timeout_min", 120) if ctx.run.trigger == "routine"
-                       else self.settings.get("approval.timeout_min", 1440))
+                       else self.settings.get("approval.timeout_min", 30))
         deadline = time.time() + float(timeout_min) * 60
         try:
             while not ev.wait(1.0):

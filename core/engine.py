@@ -315,6 +315,9 @@ class Engine:
         if kind == "finished" and not cfg.get("on_finish", True):
             return
         muted = quiet.is_quiet(cfg)   # quiet hours / Do Not Disturb: recorded in the Inbox, but nothing pops up, beeps or is pushed
+        # Approvals and questions must always reach the user even in quiet hours — a paused turn looks exactly like an idle bot.
+        if kind in ("approval", "question"):
+            muted = False
         with self._notif_lock:
             nid = self.db.insert("notifications", {"ts": now(), "kind": kind, "bot_id": (bot or {}).get("id", ""), "thread_id": thread_id or "",
                                                    "title": title[:200], "body": body[:500]})
