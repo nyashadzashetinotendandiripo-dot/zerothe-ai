@@ -9,16 +9,21 @@ import { breadcrumb, note, noteOnce } from './diag';
 import * as ImagePicker from 'expo-image-picker';
 import * as DocumentPicker from 'expo-document-picker';
 import * as FileSystem from 'expo-file-system/legacy';
+import * as Sharing from 'expo-sharing';
 
-// Chat: white canvas (light theme), assistant answers as plain full-width text,
-// user messages as compact right-aligned bubbles, floating pill composer.
-const BG = '#ffffff';
-const PANEL = '#f2f2f2';
-const BUBBLE = '#e7e7e7';
-const TEXT = '#111111';
-const MUTED = '#666666';
-const LINE = '#cccccc';
-const ACCENT = '#000000';
+// Chat theme: light default, dark toggle (feature 9).
+const C = {
+  light: { BG: '#ffffff', PANEL: '#f2f2f2', BUBBLE: '#e7e7e7', TEXT: '#111111', MUTED: '#666666', LINE: '#cccccc', ACCENT: '#000000' },
+  dark:  { BG: '#0a0a0a', PANEL: '#121212', BUBBLE: '#2b2b2b', TEXT: '#ececec', MUTED: '#8f8f8f', LINE: '#1f1f1f', ACCENT: '#ffffff' },
+};
+const t = (key) => C[theme][key];
+const BG = t('BG');
+const PANEL = t('PANEL');
+const BUBBLE = t('BUBBLE');
+const TEXT = t('TEXT');
+const MUTED = t('MUTED');
+const LINE = t('LINE');
+const ACCENT = t('ACCENT');
 
 function AnsRow({ onSend, placeholder }) {
   const [v, setV] = useState('');
@@ -198,6 +203,12 @@ function ChatScreen({ thread, threads, botName: propsBotName, onSwitch, onBack, 
   const busyRef = useRef(null);
   busyRef.current = busy;
   const atBottom = useRef(true);        // only auto-scroll when the user is already at the bottom
+  // ---- new frontend feature state ----
+  const [theme, setTheme] = useState('light');   // 'light' | 'dark'
+  const [online, setOnline] = useState(true);    // SSE / poll connection state
+  const [notifCount, setNotifCount] = useState(0); // unread notification count
+  const [chatSearch, setChatSearch] = useState(''); // filter messages in this thread
+  const [schedTime, setSchedTime] = useState(null); // scheduled send epoch ms
   // Tell the hardware back button to close open sheets/modals instead of quitting.
   useEffect(() => {
     const open = !!histOpen || !!pick || !!attachOpen || liveFull || browserOpen;
@@ -271,7 +282,7 @@ function ChatScreen({ thread, threads, botName: propsBotName, onSwitch, onBack, 
       } catch (e) {
         // Fall through to the normal load below.
       }
-      if (!cancelled) load(false);
+      if (!cancelled) loadWithConn(false);
     })();
     return () => { cancelled = true; };
   }, [thread.id, load, apply]);
@@ -284,7 +295,7 @@ function ChatScreen({ thread, threads, botName: propsBotName, onSwitch, onBack, 
     let alive = true;
     let t = null;
     const tick = async () => {
-      await load(true);
+      await loadWithConn(true);
       if (!alive) return;
       const fast = busyRef.current || Date.now() < fastRef.current;
       t = setTimeout(tick, fast ? 1500 : 3000);
@@ -292,6 +303,37 @@ function ChatScreen({ thread, threads, botName: propsBotName, onSwitch, onBack, 
     t = setTimeout(tick, ((busyRef.current || Date.now() < fastRef.current) ? 1500 : 3000));
     return () => { alive = false; if (t) clearTimeout(t); };
   }, [load]);
+
+  // Poll for unread notifications (approvals, errors, etc.) so the user sees a badge
+  // even when the SSE stream is silent.
+  useEffect(() => {
+    let alive = true;
+    let t = null;
+    const tick = async () => {
+      try {
+        const d = await api('/api/notifications?unread_only=1', { timeout: 8000 });
+        if (!alive) return;
+        const n = Array.isArray(d) ? d.length : 0;
+        setNotifCount(n);
+      } catch (e) { /* ignore - notifications are a nice-to-have */ }
+      if (!alive) return;
+      t = setTimeout(tick, 10000);
+    };
+    t = setTimeout(tick, 10000);
+    return () => { alive = false; if (t) clearTimeout(t); };
+  }, []);
+
+  // Track connection: if a poll fails, mark offline; on success, back online.
+  const _origLoad = load;
+  const loadWithConn = async (quiet) => {
+    try {
+      await _origLoad(quiet);
+      if (!online) setOnline(true);
+    } catch (e) {
+      if (online) setOnline(false);
+      throw e;
+    }
+  };
 
   useEffect(() => {
     onEvent.current = (ev) => {
@@ -312,7 +354,7 @@ function ChatScreen({ thread, threads, botName: propsBotName, onSwitch, onBack, 
         } else if (ev.type === 'delta_reset') {
           setStreams((s) => { const o = { ...s }; delete o[ev.stream_id]; return o; });
         } else if (ev.type === 'turn') {
-          if (['done', 'stopped', 'error', 'limit', 'skipped'].includes(ev.status)) { setBusy(null); load(); }
+          if (['done', 'stopped', 'error', 'limit', 'skipped'].includes(ev.status)) { setBusy(null); loadWithConn(); }
           else setBusy({ status: ev.status, steps: ev.steps });
         }
       } catch (e) {
@@ -376,6 +418,19 @@ function ChatScreen({ thread, threads, botName: propsBotName, onSwitch, onBack, 
     const t = text.trim();
     if (!t && !attachments.length) return;
     if (!thread?.id) return;
+    // Feature 12: scheduled send — if a time is set and we haven't reached it,
+    // stash the message and fire again at the scheduled time.
+    if (schedTime && Date.now() < schedTime) {
+      const tmp = 'tmp' + Date.now() + Math.random().toString(36).slice(2, 6);
+      setItems((prev) => [...prev, { id: tmp, type: 'user', text: t, ts: Date.now() / 1000, pending: true, scheduled: true }]);
+      const delay = schedTime - Date.now();
+      setTimeout(() => {
+        setItems((prev) => prev.filter((i) => i.id !== tmp));
+        send();
+      }, delay);
+      setText(''); setAttachments([]); setSchedTime(null);
+      return;
+    }
     const pid = replyTo ? replyTo.id : 0;
     const snapshot = t;
     breadcrumb('send', snapshot.slice(0, 80));
@@ -391,7 +446,7 @@ function ChatScreen({ thread, threads, botName: propsBotName, onSwitch, onBack, 
       // leave the bubble saying "sending" with no way out.
       await api('/api/threads/' + thread.id + '/messages', { method: 'POST', timeout: 60000, body: JSON.stringify({ text: snapshot, images: attachments.map((a) => ({ data: a.data, type: a.type, name: a.name })), parent_id: pid }) });
       breadcrumb('send:ok', snapshot.slice(0, 40));
-      await load();
+      await loadWithConn();
       setAttachments([]);                            // show it immediately even if SSE lags
     } catch (e) {
       breadcrumb('send:fail', String(e && e.message || e));
@@ -445,7 +500,7 @@ function ChatScreen({ thread, threads, botName: propsBotName, onSwitch, onBack, 
 
   const stop = async () => {
     try { await api('/api/threads/' + thread.id + '/stop', { method: 'POST', body: '{}' }); } catch (e) { /* already done */ }
-    setTimeout(() => load(), 600);
+    setTimeout(() => loadWithConn(), 600);
   };
   // A real live view of the machine's desktop (Instabox VNC link in a WebView).
   // `control` opens it with keyboard/mouse control so the user can log in, solve
@@ -560,13 +615,13 @@ function ChatScreen({ thread, threads, botName: propsBotName, onSwitch, onBack, 
       }
     } catch (e) { /* view not ready yet */ }
   };
-  const react = async (mid, emoji) => { try { await api('/api/messages/' + mid + '/reactions', { method: 'POST', body: JSON.stringify({ emoji, author: 'user' }) }); load(); } catch (e) { /* ignore */ } };
+  const react = async (mid, emoji) => { try { await api('/api/messages/' + mid + '/reactions', { method: 'POST', body: JSON.stringify({ emoji, author: 'user' }) }); loadWithConn(); } catch (e) { /* ignore */ } };
   const decide = async (a, approve, remember, answer) => {
     setApps((cur) => cur.filter((x) => x.id !== a.id));
     const body = { approve, remember };
     if (answer) body.answer = answer;
     try { await api('/api/approvals/' + a.id + '/decide', { method: 'POST', body: JSON.stringify(body) }); } catch (e) { /* ignore */ }
-    load();
+    loadWithConn();
   };
 
   const renderRow = ({ item }) => {
@@ -585,7 +640,7 @@ function ChatScreen({ thread, threads, botName: propsBotName, onSwitch, onBack, 
     );
     if (item.type === 'assistant') return (
       <Pressable onLongPress={() => item.id && setPick(item)} delayLongPress={350} style={st.rowIn}>
-        <View style={st.answer}>
+        <View style={[st.answer, { backgroundColor: BUBBLE, borderRadius: 14, borderTopLeftRadius: 14, borderTopRightRadius: 4, borderBottomLeftRadius: 14, paddingHorizontal: 12, paddingVertical: 10, maxWidth: '92%' }]}>
           {aiBody(asText(item.text), (t) => md(plainText(t), st.answerT), (r) => { setText(r); })}
           {(item.files || []).length ? (
             <View style={{ marginTop: 6 }}>
@@ -637,9 +692,15 @@ function ChatScreen({ thread, threads, botName: propsBotName, onSwitch, onBack, 
   const { base, token } = conf();
   const shotUri = lastShot ? API_BASE + '/api/files/shots/' + encodeURIComponent(lastShot) + '?token=' + encodeURIComponent(token || '') : null;
   const today = new Date().toDateString();
+  const cs = chatSearch.trim().toLowerCase();
   const disp = [];
   { let lastDay = '';
     items.forEach((it, idx) => {
+      // feature 7: search within chat — hide items that don't match
+      if (cs && it.type !== 'day') {
+        const haystack = (asText(it.text || '') + ' ' + (it.tool || '') + ' ' + (it.label || '')).toLowerCase();
+        if (!haystack.includes(cs)) return;
+      }
       const d2 = parseDate(it);
       const k = d2 ? d2.toDateString() : '';
       if (k && k !== lastDay) {
@@ -654,13 +715,25 @@ function ChatScreen({ thread, threads, botName: propsBotName, onSwitch, onBack, 
   const botName = propsBotName || 'ZerotheBot';
   const curThread = (threads || []).find((t) => t.id === thread.id);
   const threadLabel = curThread && !curThread.main ? asText(curThread.title) : '';
-  const status = busy
+  const isBusy = !!busy;
+  const statusText = busy
     ? (busy.status === 'waiting_approval' ? 'needs your approval' : 'typing…')
     : (err ? 'offline — tap to retry' : (threadLabel ? 'online · ' + threadLabel : 'online'));
+  const statusColor = busy
+    ? (busy.status === 'waiting_approval' ? '#e0a53a' : '#0066cc')
+    : (err ? '#b00020' : '#008000');
+
+  // Offline banner (feature 4)
+  const offlineBanner = !online && (
+    <View style={st.offlineBanner}>
+      <Text style={st.offlineText}>You're offline — messages will send when reconnected</Text>
+    </View>
+  );
 
   return (
     <KeyboardAvoidingView style={{ flex: 1, backgroundColor: BG }} behavior="padding" keyboardVerticalOffset={10}>
       <ChatBackdrop />
+      {offlineBanner}
       {/* WhatsApp-style top bar: menu · name/status (tap for chat history) */}
       <View style={[st.header, { paddingTop: (ins?.top || 0) + 6 }]}>
         <Pressable onPress={onMenu} hitSlop={10} style={st.hBtn}><Text style={st.hIcon}>☰</Text></Pressable>
@@ -676,14 +749,52 @@ function ChatScreen({ thread, threads, botName: propsBotName, onSwitch, onBack, 
             } catch (e) { Alert.alert('Could not delete', String(e.message || e)); }
           } },
         ])} hitSlop={10} style={st.hBtn}><Text style={st.hIcon}>🗑</Text></Pressable>
-        <Pressable style={{ flex: 1 }} onPress={() => { setHistQ(''); setHistOpen(true); }}>
-          <Text style={st.htitle} numberOfLines={1}>{botName}</Text>
-          <Text style={[st.hstatus, err && { color: '#b00020' }]} numberOfLines={1}>{status}</Text>
-        </Pressable>
+        <View style={st.headerCenter}>
+          <Pressable style={{ flex: 1 }} onPress={() => { setHistQ(''); setHistOpen(true); }}>
+            <Text style={st.htitle} numberOfLines={1}>{botName}</Text>
+            <View style={[st.statusWrap, { backgroundColor: statusColor }]}>
+              <Text style={st.statusText}>{isBusy ? '● ' : ''}{statusText}</Text>
+            </View>
+          </Pressable>
+          {threads && threads.length > 1 && (
+            <Pressable onPress={() => { setHistQ(''); setHistOpen(true); }} hitSlop={8} style={st.switchBtn}>
+              <Text style={st.switchBtnT}>▾</Text>
+            </Pressable>
+          )}
+          <Pressable onPress={() => setTheme(theme === 'light' ? 'dark' : 'light')} hitSlop={8} style={[st.themeBtn, theme === 'dark' && { backgroundColor: '#e7e7e7' }]}>
+            <Text style={st.themeBtnT}>{theme === 'light' ? '🌙' : '☀️'}</Text>
+          </Pressable>
+          {notifCount > 0 && (
+            <View style={st.notifBadge}>
+              <Text style={st.notifBadgeT}>{notifCount > 9 ? '9+' : notifCount}</Text>
+            </View>
+          )}
+        </View>
       </View>
 
+      {/* Feature 7: search within chat */}
+      {chatSearch ? (
+        <View style={st.searchBar}>
+          <TextInput
+            style={st.searchInput}
+            value={chatSearch}
+            onChangeText={setChatSearch}
+            placeholder="Search messages…"
+            placeholderTextColor={MUTED}
+            onSubmitEditing={() => {}}
+          />
+          <Pressable onPress={() => setChatSearch('')} style={st.searchClear}>
+            <Text style={st.searchClearT}>✕</Text>
+          </Pressable>
+        </View>
+      ) : (
+        <Pressable onPress={() => { /* toggle search via histOpen-like sheet */ setChatSearch(chatSearch ? '' : ''); }} hitSlop={8} style={st.searchBtn}>
+          <Text style={st.searchBtnT}>🔍</Text>
+        </Pressable>
+      )}
+
       {!!err && (
-        <Pressable style={st.errBar} onPress={() => load()}>
+        <Pressable style={st.errBar} onPress={() => loadWithConn()}>
           <Text style={st.errT} numberOfLines={2}>{err} · tap to retry</Text>
         </Pressable>
       )}
@@ -768,16 +879,36 @@ function ChatScreen({ thread, threads, botName: propsBotName, onSwitch, onBack, 
       <View style={[st.composerWrap, { paddingBottom: 8 + (ins?.bottom || 0) }]}>
         {!!attachments.length && (
           <View style={st.attachRow}>
-            {attachments.map((a, i) => (
-              <Pressable key={i} onPress={() => setAttachments((prev) => prev.filter((_x, j) => j !== i))} style={st.attachChip}>
-                <Text numberOfLines={1} style={st.attachChipT}>📎 {asText(a.name).slice(0, 18)} ✕</Text>
-              </Pressable>
-            ))}
+            {attachments.map((a, i) => {
+              const isImg = (a.type || '').startsWith('image/');
+              return (
+                <Pressable key={i} onPress={() => setAttachments((prev) => prev.filter((_x, j) => j !== i))} style={[st.attachChip, isImg && { paddingHorizontal: 0, paddingVertical: 0 }]}>
+                  {isImg ? (
+                    <Image source={{ uri: 'data:' + a.type + ';base64,' + a.data }} style={st.attachThumb} />
+                  ) : null}
+                  <Text numberOfLines={1} style={st.attachChipT}>📎 {asText(a.name).slice(0, 18)} ✕</Text>
+                </Pressable>
+              );
+            })}
+          </View>
+        )}
+        {/* Feature 12: scheduled send chip */}
+        {schedTime && (
+          <View style={st.schedChip}>
+            <Text style={st.schedChipT}>⏰ Sends at {new Date(schedTime).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'})}</Text>
+            <Pressable onPress={() => setSchedTime(null)} style={st.schedClear}><Text style={st.schedClearT}>✕</Text></Pressable>
           </View>
         )}
         <View style={st.composer}>
           <Pressable onPress={() => setAttachOpen(true)} hitSlop={6} style={[st.uploadBtn, attachments.length > 0 && { backgroundColor: '#00a884' }]}>
             <Text style={st.uploadT}>📎{attachments.length > 0 ? ' ' + attachments.length : ''}</Text>
+          </Pressable>
+          <Pressable onPress={() => {
+            const mins = prompt('Send in how many minutes? (e.g. 60)');
+            const m = parseInt(mins || '0', 10);
+            if (m && m > 0) setSchedTime(Date.now() + m * 60000);
+          }} hitSlop={6} style={[st.uploadBtn, { backgroundColor: '#fff3cd', borderColor: '#e0a53a' }]}>
+            <Text style={st.uploadT}>⏰</Text>
           </Pressable>
           <TextInput
             style={st.input}
@@ -1165,6 +1296,7 @@ const st = StyleSheet.create({
   attachRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 6, paddingHorizontal: 4, paddingBottom: 6 },
   attachChip: { backgroundColor: '#e7e7e7', borderRadius: 999, paddingHorizontal: 10, paddingVertical: 5, borderWidth: 1, borderColor: '#999999' },
   attachChipT: { color: TEXT, fontSize: 12 },
+  attachThumb: { width: 56, height: 56, borderRadius: 10 },
 
   emojiPanel: { flexDirection: 'row', flexWrap: 'wrap', gap: 4, backgroundColor: BG, paddingHorizontal: 10, paddingTop: 8 },
   emojiB: { width: 40, height: 40, alignItems: 'center', justifyContent: 'center', borderRadius: 10 },
@@ -1241,4 +1373,27 @@ const st = StyleSheet.create({
   toolStatus: { color: MUTED, fontSize: 11.5 },
   filePrevName: { color: TEXT, fontSize: 16, fontWeight: '600', marginTop: 10 },
   filePrevMime: { color: MUTED, fontSize: 12, marginTop: 4 },
+  // ---- new feature styles ----
+  headerCenter: { flex: 1, alignItems: 'center', justifyContent: 'center', gap: 4 },
+  statusWrap: { flexDirection: 'row', alignItems: 'center', gap: 4, borderRadius: 10, paddingHorizontal: 8, paddingVertical: 2, marginTop: 2 },
+  statusText: { color: '#ffffff', fontSize: 11, fontWeight: '700' },
+  switchBtn: { width: 32, height: 32, borderRadius: 16, backgroundColor: '#e7e7e7', alignItems: 'center', justifyContent: 'center', borderWidth: 1, borderColor: '#cccccc' },
+  switchBtnT: { color: TEXT, fontSize: 14 },
+  themeBtn: { width: 32, height: 32, borderRadius: 16, backgroundColor: '#e7e7e7', alignItems: 'center', justifyContent: 'center', borderWidth: 1, borderColor: '#cccccc' },
+  themeBtnT: { fontSize: 16 },
+  notifBadge: { position: 'absolute', top: 2, right: 2, width: 20, height: 20, borderRadius: 10, backgroundColor: '#b00020', alignItems: 'center', justifyContent: 'center', borderWidth: 2, borderColor: '#ffffff' },
+  notifBadgeT: { color: '#ffffff', fontSize: 10, fontWeight: '800' },
+  // search within chat
+  searchBar: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: 14, paddingVertical: 8, backgroundColor: PANEL, borderBottomWidth: 1, borderColor: LINE },
+  searchInput: { flex: 1, color: TEXT, fontSize: 14, backgroundColor: '#ffffff', borderWidth: 1, borderColor: LINE, borderRadius: 20, paddingHorizontal: 12, paddingVertical: 7 },
+  searchClear: { width: 28, height: 28, borderRadius: 14, backgroundColor: '#e7e7e7', alignItems: 'center', justifyContent: 'center' },
+  searchClearT: { color: TEXT, fontSize: 14 },
+  searchBtn: { width: 34, height: 34, borderRadius: 17, backgroundColor: '#e7e7e7', alignItems: 'center', justifyContent: 'center', borderWidth: 1, borderColor: '#cccccc' },
+  searchBtnT: { fontSize: 16 },
+  offlineBanner: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 14, paddingVertical: 6, backgroundColor: '#fff3cd', borderBottomWidth: 1, borderColor: '#e0a53a' },
+  offlineText: { color: '#856404', fontSize: 12, fontWeight: '600' },
+  // scheduled send chip
+  schedChip: { flexDirection: 'row', alignItems: 'center', gap: 6, backgroundColor: '#e7f0ff', borderRadius: 10, paddingHorizontal: 10, paddingVertical: 5, marginBottom: 6 },
+  schedChipT: { color: '#1d4ed8', fontSize: 12, fontWeight: '700' },
+  schedClear: { color: '#b00020', fontSize: 11, fontWeight: '700' },
 });
