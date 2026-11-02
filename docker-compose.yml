@@ -1,0 +1,26 @@
+version: "3.8"
+
+services:
+  zerethebot:
+    build: .
+    container_name: zerethebot
+    ports:
+      - "8765:8765"
+    environment:
+      - ZEROTHEBOT_HOST=0.0.0.0
+      - PORT=8765
+      - PLAYWRIGHT_BROWSERS_PATH=/data/home/.cache/ms-playwright
+      - INSTABOX_HEADLESS=0
+      - DISPLAY=:1
+    volumes:
+      - zerethebot_data:/data/home/zerothebot
+      - zerethebot_venv:/data/home/zerothebot/.venv
+    restart: unless-stopped
+    cap_add:
+      - SYS_ADMIN
+    devices:
+      - /dev/dri:/dev/dri
+
+volumes:
+  zerethebot_data:
+  zerethebot_venv:
