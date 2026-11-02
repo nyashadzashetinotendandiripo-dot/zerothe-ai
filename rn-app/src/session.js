@@ -28,8 +28,14 @@ export let API_BASE = '';
 let TOKEN = '';
 
 export async function loadKey() { TOKEN = (await cfgGet(K_TOKEN)) || ''; }
+// instabox-port --private requires ?_token= in the URL, not just the Authorization header.
+export function _tokenSuffix(base: string, token: string): string {
+  const hasQuery = base.includes('?');
+  return base + (hasQuery ? '&' : '?') + '_token=' + encodeURIComponent(token || '');
+}
+
 export async function saveConf(base, token, email, pass) {
-  API_BASE = String(base || '').replace(/\/+$/, '');
+  API_BASE = _tokenSuffix(String(base || '').replace(/\/+$/, ''), token);
   TOKEN = String(token || '').trim();
   await cfgSet(K_SERVER, API_BASE);
   await cfgSet(K_TOKEN, TOKEN);
