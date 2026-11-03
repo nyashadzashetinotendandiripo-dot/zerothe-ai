@@ -5,13 +5,13 @@
     "version": "1.17.41",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
-    "userInterfaceStyle": "dark",
+    "userInterfaceStyle": "light",
     "scheme": "zerothebot",
     "android": {
       "package": "ai.zerothebot.app",
       "versionCode": 104,
       "adaptiveIcon": {
-        "backgroundColor": "#0f1115",
+        "backgroundColor": "#f0f0ef",
         "foregroundImage": "./assets/android-icon-foreground.png",
         "backgroundImage": "./assets/android-icon-background.png",
         "monochromeImage": "./assets/android-icon-monochrome.png"

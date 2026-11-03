@@ -170,7 +170,48 @@ const W = StyleSheet.create({
   screenWrap: { flex: 1, backgroundColor: '#000', alignItems: 'center' },
   pillInput: { flex: 1, minWidth: 0, backgroundColor: '#ffffff', borderRadius: 12, borderWidth: 1, borderColor: C.line, color: C.text, paddingHorizontal: 10, paddingVertical: 7, fontSize: 13 },
   wide: { alignSelf: 'stretch', marginHorizontal: 14, marginVertical: 10 },
-});
+  // ---------------------------------------------------------------- muse
+  museHeader: { alignItems: 'center', paddingTop: 10, paddingHorizontal: 16, marginBottom: 14 },
+  museAvatar: { width: 72, height: 72, borderRadius: 36, backgroundColor: C.panel2, alignItems: 'center', justifyContent: 'center', marginBottom: 10 },
+  museAvatarT: { fontSize: 26 },
+  museName: { color: C.text, fontSize: 22, fontWeight: '800', marginBottom: 2 },
+  museStatus: { flexDirection: 'row', alignItems: 'center', gap: 6, color: C.ok, fontSize: 13, fontWeight: '700', marginBottom: 14 },
+  museDot: { width: 8, height: 8, borderRadius: 4, backgroundColor: C.ok },
+  museActionRow: { flexDirection: 'row', gap: 10, marginBottom: 14 },
+  museActionBtn: { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, backgroundColor: C.panel2, borderRadius: 14, paddingVertical: 10, borderWidth: 1, borderColor: C.line },
+  museActionIcon: { fontSize: 16 },
+  museActionT: { color: C.muted, fontSize: 11, fontWeight: '600', marginTop: 2 },
+  museSection: { color: C.muted, fontSize: 13, fontWeight: '700', marginHorizontal: 16, marginTop: 4, marginBottom: 10 },
+  museCard: { backgroundColor: C.bg, borderColor: C.line, borderWidth: 1, borderRadius: 20, padding: 16, marginHorizontal: 16, marginBottom: 12 },
+  museCardRow: { flexDirection: 'row', alignItems: 'center', gap: 12 },
+  museIconBox: { width: 48, height: 48, borderRadius: 12, backgroundColor: C.panel2, alignItems: 'center', justifyContent: 'center', marginRight: 2 },
+  museIcon: { fontSize: 22 },
+  museTitle: { color: C.text, fontSize: 15, fontWeight: '700', minWidth: 0 },
+  museSub: { color: C.muted, fontSize: 12, marginTop: 2, lineHeight: 17 },
+  museDetails: { color: C.ok, fontSize: 12, fontWeight: '700', marginTop: 10 },
+  museBtnRow: { gap: 10, marginTop: 12 },
+  museBtnPrimary: { flex: 1, backgroundColor: '#1f4ed8', borderRadius: 14, paddingVertical: 12, alignItems: 'center', justifyContent: 'center' },
+  museBtnPrimaryT: { color: '#ffffff', fontWeight: '800', fontSize: 15 },
+  museBtnGhost: { flex: 1, backgroundColor: '#f0f0ef', borderRadius: 14, paddingVertical: 12, alignItems: 'center', justifyContent: 'center', borderWidth: 1, borderColor: C.line },
+  museBtnGhostT: { color: C.text, fontWeight: '700', fontSize: 14 },
+  museBtnRow2: { flexDirection: 'row', gap: 10, marginTop: 8 },
+  museBtnGhost2: { flex: 1, backgroundColor: '#f0f0ef', borderRadius: 14, paddingVertical: 12, alignItems: 'center', justifyContent: 'center' },
+  museBtnGhost2T: { color: C.text, fontWeight: '700', fontSize: 13 },
+  museHistoryItem: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingVertical: 10, borderBottomWidth: 1, borderColor: C.line },
+  museHistoryIcon: { width: 40, height: 40, borderRadius: 10, backgroundColor: C.panel2, alignItems: 'center', justifyContent: 'center', fontSize: 18 },
+  museHistoryText: { flex: 1, minWidth: 0 },
+  museHistoryTitle: { color: C.text, fontSize: 14, fontWeight: '600', minWidth: 0 },
+  museHistorySub: { color: C.muted, fontSize: 11, marginTop: 1 },
+  museHistoryRight: { color: C.muted, fontSize: 11, fontWeight: '600' },
+  museIdeaItem: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingVertical: 10, borderBottomWidth: 1, borderColor: C.line },
+  museGoalRow: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingVertical: 10, borderBottomWidth: 1, borderColor: C.line },
+  museGoalToggle: { width: 44, height: 24, borderRadius: 12, backgroundColor: C.panel2, alignItems: 'center', justifyContent: 'center', borderWidth: 1, borderColor: C.line },
+  museGoalToggleOn: { backgroundColor: C.ok, borderColor: C.ok },
+  museShowMore: { color: C.ok, fontSize: 12, fontWeight: '700', marginTop: 6 },
+  financeCard: { backgroundColor: '#1f4ed8', borderRadius: 20, padding: 16, marginHorizontal: 16, marginBottom: 12 },
+  financeCardVal: { color: '#ffffff', fontSize: 28, fontWeight: '800' },
+  financeCardCap: { color: 'rgba(255,255,255,.7)', fontSize: 12, fontWeight: '600' },
+  financeCardSub: { color: 'rgba(255,255,255,.5)', fontSize: 11, marginTop: 2 },
 
 // ---------------------------------------------------------------- top bar
 export function WebTopBar({ title, showBack, onBack, conn, showSearch, onSearch, showNew, onNew, account, onAvatar, botForTitle }) {
@@ -212,6 +253,7 @@ export function WebTopBar({ title, showBack, onBack, conn, showSearch, onSearch,
 
 // ---------------------------------------------------------------- tab sheet
 export const TABS = [
+  ['profile', 'Muse'],
   ['bots', 'Bots'],
   ['home', 'Home'],
   ['inbox', 'Inbox'],
@@ -226,6 +268,10 @@ export const TABS = [
   ['plan', 'Plan'],
   ['admin', 'Admin'],
   ['approvals', 'Approvals'],
+  ['connectors', 'Connectors'],
+  ['ideas', 'Ideas'],
+  ['goals', 'Goals'],
+  ['finance', 'Spending'],
   ['set', 'Settings'],
 ];
 export function TabSheet({ open, tab, inboxBadge, onGo, onClose, initial, tabs }) {
@@ -1507,6 +1553,292 @@ export function ApprovalCenterView({ conn, account, onAvatar, onOpenThread }) {
                 </Pressable>
               ))
             )}
+        </View>
+      </ScrollView>
+    </View>
+  );
+}
+
+// ---------------------------------------------------------------- muse: agent profile / home
+export function MuseProfileView({ conn, account, onAvatar, onGoView }) {
+  return (
+    <View style={W.screen}>
+      <View style={W.museHeader}>
+        <View style={W.museAvatar}>
+          <Text style={W.museAvatarT}>🤖</Text>
+        </View>
+        <Text style={W.museName}>Muse</Text>
+        <View style={W.museStatus}>
+          <View style={W.museDot} />
+          <Text>Connected</Text>
+        </View>
+        <View style={W.museActionRow}>
+          <Pressable style={W.museActionBtn}><Text style={W.museActionIcon}>☰</Text><Text style={W.museActionT}>All</Text></Pressable>
+          <Pressable style={W.museActionBtn}><Text style={W.museActionIcon}>🛡</Text><Text style={W.museActionT}>Protect</Text></Pressable>
+          <Pressable style={W.museActionBtn}><Text style={W.museActionIcon}>⏱</Text><Text style={W.museActionT}>History</Text></Pressable>
+          <Pressable style={W.museActionBtn}><Text style={W.museActionIcon}>👆</Text><Text style={W.museActionT}>ID</Text></Pressable>
+        </View>
+      </View>
+      <ScrollView contentContainerStyle={{ paddingBottom: 30, paddingTop: 2 }} showsVerticalScrollIndicator={false}>
+        <View style={{ paddingHorizontal: 16 }}>
+          <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
+            <Text style={W.museSection}>Needs review</Text>
+            <Text style={{ color: C.muted, fontSize: 11, fontWeight: '600' }}>…</Text>
+          </View>
+          <View style={[W.museCard, { flexDirection: 'row', gap: 12, padding: 14 }]}>
+            <View style={{ width: 48, height: 48, borderRadius: 12, backgroundColor: '#f6f9ff', alignItems: 'center', justifyContent: 'center' }}>
+              <Text style={{ fontSize: 22 }}>📧</Text>
+            </View>
+            <View style={{ flex: 1, minWidth: 0 }}>
+              <Text style={W.museTitle}>Allow Muse to send emails in Gmail?</Text>
+              <Text style={W.museSub}>Hatch wants to send a follow up email to your golf group to revise the course for Thursday.</Text>
+              <Text style={W.museDetails}>Details ▸</Text>
+            </View>
+          </View>
+          <View style={W.museBtnRow}>
+            <Pressable style={W.museBtnPrimary}><Text style={W.museBtnPrimaryT}>Allow once</Text></Pressable>
+          </View>
+          <View style={W.museBtnRow2}>
+            <Pressable style={W.museBtnGhost2}><Text style={W.museBtnGhost2T}>Allow for this task</Text></Pressable>
+            <Pressable style={W.museBtnGhost2}><Text style={W.museBtnGhost2T}>Deny</Text></Pressable>
+          </View>
+          <View style={{ marginTop: 18 }}>
+            <Text style={W.museSection}>Approvals history</Text>
+            <View style={[W.museCard, { padding: 0 }]}>
+              <View style={[W.museHistoryItem, { borderBottomWidth: 0 }]}>
+                <View style={W.museHistoryIcon}>🛒</View>
+                <View style={W.museHistoryText}>
+                  <Text style={W.museHistoryTitle}>Create a spend request</Text>
+                  <Text style={W.museHistorySub}>To buy new headcovers for $56.00 at Dor…</Text>
+                </View>
+                <Text style={W.museHistoryRight}>Allowed for this task · 3:34pm</Text>
+              </View>
+              <View style={W.museHistoryItem}>
+                <View style={W.museHistoryIcon}>📸</View>
+                <View style={W.museHistoryText}>
+                  <Text style={W.museHistoryTitle}>Post to Instagram</Text>
+                  <Text style={W.museHistorySub}>Share 3 photos as a post to your account</Text>
+                </View>
+                <Text style={W.museHistoryRight}>Allowed for this task · 11:44am</Text>
+              </View>
+            </View>
+          </View>
+        </View>
+      </ScrollView>
+    </View>
+  );
+}
+
+// ---------------------------------------------------------------- muse: connectors
+export function ConnectorsView({ conn, account, onAvatar }) {
+  const connected = [
+    { id: 'gmail', name: 'Gmail', icon: '📧' },
+    { id: 'calendar', name: 'Google Calendar', icon: '📅' },
+    { id: 'healthex', name: 'HealthEx', icon: '💊' },
+    { id: 'opentable', name: 'OpenTable', icon: '🍽' },
+    { id: 'facebook', name: 'Facebook', icon: '👥' },
+    { id: 'instagram', name: 'Instagram', icon: '📸' },
+    { id: 'peloton', name: 'Peloton', icon: '🚲' },
+  ];
+  const available = [
+    { id: 'plaid', name: 'Finances (Plaid)', icon: '🏦' },
+    { id: 'function', name: 'Function Health', icon: '🩺' },
+  ];
+  return (
+    <View style={W.screen}>
+      <WebTopBar title="Connectors" showBack conn={conn} account={account} onAvatar={onAvatar} />
+      <ScrollView contentContainerStyle={{ paddingBottom: 30, paddingTop: 10 }} showsVerticalScrollIndicator={false}>
+        <View style={{ paddingHorizontal: 16 }}>
+          <View style={[W.card, { padding: 12, marginBottom: 14 }]}>
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
+              <View style={{ width: 36, height: 36, borderRadius: 10, backgroundColor: C.panel2, alignItems: 'center', justifyContent: 'center' }}>
+                <Text style={{ fontSize: 16 }}>🔍</Text>
+              </View>
+              <TextInput style={{ flex: 1, color: C.text, fontSize: 14 }} placeholder="Search connectors" placeholderTextColor={C.muted} />
+            </View>
+          </View>
+          <Text style={W.museSection}>Connected</Text>
+          {connected.map((c) => (
+            <Pressable key={c.id} style={[W.museCard, { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', padding: 12 }]}>
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
+                <View style={{ width: 36, height: 36, borderRadius: 10, backgroundColor: C.panel2, alignItems: 'center', justifyContent: 'center' }}>
+                  <Text style={{ fontSize: 18 }}>{c.icon}</Text>
+                </View>
+                <Text style={{ color: C.text, fontWeight: '600', fontSize: 14 }}>{c.name}</Text>
+              </View>
+              <Text style={{ color: C.muted, fontSize: 11 }}>…</Text>
+            </Pressable>
+          ))}
+          <Text style={W.museSection}>Available</Text>
+          {available.map((c) => (
+            <Pressable key={c.id} style={[W.museCard, { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', padding: 12 }]}>
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
+                <View style={{ width: 36, height: 36, borderRadius: 10, backgroundColor: C.panel2, alignItems: 'center', justifyContent: 'center' }}>
+                  <Text style={{ fontSize: 18 }}>{c.icon}</Text>
+                </View>
+                <Text style={{ color: C.text, fontWeight: '600', fontSize: 14 }}>{c.name}</Text>
+              </View>
+              <Pressable style={{ backgroundColor: '#f0f0ef', borderRadius: 10, paddingHorizontal: 12, paddingVertical: 6 }}>
+                <Text style={{ color: C.ok, fontWeight: '800', fontSize: 12 }}>Connect</Text>
+              </Pressable>
+            </Pressable>
+          ))}
+        </View>
+      </ScrollView>
+    </View>
+  );
+}
+
+// ---------------------------------------------------------------- muse: ideas
+export function IdeasView({ conn, account, onAvatar }) {
+  const ideas = [
+    { icon: '✈️', title: 'I can follow up on your airline refund', sub: 'I found an email from the airline confirming your cancelled flight on October 14, but no refund has been posted. Want me to draft a follow-up and track it until it lands?' },
+    { icon: '🛒', title: 'I can find a bigger stroller for Luca', sub: 'Based on Luca’s age he’ll outgrow his stroller in the next month. I’m watching Marketplace for a bigger option under $300.' },
+    { icon: '🏃', title: 'Build a daily training plan for your half marathon', sub: "Your VO2 max is up 4% and your average pace dropped to 8:12. I'm building a 10-week plan synced to your calendar that adjusts based on your health connector data." },
+    { icon: '🍽', title: 'I can book your anniversary dinner', sub: 'You saved a restaurant on Instagram last month and there’s an opening Saturday at 8 PM. Want me to reserve a table for two?' },
+    { icon: '😴', title: 'I can help dial in your sleep based on the data', sub: 'Your sleep connector shows inconsistent bedtimes. Want me to set a wind-down routine and block late-night notifications?' },
+  ];
+  return (
+    <View style={W.screen}>
+      <WebTopBar title="Ideas" showBack conn={conn} account={account} onAvatar={onAvatar} />
+      <ScrollView contentContainerStyle={{ paddingBottom: 30, paddingTop: 10 }} showsVerticalScrollIndicator={false}>
+        <View style={{ paddingHorizontal: 16 }}>
+          <Text style={W.museSection}>Ideas</Text>
+          {ideas.map((idea, i) => (
+            <Pressable key={i} style={[W.museCard, { flexDirection: 'row', gap: 10, padding: 12 }]}>
+              <View style={{ width: 40, height: 40, borderRadius: 10, backgroundColor: C.panel2, alignItems: 'center', justifyContent: 'center' }}>
+                <Text style={{ fontSize: 18 }}>{idea.icon}</Text>
+              </View>
+              <View style={{ flex: 1, minWidth: 0 }}>
+                <Text style={W.museTitle}>{idea.title}</Text>
+                <Text style={W.museSub}>{idea.sub}</Text>
+              </View>
+              <Text style={{ color: C.muted, fontSize: 11 }}>▸</Text>
+            </Pressable>
+          ))}
+        </View>
+      </ScrollView>
+    </View>
+  );
+}
+
+// ---------------------------------------------------------------- muse: goals
+export function GoalsView({ conn, account, onAvatar }) {
+  const goals = [
+    { id: 'dining', title: 'Dinner reservations', sub: 'Sushi restaurants downtown', on: false },
+    { id: 'marathon', title: 'Marathon prep', sub: 'Build endurance, hit your pace goals, and cross that finish line strong.', on: true },
+    { id: 'car', title: 'Save for new car', sub: 'On track to hit your goals if you save $210 each month towards your new car fund.', on: false },
+  ];
+  return (
+    <View style={W.screen}>
+      <WebTopBar title="Goals" showBack conn={conn} account={account} onAvatar={onAvatar} />
+      <ScrollView contentContainerStyle={{ paddingBottom: 30, paddingTop: 10 }} showsVerticalScrollIndicator={false}>
+        <View style={{ paddingHorizontal: 16 }}>
+          <Text style={W.museSection}>Goals</Text>
+          {goals.map((g) => (
+            <Pressable key={g.id} style={[W.museCard, { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', padding: 12 }]}>
+              <View style={{ flex: 1, minWidth: 0 }}>
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 4 }}>
+                  <Pressable style={[W.museGoalToggle, g.on && W.museGoalToggleOn]}>
+                    <Text style={{ fontSize: 10 }}>{g.on ? '✓' : ''}</Text>
+                  </Pressable>
+                  <Text style={{ color: C.text, fontWeight: '700', fontSize: 14 }}>{g.title}</Text>
+                  {g.on ? <Text style={{ color: C.ok, fontSize: 11, fontWeight: '700' }}>Tracking</Text> : null}
+                </View>
+                <Text style={W.museSub}>{g.sub}</Text>
+              </View>
+              <Text style={{ color: C.muted, fontSize: 11 }}>▸</Text>
+            </Pressable>
+          ))}
+          <View style={{ marginTop: 10 }}>
+            <Pressable style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+              <Text style={{ color: C.ok, fontWeight: '800', fontSize: 12 }}>Show 2 more</Text>
+            </Pressable>
+          </View>
+          <View style={{ marginTop: 18, borderTopWidth: 1, borderColor: C.line, paddingTop: 10 }}>
+            <Text style={W.museSection}>Create a goal</Text>
+            <Pressable style={[W.museCard, { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', padding: 12 }]}>
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
+                <View style={{ width: 36, height: 36, borderRadius: 10, backgroundColor: C.panel2, alignItems: 'center', justifyContent: 'center' }}>
+                  <Text style={{ fontSize: 18 }}>❤️</Text>
+                </View>
+                <View style={{ flex: 1, minWidth: 0 }}>
+                  <Text style={{ color: C.text, fontWeight: '600', fontSize: 14 }}>Health</Text>
+                </View>
+              </View>
+              <Pressable style={{ backgroundColor: C.panel2, borderRadius: 10, paddingHorizontal: 12, paddingVertical: 6 }}>
+                <Text style={{ color: C.ok, fontWeight: '800', fontSize: 12 }}>+</Text>
+              </Pressable>
+            </Pressable>
+            <Pressable style={[W.museCard, { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', padding: 12, marginTop: 8 }]}>
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
+                <View style={{ width: 36, height: 36, borderRadius: 10, backgroundColor: C.panel2, alignItems: 'center', justifyContent: 'center' }}>
+                  <Text style={{ fontSize: 18 }}>🤝</Text>
+                </View>
+                <View style={{ flex: 1, minWidth: 0 }}>
+                  <Text style={{ color: C.text, fontWeight: '600', fontSize: 14 }}>Relationships</Text>
+                </View>
+              </View>
+              <Pressable style={{ backgroundColor: C.panel2, borderRadius: 10, paddingHorizontal: 12, paddingVertical: 6 }}>
+                <Text style={{ color: C.ok, fontWeight: '800', fontSize: 12 }}>+</Text>
+              </Pressable>
+            </Pressable>
+          </View>
+        </View>
+      </ScrollView>
+    </View>
+  );
+}
+
+// ---------------------------------------------------------------- muse: finance tracker
+export function FinanceView({ conn, account, onAvatar }) {
+  return (
+    <View style={W.screen}>
+      <WebTopBar title="Spending" showBack conn={conn} account={account} onAvatar={onAvatar} />
+      <ScrollView contentContainerStyle={{ paddingBottom: 30, paddingTop: 10 }} showsVerticalScrollIndicator={false}>
+        <View style={{ paddingHorizontal: 16 }}>
+          <View style={[W.financeCard, { flexDirection: 'row', gap: 12 }]}>
+            <View style={{ flex: 1 }}>
+              <Text style={W.financeCardCap}>Spending (last 3 months)</Text>
+              <Text style={W.financeCardVal}>$4,320/mo</Text>
+              <Text style={W.financeCardSub}>Down 35% to $410/mo. You're averaging $430/day.</Text>
+            </View>
+            <View style={{ width: 64, height: 64, borderRadius: 16, backgroundColor: 'rgba(255,255,255,.15)', alignItems: 'center', justifyContent: 'center' }}>
+              <Text style={{ fontSize: 24 }}>📉</Text>
+            </View>
+          </View>
+          <View style={{ marginTop: 16 }}>
+            <Text style={{ color: C.text, fontWeight: '700', fontSize: 14 }}>Things standing out:</Text>
+            <View style={[W.museCard, { padding: 12, marginTop: 8 }]}>
+              <View style={{ flexDirection: 'row', gap: 8, alignItems: 'flex-start' }}>
+                <Text style={{ color: C.muted, fontSize: 12, marginTop: 2 }}>•</Text>
+                <View style={{ flex: 1, minWidth: 0 }}>
+                  <Text style={{ color: C.text, fontSize: 13, fontWeight: '600' }}>Dining is up 35% to $410/mo, and you have three subscriptions you haven't opened in 90 days.</Text>
+                  <Text style={{ color: C.muted, fontSize: 11, marginTop: 4 }}>$47/mo you won't miss. Want me to cancel them?</Text>
+                </View>
+              </View>
+            </View>
+          </View>
+          <View style={{ marginTop: 18 }}>
+            <Text style={{ color: C.text, fontWeight: '700', fontSize: 14 }}>Finance tracker</Text>
+            <Text style={W.gSub} marginTop={2}>Spending, savings, subscriptions, and more.</Text>
+            <View style={W.financeCard}>
+              <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginTop: 12 }}>
+                <View>
+                  <Text style={W.financeCardCap}>Felix Card ····0589</Text>
+                  <Text style={W.financeCardVal}>$4,850</Text>
+                </View>
+                <View>
+                  <Text style={W.financeCardCap}>Peloton Card</Text>
+                  <Text style={W.financeCardVal}>$4,320</Text>
+                </View>
+                <View>
+                  <Text style={W.financeCardCap}>Quicksilver</Text>
+                  <Text style={W.financeCardVal}>$530</Text>
+                </View>
+              </View>
+            </View>
+          </View>
         </View>
       </ScrollView>
     </View>
