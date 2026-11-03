@@ -103,11 +103,60 @@ android.enableMinifyInReleaseBuilds=false
 android.enableNativeBuild=false
 GEOF
 
-# 4. Sign everything with the GLOBAL ~/.android/debug.keystore — the same key the
-#    first shell APK was signed with, so this APK upgrade-installs over it.
-sed -i "s|storeFile file('debug.keystore')|storeFile file(System.getProperty(\"user.home\") + \"/.android/debug.keystore\")|" android/app/build.gradle
-sed -i 's/signingConfig signingConfigs.release/signingConfig signingConfigs.debug/' android/app/build.gradle || true
-grep -c signingConfig android/app/build.gradle || true
+# 4. Signing.
+#    Default (no ZB_KS_FILE): sign with the GLOBAL ~/.android/debug.keystore — the
+#    same key the first shell APK used, so sideload installs keep upgrading.
+#    Play mode (ZB_KS_FILE + ZB_KS_PASS env set): inject a real
+#    signingConfigs.release from those env vars and let the template's release
+#    buildType use the upload key. Never commit the keystore or its password.
+if [ -n "${ZB_KS_FILE:-}" ] && [ -n "${ZB_KS_PASS:-}" ]; then
+  log "release signing: ZB_KS_FILE present -> release buildType uses the upload key"
+  python3 - <<'PY'
+import os, re, sys
+
+p = 'android/app/build.gradle'
+s = open(p, encoding='utf-8').read()
+ks = os.environ['ZB_KS_FILE']
+pw = os.environ['ZB_KS_PASS']
+al = os.environ.get('ZB_KS_ALIAS', 'zt-upload')
+
+# 1. Add the release signing config object (idempotent).
+if not re.search(r'signingConfigs\s*\{[^}]*release\s*\{', s):
+    conf = ("    release {\n"
+            "        storeFile file('" + ks + "')\n"
+            "        storePassword '" + pw + "'\n"
+            "        keyAlias '" + al + "'\n"
+            "        keyPassword '" + pw + "'\n"
+            "    }\n")
+    m = re.search(r'signingConfigs\s*\{\n', s)
+    if not m:
+        sys.exit('signingConfigs block not found in app/build.gradle')
+    s = s[:m.end()] + conf + s[m.end():]
+
+# 2. Point the release buildType at signingConfigs.release (template may
+#    still carry signingConfigs.debug there; leave the debug buildType alone).
+def _fix_bt(m):
+    def _rel(m2):
+        blk = m2.group(0)
+        blk = blk.replace('signingConfig signingConfigs.debug',
+                          'signingConfig signingConfigs.release')
+        if 'signingConfig signingConfigs.release' not in blk:
+            blk = blk.replace('\n        release {',
+                              '\n        release {\n            signingConfig signingConfigs.release', 1)
+        return blk
+    return re.sub(r'\n        release\s*\{.*?\n        \}', _rel, m.group(0),
+                  count=1, flags=re.S)
+s2, n = re.subn(r'buildTypes\s*\{.*?\n    \}', _fix_bt, s, count=1, flags=re.S)
+if n == 0:
+    sys.exit('buildTypes block not found in app/build.gradle')
+open(p, 'w', encoding='utf-8').write(s2)
+print('signing: release buildType -> signingConfigs.release (' + ks + ', alias ' + al + ')')
+PY
+else
+  sed -i "s|storeFile file('debug.keystore')|storeFile file(System.getProperty(\"user.home\") + \"/.android/debug.keystore\")|" android/app/build.gradle
+  sed -i 's/signingConfig signingConfigs.release/signingConfig signingConfigs.debug/' android/app/build.gradle || true
+  grep -c signingConfig android/app/build.gradle || true
+fi
 
 # 4b. Memory guard: the build daemon was OOM-killed once reanimated/worklets landed.
 # Keep gradle and kotlin compile workers inside the box's RAM budget.
@@ -149,12 +198,24 @@ subprojects { sub ->
 }
 EOF
 
-# 5. Build
-log "gradle assembleRelease (first run downloads a lot, be patient)"
-( cd android && ./gradlew assembleRelease --no-daemon --console=plain ) > gradle.log 2>&1 || { tail -n 40 gradle.log; exit 1; }
+# 5. Build. PLAY_AAB=1 asks for the Play Bundle (.aab) AND a release-signed APK
+#    (same signing, same content — the APK is what we can boot-test); default
+#    keeps the sideload APK flow.
+if [ "${PLAY_AAB:-0}" = "1" ]; then TASK="bundleRelease assembleRelease"; else TASK="assembleRelease"; fi
+log "gradle $TASK (first run downloads a lot, be patient)"
+( cd android && ./gradlew $TASK --no-daemon --console=plain ) > gradle.log 2>&1 || { tail -n 40 gradle.log; exit 1; }
 tail -n 6 gradle.log
 
-APK="android/app/build/outputs/apk/release/app-release.apk"
-[ -f "$APK" ] || APK="android/app/build/outputs/apk/release/app-release-unsigned.apk"
-log "APK built: $APK ($(du -h "$APK" | cut -f1))"
+if [ "${PLAY_AAB:-0}" = "1" ]; then
+  AAB="android/app/build/outputs/bundle/release/app-release.aab"
+  [ -f "$AAB" ] || AAB="android/app/build/outputs/bundle/release/app-release-unsigned.aab"
+  APK="android/app/build/outputs/apk/release/app-release.apk"
+  [ -f "$APK" ] || APK="android/app/build/outputs/apk/release/app-release-unsigned.apk"
+  log "AAB built: $AAB ($(du -h "$AAB" | cut -f1))"
+  log "APK built (release-signed, for device checks): $APK ($(du -h "$APK" | cut -f1))"
+else
+  APK="android/app/build/outputs/apk/release/app-release.apk"
+  [ -f "$APK" ] || APK="android/app/build/outputs/apk/release/app-release-unsigned.apk"
+  log "APK built: $APK ($(du -h "$APK" | cut -f1))"
+fi
 log "done"
