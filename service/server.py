@@ -1611,14 +1611,21 @@ google.accounts.id.renderButton(document.getElementById('gbtn'),
         """Server settings visible to admin: API base, provider status, masked keys (admin only)."""
         require_admin(request)
         s = eng.settings.all()
-        # Mask sensitive values
         safe = dict(s)
         providers = safe.get("providers", {})
         if isinstance(providers, dict):
             for pid, p in providers.items():
-                if isinstance(p, dict) and p.get("api_key"):
-                    p["api_key"] = "***masked***"
+                if isinstance(p, dict):
+                    for k in ("api_key", "api_secret", "client_secret", "secret"):
+                        if p.get(k):
+                            p[k] = "***masked***"
+        auth_cfg = safe.get("auth", {})
+        if isinstance(auth_cfg, dict):
+            for k in ("google_client_secret", "session_secret"):
+                if auth_cfg.get(k):
+                    auth_cfg[k] = "***masked***"
         safe["providers"] = providers
+        safe["auth"] = auth_cfg
         return {
             "api_base": eng.base_url,
             "public_base_url": eng.settings.get("auth.public_base_url", "") or "",
