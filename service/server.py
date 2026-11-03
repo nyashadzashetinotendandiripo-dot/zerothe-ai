@@ -157,6 +157,10 @@ def create_app(engine: Engine, token: str) -> FastAPI:
         """Email from a valid signed session cookie, else None."""
         return session_email(cookies.get("zt_session") or "")
 
+    def current_user(request: Request) -> str:
+        """Email of the signed-in user from the session, else empty string."""
+        return read_session(request.cookies) or session_email(presented(request)) or ""
+
     def session_string(addr: str) -> str:
         """Build the signed session string (also stored as the zt_session cookie)."""
         payload = base64.urlsafe_b64encode(
@@ -199,14 +203,14 @@ def create_app(engine: Engine, token: str) -> FastAPI:
                 login_fails[ip].append(now)
                 raise HTTPException(401, "That email or password is not right.")
         login_fails.pop(ip, None)
-        issue_session(response, addr or auth_mod.email() or "owner")
-        return {"ok": True, "email": addr or auth_mod.email(),
-                "session": session_string(addr or auth_mod.email() or "owner")}
+        issue_session(response, addr)
+        return {"ok": True, "email": addr, "session": session_string(addr)}
 
     @app.get("/api/auth_status")
-    def auth_status() -> dict:
-        return {"needs_setup": not auth_mod.has_account(), "signed_in": False,
-                "email": auth_mod.email(), "google_ready": bool(auth_mod.google_email())}
+    def auth_status(request: Request) -> dict:
+        user = current_user(request)
+        return {"needs_setup": not auth_mod.has_account(), "signed_in": bool(user),
+                "email": user, "google_ready": bool(auth_mod.google_email(user)) if user else False}
 
     @app.post("/api/signup")
     def signup(request: Request, response: Response, body: dict = Body(...)) -> dict:
@@ -215,21 +219,18 @@ def create_app(engine: Engine, token: str) -> FastAPI:
         recent = [t for t in login_fails.get(ip, []) if now - t < 300]
         if len(recent) >= 10:
             raise HTTPException(429, "Too many signup attempts. Wait a few minutes.")
-        if auth_mod.has_account():
-            raise HTTPException(403, "This app already has an account. Sign in instead.")
+        addr = str(body.get("email", "")).strip().lower()
         try:
-            auth_mod.create_account(str(body.get("email", "")), str(body.get("password", "")))
+            auth_mod.create_account(addr, str(body.get("password", "")))
         except ValueError as e:
             login_fails[ip].append(now)
             raise HTTPException(400, str(e))
         login_fails.pop(ip, None)
-        issue_session(response, auth_mod.email())
-        return {"ok": True, "email": auth_mod.email()}
+        issue_session(response, addr)
+        return {"ok": True, "email": addr}
 
     @app.post("/api/google")
     def google_login(request: Request, response: Response, body: dict = Body(...)) -> dict:
-        if not auth_mod.has_account():
-            raise HTTPException(403, "Create your account first (email + password), then sign in with Google.")
         cid = str(eng.settings.get("auth.google_client_id") or "")
         if not cid:
             raise HTTPException(403, "Google sign-in is not set up on this server.")
@@ -237,9 +238,10 @@ def create_app(engine: Engine, token: str) -> FastAPI:
             addr = auth_mod.verify_google(str(body.get("id_token", "")), cid)
         except ValueError as e:
             raise HTTPException(401, str(e))
-        if not auth_mod.google_email():
-            # First Google sign-in binds that address as the owner's.
-            auth_mod.set_google_email(addr)
+        if not auth_mod.has_account(addr):
+            # Google sign-up: create the account (no password) and bind this Google address to it.
+            auth_mod.create_account(addr, None, google_only=True)
+        auth_mod.set_google_email(addr, addr)
         issue_session(response, addr)
         return {"ok": True, "email": addr, "session": session_string(addr)}
 
@@ -249,18 +251,20 @@ def create_app(engine: Engine, token: str) -> FastAPI:
         return {"ok": True}
 
     @app.post("/api/account/delete", dependencies=[api])
-    def account_delete(response: Response, body: dict = Body(default={})) -> dict:
+    def account_delete(request: Request, response: Response, body: dict = Body(default={})) -> dict:
+        user = current_user(request)
         want = str(body.get("confirm", "")).strip().lower()
-        if not want or want != (auth_mod.email() or "").strip().lower():
+        if not want or want != user.strip().lower():
             raise HTTPException(400, "Type your email address to confirm deleting the account.")
-        auth_mod.delete_account()
+        auth_mod.delete_account(user)
         response.delete_cookie("zt_session")
         return {"ok": True, "deleted": True}
 
     @app.post("/api/password", dependencies=[api])
-    def change_password(body: dict = Body(...)) -> dict:
+    def change_password(request: Request, body: dict = Body(...)) -> dict:
+        user = current_user(request)
         try:
-            auth_mod.set_password(str(body.get("password", "")))
+            auth_mod.set_password(user, str(body.get("password", "")))
         except ValueError as e:
             raise HTTPException(400, str(e))
         return {"ok": True}
@@ -268,7 +272,8 @@ def create_app(engine: Engine, token: str) -> FastAPI:
     @app.get("/api/bootstrap", dependencies=[api])
     def bootstrap(request: Request) -> dict:
         _note_app(request)
-        bots = eng.bots.list()
+        user = current_user(request)
+        bots = eng.bots.list(owner=user)
         return {"bots": bots, "groups": eng.messaging.list_groups(), "status": eng.status(), "approvals": eng.approvals.list("pending"),
                 "profiles": _profiles(), "templates": TEMPLATES, "settings": _public_settings(), "last_event": eng.events.last_id(),
                 "presets": PRESETS, "handoffs": eng.messaging.list_handoffs(status="open", limit=50)}
@@ -298,22 +303,25 @@ def create_app(engine: Engine, token: str) -> FastAPI:
 
     # ----------------------------------------------------------------- bots
     @app.get("/api/bots", dependencies=[api])
-    def bots_list() -> list[dict]:
-        rows = eng.bots.list()
+    def bots_list(request: Request) -> list[dict]:
+        user = current_user(request)
+        rows = eng.bots.list(owner=user)
         # Include the main thread id so the phone can open a chat instantly
         # instead of waiting for a second round-trip before the screen appears.
         for b in rows:
             try:
-                b["thread_id"] = eng.threads.main_thread(b["id"])["id"]
+                b["thread_id"] = eng.threads.main_thread(b["id"], owner=user)["id"]
             except Exception:
                 b["thread_id"] = ""
         return rows
 
     @app.post("/api/bots", dependencies=[api])
-    def bots_create(body: dict = Body(...)) -> dict:
+    def bots_create(request: Request, body: dict = Body(...)) -> dict:
+        user = current_user(request)
         bot = eng.bots.create(body.get("name", ""), job=body.get("job", ""), instructions=body.get("instructions", ""), emoji=body.get("emoji", "🤖"),
+                              owner=user,
                               **{k: v for k, v in body.items() if k in ("profile", "model", "approval_mode", "step_limit", "net_mode", "net_allow", "net_deny", "grants", "proactive", "template", "avatar")})
-        eng.threads.main_thread(bot["id"])
+        eng.threads.main_thread(bot["id"], owner=user)
         return bot
 
     @app.post("/api/bots/from_template", dependencies=[api])
@@ -329,8 +337,9 @@ def create_app(engine: Engine, token: str) -> FastAPI:
         return TEMPLATES
 
     @app.get("/api/bots/{bot_id}", dependencies=[api])
-    def bots_get(bot_id: str) -> dict:
-        b = eng.bots.get(bot_id)
+    def bots_get(request: Request, bot_id: str) -> dict:
+        user = current_user(request)
+        b = eng.bots.get(bot_id, owner=user)
         if not b:
             raise HTTPException(404, "No such Bot.")
         b["network_layers"] = eng.net.describe(bot_id)
@@ -338,8 +347,9 @@ def create_app(engine: Engine, token: str) -> FastAPI:
         return b
 
     @app.put("/api/bots/{bot_id}", dependencies=[api])
-    def bots_update(bot_id: str, body: dict = Body(...)) -> dict:
-        return eng.bots.update(bot_id, **body)
+    def bots_update(request: Request, bot_id: str, body: dict = Body(...)) -> dict:
+        user = current_user(request)
+        return eng.bots.update(bot_id, owner=user, **body)
 
     @app.delete("/api/bots/{bot_id}", dependencies=[api])
     def bots_delete(bot_id: str) -> dict:
@@ -382,20 +392,23 @@ def create_app(engine: Engine, token: str) -> FastAPI:
 
     # -------------------------------------------------------------- threads
     @app.get("/api/bots/{bot_id}/threads", dependencies=[api])
-    def threads_for_bot(bot_id: str) -> list[dict]:
-        main = eng.threads.main_thread(bot_id)
-        rows = eng.threads.list_for_bot(bot_id)
+    def threads_for_bot(request: Request, bot_id: str) -> list[dict]:
+        user = current_user(request)
+        main = eng.threads.main_thread(bot_id, owner=user)
+        rows = eng.threads.list_for_bot(bot_id, owner=user)
         for r in rows:
             r["main"] = r["id"] == main["id"]
         return rows
 
     @app.post("/api/bots/{bot_id}/threads", dependencies=[api])
-    def threads_create(bot_id: str, body: dict = Body(default={})) -> dict:
-        return eng.threads.create(bot_id, body.get("title") or "New thread")
+    def threads_create(request: Request, bot_id: str, body: dict = Body(default={})) -> dict:
+        user = current_user(request)
+        return eng.threads.create(bot_id, body.get("title") or "New thread", owner=user)
 
     @app.get("/api/threads/{tid}", dependencies=[api])
-    def thread_get(tid: str, limit: int = 400) -> dict:
-        th = eng.threads.get(tid)
+    def thread_get(request: Request, tid: str, limit: int = 400) -> dict:
+        user = current_user(request)
+        th = eng.threads.get(tid, owner=user)
         if not th:
             raise HTTPException(404, "No such thread.")
         g = eng.messaging.group_by_thread(tid)
@@ -1221,8 +1234,9 @@ google.accounts.id.renderButton(document.getElementById('gbtn'),
             addr = auth_mod.verify_google(cred, str(eng.settings.get("auth.google_client_id") or ""))
         except ValueError as e:
             return f"<h3>Sign-in failed</h3><p>{e}</p>"
-        if not auth_mod.google_email():
-            auth_mod.set_google_email(addr)
+        if not auth_mod.has_account(addr):
+            auth_mod.create_account(addr, None, google_only=True)
+        auth_mod.set_google_email(addr, addr)
         tok = session_string(addr)
         return (f"<!doctype html><meta charset='utf-8'><body style='{_GOOGLE_BODY_CSS}'><p>Signing you in…</p>"
                 f"<script>location.replace('/auth/google-done?tok=' + encodeURIComponent('{tok}'));</script></body>")
@@ -1312,10 +1326,9 @@ google.accounts.id.renderButton(document.getElementById('gbtn'),
             addr = auth_mod.verify_google(str(r.get("id_token") or ""), cid)
         except Exception as e:  # noqa: BLE001
             return page("Sign-in failed", f"{e}<br>Go back to the app and try again.")
-        if not auth_mod.has_account():
-            return page("No account yet", f"Create your {APP_NAME} account first (email + password), then sign in with Google.")
-        if not auth_mod.google_email():
-            auth_mod.set_google_email(addr)
+        if not auth_mod.has_account(addr):
+            auth_mod.create_account(addr, None, google_only=True)
+        auth_mod.set_google_email(addr, addr)
         tok = session_string(addr)
         deep = f"zerothebot://auth/google-app/go?tok={tok}&email={quote(addr)}"
         return page("Signed in", f"{addr}<br>Taking you back to the app…", deep)

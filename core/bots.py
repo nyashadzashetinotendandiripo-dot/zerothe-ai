@@ -57,27 +57,41 @@ class Bots:
         return min(n, cap) if cap else n
 
     # -- CRUD ------------------------------------------------------------------
-    def get(self, bot_id: str) -> dict | None:
-        return self._out(self.db.one("SELECT * FROM bots WHERE id=?", (bot_id,)))
+    def _owner_clause(self, owner: str | None) -> tuple[str, list]:
+        """SQL + params to scope bots by owner. owner=None -> no filter (admin view).
+        owner='' matches legacy/global bots; owner=email matches that user's bots."""
+        if owner is None:
+            return "", []
+        return " AND (owner = ? OR owner = '')", [owner]
 
-    def get_by_name(self, name: str) -> dict | None:
-        return self._out(self.db.one("SELECT * FROM bots WHERE lower(name)=lower(?) AND archived=0", (name.strip(),)))
+    def get(self, bot_id: str, owner: str | None = None) -> dict | None:
+        clause, params = self._owner_clause(owner)
+        return self._out(self.db.one(f"SELECT * FROM bots WHERE id=?{clause}", [bot_id] + params))
 
-    def find(self, ref: str) -> dict | None:
+    def get_by_name(self, name: str, owner: str | None = None) -> dict | None:
+        clause, params = self._owner_clause(owner)
+        return self._out(self.db.one(f"SELECT * FROM bots WHERE lower(name)=lower(?) AND archived=0{clause}",
+                                     [name.strip()] + params))
+
+    def find(self, ref: str, owner: str | None = None) -> dict | None:
         """Look up by id or name (names are matched case-insensitively, @ prefix tolerated)."""
         ref = (ref or "").strip().lstrip("@")
-        return self.get(ref) or self.get_by_name(ref)
+        return self.get(ref, owner) or self.get_by_name(ref, owner)
 
-    def list(self, include_archived: bool = False) -> list[dict]:
-        rows = self.db.query("SELECT * FROM bots" + ("" if include_archived else " WHERE archived=0")
-                             + " ORDER BY pinned DESC, created_at")
+    def list(self, include_archived: bool = False, owner: str | None = None) -> list[dict]:
+        clause, params = self._owner_clause(owner)
+        rows = self.db.query("SELECT * FROM bots WHERE archived=0" + clause + " ORDER BY pinned DESC, created_at",
+                             params)
+        if include_archived:
+            rows = self.db.query("SELECT * FROM bots" + clause + " ORDER BY pinned DESC, created_at", params)
         return [self._out(r) for r in rows]  # type: ignore
 
-    def create(self, name: str, job: str = "", instructions: str = "", emoji: str = "🤖", **opts: Any) -> dict:
+    def create(self, name: str, job: str = "", instructions: str = "", emoji: str = "🤖",
+               owner: str | None = None, **opts: Any) -> dict:
         name = (name or "").strip()
         if not name:
             raise BotError("A Bot needs a name.")
-        if self.get_by_name(name):
+        if self.get_by_name(name, owner):
             raise BotError(f"There is already a Bot named {name}.")
         mode = opts.get("approval_mode") or self.settings.get("approval.default_mode", "ask")
         row = {"id": new_id(), "name": name[:40], "emoji": emoji or "🤖", "avatar": str(opts.get("avatar", "") or ""),
@@ -89,13 +103,13 @@ class Bots:
                "net_mode": opts.get("net_mode", "inherit"), "net_allow": jdump(opts.get("net_allow", [])),
                "net_deny": jdump(opts.get("net_deny", [])), "grants": jdump(opts.get("grants", [])),
                "proactive": opts.get("proactive", "off"), "template": opts.get("template", ""),
-               "created_at": now(), "updated_at": now()}
+               "owner": owner or "", "created_at": now(), "updated_at": now()}
         self.db.insert("bots", row)
         self.events.publish("bots", change="created", bot_id=row["id"])
-        return self.get(row["id"])  # type: ignore
+        return self.get(row["id"], owner)  # type: ignore
 
-    def update(self, bot_id: str, **fields: Any) -> dict:
-        if not self.get(bot_id):
+    def update(self, bot_id: str, owner: str | None = None, **fields: Any) -> dict:
+        if not self.get(bot_id, owner):
             raise BotError("No such Bot.")
         patch: dict[str, Any] = {}
         for k, v in fields.items():
@@ -103,7 +117,7 @@ class Bots:
                 continue
             if k == "name":
                 v = str(v).strip()[:40]
-                other = self.get_by_name(v)
+                other = self.get_by_name(v, owner)
                 if not v or (other and other["id"] != bot_id):
                     raise BotError("Name is empty or already used by another Bot.")
             if k in JSON_FIELDS:
@@ -124,20 +138,21 @@ class Bots:
         patch["updated_at"] = now()
         self.db.update("bots", bot_id, patch)
         self.events.publish("bots", change="updated", bot_id=bot_id)
-        return self.get(bot_id)  # type: ignore
+        return self.get(bot_id, owner)  # type: ignore
 
-    def duplicate(self, bot_id: str, name: str | None = None) -> dict:
+    def duplicate(self, bot_id: str, name: str | None = None, owner: str | None = None) -> dict:
         """A new Bot with the same job, instructions, model, approval mode and limits. It does not copy access grants,
         conversations or memory: the copy starts clean and asks for access itself."""
-        src = self.get(bot_id)
+        src = self.get(bot_id, owner)
         if not src:
             raise BotError("No such Bot.")
         base = (name or f"{src['name']} copy").strip()[:36]
         new_name, n = base, 1
-        while self.get_by_name(new_name):
+        while self.get_by_name(new_name, owner):
             n += 1
             new_name = f"{base} {n}"
         bot = self.create(new_name, job=src["job"], instructions=src["instructions"], emoji=src["emoji"], profile=src["profile"], model=src["model"],
+                          owner=owner,
                           approval_mode=src["approval_mode"], step_limit=src["step_limit"], net_mode=src["net_mode"], net_allow=src["net_allow"],
                           net_deny=src["net_deny"], proactive=src["proactive"], template=src["template"])
         if src["daily_token_limit"]:

@@ -65,24 +65,35 @@ class Threads:
         self.db, self.events, self._names, self._describe = db, events, names, describe
 
     # -- threads --------------------------------------------------------------
-    def create(self, bot_id: str | None, title: str = "New thread", kind: str = "dm", group_id: str | None = None) -> dict:
+    def create(self, bot_id: str | None, title: str = "New thread", kind: str = "dm",
+               group_id: str | None = None, owner: str | None = None) -> dict:
         tid = new_id()
         self.db.insert("threads", {"id": tid, "bot_id": bot_id or "", "group_id": group_id or "", "kind": kind, "title": title,
-                                   "created_at": now(), "updated_at": now()})
+                                   "owner": owner or "", "created_at": now(), "updated_at": now()})
         self.events.publish("threads", change="created", thread_id=tid, bot_id=bot_id or "")
-        return self.get(tid)  # type: ignore
+        return self.get(tid, owner)  # type: ignore
 
-    def get(self, tid: str) -> dict | None:
-        return self.db.one("SELECT * FROM threads WHERE id=?", (tid,))
+    def get(self, tid: str, owner: str | None = None) -> dict | None:
+        if owner is None:
+            return self.db.one("SELECT * FROM threads WHERE id=?", (tid,))
+        return self.db.one("SELECT * FROM threads WHERE id=? AND (owner = ? OR owner = '')", (tid, owner))
 
-    def list_for_bot(self, bot_id: str, kinds: tuple[str, ...] = ("dm", "routine")) -> list[dict]:
+    def list_for_bot(self, bot_id: str, kinds: tuple[str, ...] = ("dm", "routine"),
+                     owner: str | None = None) -> list[dict]:
         marks = ",".join("?" for _ in kinds)
-        return self.db.query(f"SELECT * FROM threads WHERE bot_id=? AND kind IN ({marks}) AND archived=0 ORDER BY updated_at DESC",
-                             (bot_id, *kinds))
+        if owner is None:
+            return self.db.query(f"SELECT * FROM threads WHERE bot_id=? AND kind IN ({marks}) AND archived=0 ORDER BY updated_at DESC",
+                                 (bot_id, *kinds))
+        return self.db.query(f"SELECT * FROM threads WHERE bot_id=? AND (owner = ? OR owner = '') AND kind IN ({marks}) AND archived=0 "
+                             "ORDER BY updated_at DESC", (bot_id, owner, *kinds))
 
-    def main_thread(self, bot_id: str) -> dict:
-        t = self.db.one("SELECT * FROM threads WHERE bot_id=? AND kind='dm' AND archived=0 ORDER BY created_at LIMIT 1", (bot_id,))
-        return t or self.create(bot_id, "Main")
+    def main_thread(self, bot_id: str, owner: str | None = None) -> dict:
+        if owner is None:
+            t = self.db.one("SELECT * FROM threads WHERE bot_id=? AND kind='dm' AND archived=0 ORDER BY created_at LIMIT 1", (bot_id,))
+        else:
+            t = self.db.one("SELECT * FROM threads WHERE bot_id=? AND kind='dm' AND (owner = ? OR owner = '') AND archived=0 "
+                            "ORDER BY created_at LIMIT 1", (bot_id, owner))
+        return t or self.create(bot_id, "Main", owner=owner)
 
     def rename(self, tid: str, title: str) -> None:
         self.db.update("threads", tid, {"title": title[:80]})

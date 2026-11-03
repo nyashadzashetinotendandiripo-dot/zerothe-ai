@@ -1,18 +1,15 @@
-"""Account sign-in for the standalone phone/cloud app.
+"""Multi-account sign-in for the ZerotheBot app.
 
 Two ways in:
-  - Email + password — the account is created on first run; only a salted
-    PBKDF2 hash is stored, never the password itself.
+  - Email + password — the account is created on signup; only a salted PBKDF2
+    hash is stored, never the password itself.
   - Google — the Android app obtains an ID token from Google Play services and
-    the backend verifies it against Google's public keys (RS256), trusting the
-    email it carries.
+    the backend verifies it against Google's public keys (RS256).
 
-The backend is still single-owner: whoever signs in first owns the instance.
-A Google sign-in is accepted for any email (the owner may restrict it to their
-own address with ``google_email``).
-
-On headless machines with no OS credential store (cloud VMs, Docker) the
-account lives in a 0600 JSON file holding only the hash.
+Each account lives in its own 0600 JSON file under ``data_dir/accounts/`` so
+many users can sign up on the same server instance. The first account created
+is treated as the admin/owner for backward compatibility (desktop scripts,
+service token, etc.) but any account can log in and use the app.
 """
 from __future__ import annotations
 
@@ -27,15 +24,45 @@ from core import secrets as secrets_mod
 
 MIN_LENGTH = 8
 _ITERATIONS = 210_000
-_ACCOUNT_FILE = "account.json"
+_ACCOUNTS_DIR = "accounts"
+_LEGACY_ACCOUNT_FILE = "account.json"
 _GOOGLE_ISSUERS = {"https://accounts.google.com", "accounts.google.com"}
 _GOOGLE_CERTS_URL = "https://www.googleapis.com/oauth2/v3/certs"
 _CERT_CACHE_SECONDS = 3600
 
 
-def _account_path():  # lazy import: core.paths is heavyweight for unit tests
+def _accounts_dir():  # lazy import: core.paths is heavyweight for unit tests
     from core import paths
-    return paths.data_dir() / _ACCOUNT_FILE
+    d = paths.data_dir() / _ACCOUNTS_DIR
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+def _account_path(email: str):
+    from core import paths
+    safe = (email or "").strip().lower().replace("@", "_at_").replace(".", "_dot_")
+    return paths.data_dir() / _ACCOUNTS_DIR / (safe + ".json")
+
+
+def _legacy_account_path():
+    from core import paths
+    return paths.data_dir() / _LEGACY_ACCOUNT_FILE
+
+
+def _migrate_legacy() -> None:
+    """Move a legacy single account.json into the accounts/ directory."""
+    legacy = _legacy_account_path()
+    if legacy.exists() and not any(_accounts_dir().glob("*.json")):
+        try:
+            data = json.loads(legacy.read_text())
+        except (OSError, ValueError):
+            return
+        if data.get("email"):
+            _write_account(data["email"], data)
+            try:
+                legacy.unlink()
+            except OSError:
+                pass
 
 
 def _b64url_decode(s: str) -> bytes:
@@ -46,15 +73,15 @@ def _hash_password(password: str, salt: bytes) -> str:
     return hashlib.pbkdf2_hmac("sha256", password.encode(), salt, _ITERATIONS).hex()
 
 
-def _read_account() -> dict:
+def _read_account(email: str) -> dict:
     try:
-        return json.loads(_account_path().read_text())
+        return json.loads(_account_path(email).read_text())
     except (OSError, ValueError):
         return {}
 
 
-def _write_account(data: dict) -> None:
-    p = _account_path()
+def _write_account(email: str, data: dict) -> None:
+    p = _account_path(email)
     p.parent.mkdir(parents=True, exist_ok=True)
     p.write_text(json.dumps(data))
     try:
@@ -63,55 +90,96 @@ def _write_account(data: dict) -> None:
         pass
 
 
-def has_account() -> bool:
-    return bool(_read_account().get("email"))
+def _normalize(email: str) -> str:
+    return (email or "").strip().lower()
 
 
-def delete_account() -> None:
-    """Remove the account credentials so the app returns to first-run setup."""
+def has_account(email: str | None = None) -> bool:
+    """True if any account exists, or if the given email has an account."""
+    _migrate_legacy()
+    if email:
+        return bool(_read_account(_normalize(email)).get("email"))
+    return any(f.suffix == ".json" for f in _accounts_dir().glob("*.json"))
+
+
+def list_accounts() -> list[str]:
+    """Return every registered email (sorted)."""
+    _migrate_legacy()
+    out = []
+    for f in sorted(_accounts_dir().glob("*.json")):
+        try:
+            acc = json.loads(f.read_text())
+            if acc.get("email"):
+                out.append(acc["email"])
+        except (OSError, ValueError):
+            pass
+    return out
+
+
+def email() -> str:
+    """Backward-compat: return the first registered email (legacy "owner")."""
+    accts = list_accounts()
+    return accts[0] if accts else ""
+
+
+def delete_account(email: str) -> None:
+    """Remove the account credentials for the given email."""
     try:
-        _account_path().unlink()
+        _account_path(_normalize(email)).unlink()
     except OSError:
         pass
 
 
-def email() -> str:
-    return _read_account().get("email", "")
+def google_email(email: str) -> str:
+    """Optional per-account Google allow-list: empty means any verified Google email may sign in."""
+    return _read_account(_normalize(email)).get("google_email", "")
 
 
-def google_email() -> str:
-    """Optional allow-list: empty means any verified Google email may sign in."""
-    return _read_account().get("google_email", "")
-
-
-def set_google_email(addr: str) -> None:
-    """Bind the owner's Google address so only that account can sign in."""
-    acc = _read_account()
+def set_google_email(email: str, addr: str) -> None:
+    """Bind a Google address to the given account."""
+    email = _normalize(email)
+    acc = _read_account(email)
     if not acc.get("email"):
         raise ValueError("Create an account first.")
     acc["google_email"] = (addr or "").strip().lower()
-    _write_account(acc)
+    _write_account(email, acc)
 
 
-def create_account(addr: str, password: str) -> None:
-    addr = (addr or "").strip().lower()
+def create_account(addr: str, password: str | None = None, *, google_only: bool = False) -> None:
+    """Create an account for ``addr``.
+
+    ``password`` is required unless ``google_only`` is set (Google sign-up).
+    """
+    addr = _normalize(addr)
     if "@" not in addr or "." not in addr.split("@")[-1]:
         raise ValueError("That email address does not look right.")
-    pw = password or ""
-    if len(pw) < MIN_LENGTH:
-        raise ValueError(f"Password must be at least {MIN_LENGTH} characters.")
-    salt = os.urandom(16)
-    acc = _read_account()
-    acc["email"] = addr
-    acc["hash"] = f"pbkdf2${_ITERATIONS}${salt.hex()}${_hash_password(pw, salt)}"
-    _write_account(acc)
+    if has_account(addr):
+        raise ValueError("An account with that email already exists.")
+    if not google_only:
+        pw = password or ""
+        if len(pw) < MIN_LENGTH:
+            raise ValueError(f"Password must be at least {MIN_LENGTH} characters.")
+        salt = os.urandom(16)
+        acc = {
+            "email": addr,
+            "hash": f"pbkdf2${_ITERATIONS}${salt.hex()}${_hash_password(pw, salt)}",
+            "google_only": False,
+            "created_at": time.time(),
+        }
+    else:
+        acc = {
+            "email": addr,
+            "hash": None,
+            "google_only": True,
+            "created_at": time.time(),
+        }
+    _write_account(addr, acc)
 
 
-def verify_password(addr: str, password: str) -> bool:
-    acc = _read_account()
+def verify_password(email: str, password: str) -> bool:
+    email = _normalize(email)
+    acc = _read_account(email)
     if not acc.get("email") or not acc.get("hash"):
-        return False
-    if (addr or "").strip().lower() != acc["email"]:
         return False
     try:
         _algo, iters, salt_hex, hexdigest = acc["hash"].split("$")
@@ -121,16 +189,18 @@ def verify_password(addr: str, password: str) -> bool:
     return hmac.compare_digest(cand, hexdigest)
 
 
-def set_password(password: str) -> None:
-    """Change the password of the existing account."""
-    acc = _read_account()
+def set_password(email: str, password: str) -> None:
+    """Change the password of the given account."""
+    email = _normalize(email)
+    acc = _read_account(email)
     if not acc.get("email"):
         raise ValueError("Create an account first.")
     if len(password or "") < MIN_LENGTH:
         raise ValueError(f"Password must be at least {MIN_LENGTH} characters.")
     salt = os.urandom(16)
     acc["hash"] = f"pbkdf2${_ITERATIONS}${salt.hex()}${_hash_password(password, salt)}"
-    _write_account(acc)
+    acc["google_only"] = False
+    _write_account(email, acc)
 
 
 # --------------------------------------------------------------------- Google
@@ -151,11 +221,7 @@ def _google_keys() -> list[dict]:
 
 
 def verify_google(id_token: str, audience: str = "") -> str:
-    """Verify a Google ID token; return the verified email. Raises ValueError.
-
-    ``audience`` is our OAuth client id: when given, tokens minted for any other
-    app are rejected (otherwise a token from a stranger's app would sign in).
-    """
+    """Verify a Google ID token; return the verified email. Raises ValueError."""
     if not id_token or id_token.count(".") != 2:
         raise ValueError("That Google sign-in did not come through.")
     try:
@@ -195,7 +261,11 @@ def verify_google(id_token: str, audience: str = "") -> str:
     addr = payload.get("email")
     if not addr or not payload.get("email_verified"):
         raise ValueError("Google did not verify an email address for that account.")
-    allow = google_email()
-    if allow and addr.lower() != allow.lower():
-        raise ValueError("That Google account is not the owner of this app.")
-    return addr.lower()
+    addr = addr.lower()
+    # Per-account allow-list: if this account has google_email set, only that
+    # address may sign in with Google. If not set, any verified Google email works.
+    acc = _read_account(addr)
+    allow = acc.get("google_email") if acc.get("email") else None
+    if allow and addr != allow.lower():
+        raise ValueError("That Google account is not linked to this app account.")
+    return addr
