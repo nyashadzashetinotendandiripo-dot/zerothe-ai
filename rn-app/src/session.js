@@ -207,6 +207,55 @@ export async function approvalDecide(base, aid, approve, remember = false, note 
   return d;
 }
 
+// ---------------------------------------------------------------- email (IMAP) connector
+export async function emailConfigure(base, host, port, username, password, useSsl = true) {
+  const b = String(base || '').replace(/\/+$/, '');
+  const r = await fetch(b + '/api/email/imap/configure', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ host, port, username, password, use_ssl: useSsl }),
+  });
+  const d = await r.json().catch(() => ({}));
+  if (r.status !== 200) throw new Error(d.error || d.detail || 'Could not configure IMAP.');
+  return d;
+}
+
+export async function emailPoll(base) {
+  const b = String(base || '').replace(/\/+$/, '');
+  const r = await fetch(b + '/api/email/imap/poll', { headers: { 'Content-Type': 'application/json' } });
+  const d = await r.json().catch(() => ({}));
+  if (r.status !== 200) throw new Error(d.error || d.detail || 'Could not poll email.');
+  return d;
+}
+
+export async function emailCreateApprovals(base) {
+  const b = String(base || '').replace(/\/+$/, '');
+  const r = await fetch(b + '/api/email/imap/create-approvals', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+  });
+  const d = await r.json().catch(() => ({}));
+  if (r.status !== 200) throw new Error(d.error || d.detail || 'Could not create approvals.');
+  return d;
+}
+
+// ---------------------------------------------------------------- document upload & parsing
+export async function documentUpload(base, fileUri, fileName) {
+  const b = String(base || '').replace(/\/+$/, '');
+  const form = new FormData();
+  form.append('file', {
+    uri: fileUri,
+    name: fileName,
+    type: 'application/pdf',
+  } as any);
+  const r = await fetch(b + '/api/document/upload', {
+    method: 'POST',
+    body: form,
+    headers: { 'Content-Type': 'multipart/form-data' },
+  });
+  const d = await r.json().catch(() => ({}));
+  if (r.status !== 200) throw new Error(d.error || d.detail || 'Could not upload document.');
+  return d;
+}
+
 // Sign in with Google: the reader app hands the verified Google ID token here
 // and the server returns { ok, email, session } usable as the Bearer token.
 export async function loginGoogle(base, idToken) {
@@ -238,4 +287,66 @@ export function connectEvents({ since, onEvent, onConn, onSince }) {
   };
   open();
   return () => { stop = true; clearTimeout(timer); es && es.close(); es = null; };
+}
+
+// ---------------------------------------------------------------- browser-in-chat (agent computer use)
+export async function browserNavigate(base, url) {
+  const b = String(base || '').replace(/\/+$/, '');
+  const r = await fetch(b + '/api/browser/navigate', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ url }),
+  });
+  const d = await r.json().catch(() => ({}));
+  if (r.status !== 200) throw new Error(d.error || d.detail || 'Browser navigate failed.');
+  return d;
+}
+
+export async function browserClick(base, selector) {
+  const b = String(base || '').replace(/\/+$/, '');
+  const r = await fetch(b + '/api/browser/click', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ selector }),
+  });
+  const d = await r.json().catch(() => ({}));
+  if (r.status !== 200) throw new Error(d.error || d.detail || 'Browser click failed.');
+  return d;
+}
+
+export async function browserType(base, selector, text) {
+  const b = String(base || '').replace(/\/+$/, '');
+  const r = await fetch(b + '/api/browser/type', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ selector, text }),
+  });
+  const d = await r.json().catch(() => ({}));
+  if (r.status !== 200) throw new Error(d.error || d.detail || 'Browser type failed.');
+  return d;
+}
+
+export async function browserScreenshot(base) {
+  const b = String(base || '').replace(/\/+$/, '');
+  const r = await fetch(b + '/api/browser/screenshot', { headers: { 'Content-Type': 'application/json' } });
+  const d = await r.json().catch(() => ({}));
+  if (r.status !== 200) throw new Error(d.error || d.detail || 'Browser screenshot failed.');
+  return d;
+}
+
+// ---------------------------------------------------------------- agent-initiated proactive messages
+export async function agentMessage(base, text, threadId = '') {
+  const b = String(base || '').replace(/\/+$/, '');
+  const r = await fetch(b + '/api/agent/message', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ text, thread_id: threadId }),
+  });
+  const d = await r.json().catch(() => ({}));
+  if (r.status !== 200) throw new Error(d.error || d.detail || 'Agent message failed.');
+  return d;
+}
+
+export async function agentMessages(base) {
+  const b = String(base || '').replace(/\/+$/, '');
+  const r = await fetch(b + '/api/agent/messages', { headers: { 'Content-Type': 'application/json' } });
+  const d = await r.json().catch(() => ({}));
+  if (r.status !== 200) throw new Error(d.error || d.detail || 'Could not load agent messages.');
+  return d;
 }

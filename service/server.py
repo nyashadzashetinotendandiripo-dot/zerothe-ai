@@ -26,6 +26,8 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Redirect
 
 from core import APP_NAME, VERSION, backup as backup_mod, commands, packages, paths, secrets, skills as skills_mod
 from core import auth as auth_mod
+from core import email_connector as email_mod
+from core import document_parser as doc_parser_mod
 from core import host as host_mod
 from core.browser import BrowserError
 from core.bots import BotError
@@ -1418,7 +1420,140 @@ google.accounts.id.renderButton(document.getElementById('gbtn'),
         eng.mcp.restart(sid)
         return {"ok": True}
 
-    # --------------------------------------------------------------- MCP HTTP proxy
+    # ---------------------------------------------------------------- email (IMAP) connector
+    @app.post("/api/email/imap/configure", dependencies=[api])
+    def email_configure(request: Request, body: dict = Body(...)) -> dict:
+        """Configure IMAP credentials for the current user."""
+        user = current_user(request)
+        email_mod.set_imap_config(
+            user,
+            str(body.get("host", "")),
+            int(body.get("port", 993)),
+            str(body.get("username", "")),
+            str(body.get("password", "")),
+            bool(body.get("use_ssl", True)),
+        )
+        return {"ok": True, "email": user}
+
+    @app.get("/api/email/imap/poll", dependencies=[api])
+    def email_poll(request: Request) -> dict:
+        """Poll IMAP inbox for actionable emails."""
+        user = current_user(request)
+        connector = email_mod.EmailConnector(eng.db, eng.settings, eng.admin, eng.events)
+        items = connector.poll_inbox(user, limit=20)
+        return {"items": items, "count": len(items)}
+
+    @app.post("/api/email/imap/create-approvals", dependencies=[api])
+    def email_create_approvals(request: Request) -> dict:
+        """Convert polled email actions into approval requests."""
+        user = current_user(request)
+        connector = email_mod.EmailConnector(eng.db, eng.settings, eng.admin, eng.events)
+        items = connector.poll_inbox(user, limit=20)
+        created = connector.create_approvals(items, eng)
+        return {"created": created, "count": len(created)}
+
+    # ---------------------------------------------------------------- document upload & parsing
+    @app.post("/api/document/upload", dependencies=[api])
+    async def document_upload(request: Request) -> dict:
+        """Upload a PDF/document and extract action items as approvals."""
+        user = current_user(request)
+        form = await request.form()
+        file = form.get("file")
+        if not file:
+            raise HTTPException(400, "No file provided.")
+        content = await file.read()
+        file_name = str(file.filename or "document.pdf")
+
+        # Save to a temp file for parsing
+        import tempfile, os
+        tmp = tempfile.NamedTemporaryFile(delete=False, suffix=os.path.splitext(file_name)[1])
+        tmp.write(content)
+        tmp.close()
+
+        try:
+            parser = doc_parser_mod.DocumentParser()
+            created = parser.create_approvals_from_doc(tmp.name, file_name, user, eng)
+            return {"ok": True, "file": file_name, "created": created, "count": len(created)}
+        finally:
+            try:
+                os.unlink(tmp.name)
+            except OSError:
+                pass
+
+    # ---------------------------------------------------------------- browser-in-chat (agent computer use)
+    @app.post("/api/browser/navigate", dependencies=[api])
+    def browser_navigate(request: Request, body: dict = Body(...)) -> dict:
+        """Agent navigates to a URL in the embedded browser (Muse-style booking)."""
+        user = current_user(request)
+        url = str(body.get("url", "")).strip()
+        if not url:
+            raise HTTPException(400, "URL required.")
+        result = eng.computer.browser.navigate(url, owner=user)
+        return {"ok": True, "url": url, "result": result}
+
+    @app.post("/api/browser/click", dependencies=[api])
+    def browser_click(request: Request, body: dict = Body(...)) -> dict:
+        """Agent clicks an element in the embedded browser."""
+        user = current_user(request)
+        selector = str(body.get("selector", "")).strip()
+        result = eng.computer.browser.click(selector, owner=user)
+        return {"ok": True, "selector": selector, "result": result}
+
+    @app.post("/api/browser/type", dependencies=[api])
+    def browser_type(request: Request, body: dict = Body(...)) -> dict:
+        """Agent types text into a field in the embedded browser."""
+        user = current_user(request)
+        selector = str(body.get("selector", "")).strip()
+        text = str(body.get("text", "")).strip()
+        result = eng.computer.browser.type(selector, text, owner=user)
+        return {"ok": True, "selector": selector, "result": result}
+
+    @app.get("/api/browser/screenshot", dependencies=[api])
+    def browser_screenshot(request: Request) -> dict:
+        """Get a screenshot of the current browser state for the chat view."""
+        user = current_user(request)
+        result = eng.computer.browser.screenshot(owner=user)
+        return {"ok": True, "screenshot": result}
+
+    # ---------------------------------------------------------------- agent-initiated proactive messages
+    @app.post("/api/agent/message", dependencies=[api])
+    def agent_message(request: Request, body: dict = Body(...)) -> dict:
+        """Agent sends a proactive message to the user (Muse-style: 'Found the field trip form...')."""
+        user = current_user(request)
+        text = str(body.get("text", "")).strip()
+        if not text:
+            raise HTTPException(400, "Message text required.")
+        thread_id = str(body.get("thread_id", ""))
+
+        # Create or find a thread for this proactive message
+        bots = eng.bots.list(owner=user)
+        if not bots:
+            raise HTTPException(400, "No bots found.")
+        bot = bots[0]
+        if not thread_id:
+            thread = eng.threads.create(bot_id=bot["id"], title="Agent message", kind="dm", owner=user)
+            thread_id = thread["id"]
+
+        # Save as a user-facing agent message
+        eng.threads.add(thread_id, "agent", "text", [{"type": "text", "text": text}],
+                        publish=True, bot_id=bot["id"])
+        eng.events.publish("message", thread_id=thread_id, bot_id=bot["id"],
+                           items=eng.threads.display([eng.db.one("SELECT * FROM messages ORDER BY id DESC LIMIT 1")], eng.bots.names()),
+                           kind="agent_proactive")
+        return {"ok": True, "thread_id": thread_id}
+
+    @app.get("/api/agent/messages", dependencies=[api])
+    def agent_messages(request: Request) -> dict:
+        """Get recent agent-initiated proactive messages for the current user."""
+        user = current_user(request)
+        bots = eng.bots.list(owner=user)
+        if not bots:
+            return {"messages": [], "count": 0}
+        bot_ids = [b["id"] for b in bots]
+        rows = eng.db.query(
+            "SELECT * FROM messages WHERE author='agent' AND bot_id IN (" + ",".join("?" * len(bot_ids)) + ") "
+            "ORDER BY created_at DESC LIMIT 20", bot_ids)
+        return {"messages": rows, "count": len(rows)}
     # Proxies StreamableHTTP MCP requests to locally-running MCP servers
     # (e.g. the QuickBooks MCP server on port 3333) so they are reachable
     # over the public HTTPS URL without exposing extra ports.
