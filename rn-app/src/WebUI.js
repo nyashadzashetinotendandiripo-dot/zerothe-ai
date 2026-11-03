@@ -212,6 +212,7 @@ const W = StyleSheet.create({
   financeCardVal: { color: '#ffffff', fontSize: 28, fontWeight: '800' },
   financeCardCap: { color: 'rgba(255,255,255,.7)', fontSize: 12, fontWeight: '600' },
   financeCardSub: { color: 'rgba(255,255,255,.5)', fontSize: 11, marginTop: 2 },
+});
 
 // ---------------------------------------------------------------- top bar
 export function WebTopBar({ title, showBack, onBack, conn, showSearch, onSearch, showNew, onNew, account, onAvatar, botForTitle }) {
