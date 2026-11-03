@@ -78,7 +78,6 @@ export function stateOf(busy, id) {
   if (st.status === 'waiting_approval') return { key: 'wait', label: 'needs you', chip: [W.chipWait, C.warn] };
   return { key: 'work', label: st.status === 'retrying' ? 'retrying' : 'working', chip: [W.chipWork, C.work] };
 }
-export const chipSkills = { work: [W.chipWork, C.work], wait: [W.chipWait, C.warn] };
 
 // ---------------------------------------------------------------- sheet style
 const W = StyleSheet.create({
