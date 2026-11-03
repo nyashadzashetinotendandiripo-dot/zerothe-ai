@@ -188,9 +188,9 @@ function ZbRoot() {
         });
       }
       if (ev.type === 'bots' || ev.type === 'groups' || ev.type === 'approval') refresh();
-      if (ev.type === 'notification') { setNoteBadge((b) => b + 1); refresh(); }
       if (['message', 'delta', 'delta_reset', 'turn', 'approval'].includes(ev.type)) chatHandler.current && chatHandler.current(ev);
       if (ev.type === 'notification') refresh();
+    } catch (e) {
       note('event', e, 'app event ' + String(ev && ev.type));
     }
   }, [refresh, chatHandler]);
@@ -199,8 +199,8 @@ function ZbRoot() {
   useEffect(() => {
     if (!signed) return undefined;
     evtRef.current = connectEvents({ since: lastRef.current, onEvent, onConn: setConn, onSince: () => {} });
-    api('/api/notifications?unread_only=1&limit=200').then((rows) => setNoteBadge(Array.isArray(rows) ? rows.length : 0)).catch(() => {});
     return evtRef.current;
+  }, [signed, onEvent]);
 
   const openBot = async (bot) => {
     // Open the chat immediately: the bot list already carries the main thread
