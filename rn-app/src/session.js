@@ -245,7 +245,7 @@ export async function documentUpload(base, fileUri, fileName) {
     uri: fileUri,
     name: fileName,
     type: 'application/pdf',
-  } as any);
+  });
   const r = await fetch(b + '/api/document/upload', {
     method: 'POST',
     body: form,
