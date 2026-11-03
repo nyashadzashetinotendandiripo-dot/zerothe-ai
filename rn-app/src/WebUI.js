@@ -223,11 +223,14 @@ export const TABS = [
   ['plugins', 'Plugins'],
   ['usage', 'Usage'],
   ['actionlog', 'Action log'],
+  ['plan', 'Plan'],
+  ['admin', 'Admin'],
   ['set', 'Settings'],
 ];
-export function TabSheet({ open, tab, inboxBadge, onGo, onClose, initial }) {
+export function TabSheet({ open, tab, inboxBadge, onGo, onClose, initial, tabs }) {
   const ins = useSafeAreaInsets();
   if (!initial && !open) return null;
+  const TABS_LIST = tabs || TABS;
   return (
     <Modal transparent visible={open} animationType="slide" onRequestClose={onClose}>
       <View style={{ flex: 1 }}>
@@ -235,7 +238,7 @@ export function TabSheet({ open, tab, inboxBadge, onGo, onClose, initial }) {
         <View style={[W.sheet, { paddingBottom: 6 + (ins.bottom || 0) }]}>
           <View style={W.grip} collapsable={false} />
           <ScrollView showsVerticalScrollIndicator={false} style={{ maxHeight: '82%' }}>
-            {TABS.map(([k, lbl]) => {
+            {TABS_LIST.map(([k, lbl]) => {
               const on = tab === k || (k === 'bots' && tab === 'chat');
               return (
                 <Pressable key={k} onPress={() => onGo(k)} style={({ pressed }) => [W.tabRow, pressed && { opacity: .85 }]}>
@@ -1099,3 +1102,343 @@ export function SearchPalette({ onClose, onOpenBot, onOpenThread, onGoView }) {
     </Modal>
   );
 }
+
+// ---------------------------------------------------------------- plan (billing)
+const PLAN_LABEL = { free: 'Free', starter: 'Starter $2/mo', pro: 'Pro $5/mo', team: 'Team $10/mo', business: 'Business $20/mo' };
+const PLAN_DESC = {
+  free: '3 bots · 50K tokens/week · community support',
+  starter: '10 bots · 200K tokens/week · email support · Google sign-in',
+  pro: '50 bots · 1M tokens/week · priority email · API access · routines',
+  team: '100 bots · 5M tokens/week · 5 team members · Discord support',
+  business: 'Unlimited bots · 20M tokens/week · unlimited team · phone support',
+};
+
+export function PlanScreen({ me: meProp, onUpgrade }) {
+  const [plan, setPlan] = useState(meProp.plan || 'free');
+  const limits = auth_mod_plan_limits(plan);
+  const saving = useRef(false);
+  const currentPrice = auth_mod_plan_limits(meProp.plan || 'free').price_usd || 0;
+  const canUpgradeCurrent = (auth_mod_plan_limits(plan).price_usd || 0) > currentPrice;
+  const doUpgrade = async () => {
+    if (saving.current) return;
+    saving.current = true;
+    try {
+      await onUpgrade(plan);
+      setPlan(plan);
+      Alert.alert('Plan updated', 'Your plan is now ' + PLAN_LABEL[plan] + '.');
+    } catch (e) {
+      Alert.alert('Upgrade failed', String(e.message || e));
+    } finally { saving.current = false; }
+  };
+  return (
+    <View style={W.screen}>
+      <WebTopBar title="Plan & billing" showBack conn={false} account={meProp.email} onAvatar={() => {}} />
+      <ScrollView contentContainerStyle={{ paddingBottom: 30, paddingTop: 10 }} showsVerticalScrollIndicator={false}>
+        <View style={{ paddingHorizontal: 16 }}>
+          <Text style={{ color: C.muted, fontSize: 12, fontWeight: '600', textTransform: 'uppercase', letterSpacing: 1, marginBottom: 10 }}>Current plan</Text>
+          <View style={[W.card, { flexDirection: 'row', alignItems: 'center', gap: 12, padding: 14, marginBottom: 16, borderLeftWidth: 4, borderColor: C.ok }]}>
+            <Text style={{ color: C.text, fontSize: 17, fontWeight: '800' }}>{PLAN_LABEL[plan]}</Text>
+            <Text style={{ color: C.muted, fontSize: 12 }}>{limits.price_usd === 0 ? 'Free forever' : '$' + limits.price_usd + '/' + limits.interval}</Text>
+          </View>
+          <Text style={{ color: C.muted, fontSize: 12, fontWeight: '600', textTransform: 'uppercase', letterSpacing: 1, marginBottom: 10 }}>Upgrade to</Text>
+          {Object.entries(auth_mod_all_plans()).map(([key, p]) => {
+            const isCurrent = key === plan;
+            const canUpgrade = p.price_usd > (limits.price_usd || 0);
+            return (
+              <Pressable key={key} onPress={isCurrent ? undefined : () => setPlan(key)} disabled={isCurrent || !canUpgrade}
+                style={[W.card, { flexDirection: 'row', alignItems: 'center', gap: 12, padding: 14, marginBottom: 10, opacity: (!canUpgrade && !isCurrent) ? 0.55 : 1, borderWidth: isCurrent ? 2 : 0, borderColor: isCurrent ? C.ok : 'transparent' }]}>
+                <View style={{ flex: 1, minWidth: 0 }}>
+                  <Text style={{ color: C.text, fontSize: 15, fontWeight: '700' }}>{PLAN_LABEL[key]}</Text>
+                  <Text style={W.gSub} numberOfLines={2}>{PLAN_DESC[key]}</Text>
+                </View>
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                  {isCurrent ? <Text style={{ color: C.ok, fontWeight: '800' }}>Current</Text> :
+                   !canUpgrade ? <Text style={{ color: C.muted, fontSize: 11 }}>Included</Text> :
+                   <Text style={{ color: C.ok, fontWeight: '700' }}>${'$' + p.price_usd + '/mo'}</Text>}
+                </View>
+                {!isCurrent && canUpgrade ? <Text style={{ color: C.muted, fontSize: 11 }}>▸</Text> : null}
+              </Pressable>
+            );
+          })}
+          <View style={{ marginTop: 14, paddingHorizontal: 4 }}>
+            <Pressable onPress={doUpgrade} disabled={saving.current || !canUpgradeCurrent()}
+              style={[W.wideBlack, { marginTop: 8, opacity: (saving.current || !canUpgradeCurrent()) ? 0.5 : 1 }]}>
+              <Text style={{ color: '#fff', fontWeight: '800', fontSize: 15 }}>
+                {saving.current ? 'Updating…' : 'Switch to ' + PLAN_LABEL[plan]}
+              </Text>
+            </Pressable>
+          </View>
+          <View style={{ marginTop: 12, alignItems: 'center' }}>
+            <Pressable onPress={() => Alert.alert('Billing', 'Upgrades are handled by the server admin. Pick a plan above and tap Switch — your server owner will activate it (Stripe checkout comes next).')}>
+              <Text style={{ color: C.muted, fontSize: 12, fontWeight: '600' }}>How paid plans work</Text>
+            </Pressable>
+          </View>
+        </View>
+      </ScrollView>
+    </View>
+  );
+}
+
+// ---------------------------------------------------------------- admin: stats
+export function AdminStatsScreen({ stats, onRefresh }) {
+  const [d, setD] = useState(stats || null);
+  const [loading, setLoading] = useState(!d);
+  useEffect(() => { (async () => {
+    if (loading) {
+      try { setD(await api('/api/admin/stats')); } catch (e) { setD({}); }
+      finally { setLoading(false); }
+    } else if (onRefresh) { onRefresh(); }
+  })(); }, []);
+  const big = (cap, val, sub) => (
+    <View style={[W.card, { flex: 1, minWidth: 0, padding: 14, gap: 6 }]}>
+      <Text style={W.tileCap}>{cap}</Text>
+      <Text style={{ color: C.text, fontSize: 26, fontWeight: '800' }}>{Number(val || 0).toLocaleString()}</Text>
+      {sub && <Text style={W.gSub}>{sub}</Text>}
+    </View>
+  );
+  return (
+    <View style={W.screen}>
+      <WebTopBar title="Admin · stats" showBack conn={false} account="admin" onAvatar={() => {}} />
+      <ScrollView contentContainerStyle={{ paddingBottom: 30, paddingTop: 10 }} showsVerticalScrollIndicator={false}>
+        <View style={{ paddingHorizontal: 16 }}>
+          {loading ? <View style={{ padding: 20 }}><ActivityIndicator /></View> : (
+            <>
+              <View style={{ flexDirection: 'row', gap: 10, marginBottom: 16 }}>
+                {big('Accounts', d.accounts, 'signed up')}
+                {big('Bots', d.bots, 'across all users')}
+                {big('Threads', d.threads, 'conversations')}
+                {big('Tokens this week', d.week_tokens, d.today_tokens != null ? ('· ' + Number(d.today_tokens).toLocaleString() + ' today') : '')}
+              </View>
+              <Text style={W.section}>Server</Text>
+              <View style={[W.card, { padding: 14, marginBottom: 10 }]}>
+                <Text style={{ color: C.text, fontSize: 13, fontWeight: '600' }}>Version</Text>
+                <Text style={{ color: C.muted, fontSize: 12 }}>{d.version || '—'}</Text>
+              </View>
+              <Pressable onPress={runCheck} style={[W.card, { padding: 14, marginBottom: 10 }]}>
+                <Text style={{ color: C.ok, fontWeight: '700' }}>Check for app update</Text>
+              </Pressable>
+            </>
+          )}
+        </View>
+      </ScrollView>
+    </View>
+  );
+  function runCheck() { onRefresh && onRefresh(); }
+}
+
+// ---------------------------------------------------------------- admin: users list
+export function AdminUsersScreen({ users: usersProp, onSetPlan, onSetAdmin, onOpenUser }) {
+  const [d, setD] = useState(usersProp || null);
+  const [loading, setLoading] = useState(!d);
+  useEffect(() => { (async () => {
+    if (loading) {
+      try { setD(await api('/api/admin/users')); } catch (e) { setD({ users: [] }); }
+      finally { setLoading(false); }
+    } else if (usersProp) { setD(usersProp); }
+  })(); }, []);
+  const us = (d && d.users) || [];
+  return (
+    <View style={W.screen}>
+      <WebTopBar title="Admin · users" showBack conn={false} account="admin" onAvatar={() => {}} />
+      <ScrollView contentContainerStyle={{ paddingBottom: 30, paddingTop: 10 }} showsVerticalScrollIndicator={false}>
+        <View style={{ paddingHorizontal: 16 }}>
+          <View style={{ flexDirection: 'row', gap: 8, marginBottom: 10, paddingBottom: 8, borderBottomWidth: 1, borderColor: C.line }}>
+            <View style={{ flex: 1, minWidth: 0 }}><Text style={W.tileCap}>Account</Text></View>
+            <View style={{ minWidth: 70 }}><Text style={W.tileCap}>Plan</Text></View>
+            <View style={{ minWidth: 60 }}><Text style={W.tileCap}>Admin</Text></View>
+            <View style={{ minWidth: 70 }}><Text style={W.tileCap}>Tokens wk</Text></View>
+            <View style={{ minWidth: 70 }}><Text style={W.tileCap}>Bots</Text></View>
+          </View>
+          {loading ? <View style={{ padding: 20 }}><ActivityIndicator /></View> : (
+            us.length === 0 ? <Text style={W.mutedC} style={{ paddingHorizontal: 16 }}>No users.</Text> :
+            us.map((u) => {
+              const isMe = u.email === (usersProp && usersProp.current_admin);
+              const isSelfAdmin = u.is_admin && isMe;
+              return (
+                <Pressable key={u.email} onPress={() => onOpenUser(u)}
+                  style={[W.tabRow, { paddingVertical: 10, paddingHorizontal: 14, borderBottomWidth: 1, borderColor: C.line, alignItems: 'center' }]}>
+                  <View style={{ flex: 1, minWidth: 0, flexDirection: 'row', alignItems: 'center', gap: 10 }}>
+                    <Text style={{ color: C.text, fontWeight: '700', fontSize: 13, minWidth: 0 }}>{u.email}</Text>
+                    {u.is_admin ? <Text style={{ color: C.ok, fontSize: 10, fontWeight: '800' }}>ADMIN</Text> : null}
+                  </View>
+                  <View style={{ minWidth: 70 }}>
+                    <Text style={{ color: C.muted, fontSize: 11, fontWeight: '600' }}>{(auth_mod_plan_label(u.plan || 'free'))}</Text>
+                  </View>
+                  <View style={{ minWidth: 60, alignItems: 'center' }}>
+                    {u.is_admin ? <Text style={{ color: C.ok, fontSize: 11 }}>●</Text> : <Text style={{ color: C.muted, fontSize: 11 }}>○</Text>}
+                  </View>
+                  <View style={{ minWidth: 70, alignItems: 'flex-end' }}>
+                    <Text style={{ color: C.text, fontSize: 11, fontWeight: '600' }}>{Number(u.week_tokens || 0).toLocaleString()}</Text>
+                  </View>
+                  <View style={{ minWidth: 70, alignItems: 'flex-end' }}>
+                    <Text style={{ color: C.text, fontSize: 11, fontWeight: '600' }}>{u.bots_count}</Text>
+                  </View>
+                  <Pressable onPress={() => onOpenUser(u)} hitSlop={20}
+                    style={{ padding: 6 }}><Text style={{ color: C.ok, fontWeight: '700' }}>▸</Text></Pressable>
+                </Pressable>
+              );
+            })
+          )}
+        </View>
+      </ScrollView>
+    </View>
+  );
+}
+
+// ---------------------------------------------------------------- admin: user detail
+export function AdminUserDetailScreen({ user: userProp, onSetPlan, onSetAdmin }) {
+  const [d, setD] = useState(userProp || null);
+  const [saving, setSaving] = useState(false);
+  useEffect(() => { if (userProp && (!d || d.email !== userProp.email)) setD(userProp); }, [userProp]);
+  const pl = d ? auth_mod_plan_limits(d.plan || 'free') : null;
+  const doSetPlan = async (p) => {
+    if (!d || saving) return;
+    setSaving(true);
+    try { await onSetPlan(d.email, p); setD({ ...d, plan: p }); Alert.alert('Plan set', d.email + ' → ' + pl.label); }
+    catch (e) { Alert.alert('Failed', String(e.message || e)); }
+    finally { setSaving(false); }
+  };
+  const doToggleAdmin = async () => {
+    if (!d || saving) return;
+    setSaving(true);
+    try { await onSetAdmin(d.email, !d.is_admin); setD({ ...d, is_admin: !d.is_admin }); Alert.alert('Admin', d.is_admin ? 'revoked' : 'granted'); }
+    catch (e) { Alert.alert('Failed', String(e.message || e)); }
+    finally { setSaving(false); }
+  };
+  return (
+    <View style={W.screen}>
+      <WebTopBar title="Admin · " + (d ? d.email : 'user') + " account" showBack conn={false} account="admin" onAvatar={() => {}} />
+      <ScrollView contentContainerStyle={{ paddingBottom: 30, paddingTop: 10 }} showsVerticalScrollIndicator={false}>
+        <View style={{ paddingHorizontal: 16 }}>
+          {!d ? <View style={{ padding: 20 }}><ActivityIndicator /></View> : (
+            <>
+              <View style={[W.card, { flexDirection: 'row', alignItems: 'center', gap: 12, padding: 14, marginBottom: 16 }]}>
+                <Avatar bot={{ name: d.email, emoji: '👤' }} size={44} />
+                <View style={{ flex: 1, minWidth: 0 }}>
+                  <Text style={{ color: C.text, fontSize: 18, fontWeight: '800' }}>{d.email}</Text>
+                  <Text style={W.gSub} numberOfLines={2}>{d.is_admin ? 'Server administrator' : 'Standard user'} · {d.google_only ? 'Google sign-in only' : 'Email + password'}</Text>
+                </View>
+                <Pressable onPress={doToggleAdmin} disabled={saving}
+                  style={[W.pillBtn, { backgroundColor: d.is_admin ? '#b00020' : C.solid, paddingHorizontal: 14 }]}>
+                  <Text style={{ color: '#fff', fontWeight: '800' }}>{d.is_admin ? 'Revoke admin' : 'Make admin'}</Text>
+                </Pressable>
+              </View>
+              <Text style={{ color: C.muted, fontSize: 12, fontWeight: '600', textTransform: 'uppercase', letterSpacing: 1, marginBottom: 10 }}>Plan</Text>
+              <View style={{ paddingHorizontal: 2 }}>
+                {Object.entries(PLANS).map(([key, p]) => (
+                  <Pressable key={key} onPress={() => doSetPlan(key)} disabled={saving || key === d.plan}
+                    style={[W.card, { flexDirection: 'row', alignItems: 'center', gap: 10, padding: 12, marginBottom: 8, opacity: key === d.plan ? 1 : 0.9, borderWidth: key === d.plan ? 2 : 0, borderColor: C.ok }]}>
+                    <View style={{ flex: 1, minWidth: 0 }}>
+                      <Text style={{ color: C.text, fontWeight: '700', fontSize: 14 }}>{p.label}</Text>
+                      <Text style={W.gSub} fontSize={11}>{p.price_usd === 0 ? 'Free' : '$' + p.price_usd + '/mo'}</Text>
+                    </View>
+                    <View style={{ minWidth: 56, alignItems: 'flex-end' }}>
+                      <Text style={{ color: key === d.plan ? C.ok : C.muted, fontWeight: '800' }}>{key === d.plan ? 'Current' : p.price_usd === 0 ? 'Free' : '$' + p.price_usd}</Text>
+                    </View>
+                  </Pressable>
+                ))}
+              </View>
+              <View style={[W.card, { padding: 14, marginTop: 14 }]}>
+                <Text style={W.tileCap}>Usage</Text>
+                <View style={{ flexDirection: 'row', gap: 12, marginTop: 8 }}>
+                  <View style={{ flex: 1, minWidth: 0 }}>
+                    <Text style={W.tileCap}>Today</Text>
+                    <Text style={{ color: C.text, fontSize: 20, fontWeight: '800' }}>{Number(d.today_tokens || 0).toLocaleString()}</Text>
+                  </View>
+                  <View style={{ flex: 1, minWidth: 0 }}>
+                    <Text style={W.tileCap}>This week</Text>
+                    <Text style={{ color: C.text, fontSize: 20, fontWeight: '800' }}>{Number(d.week_tokens || 0).toLocaleString()}</Text>
+                  </View>
+                  <View style={{ flex: 1, minWidth: 0 }}>
+                    <Text style={W.tileCap}>Bots</Text>
+                    <Text style={{ color: C.text, fontSize: 20, fontWeight: '800' }}>{d.bots_count}</Text>
+                  </View>
+                </View>
+              </View>
+              <Text style={W.section}>Bots owned by this user</Text>
+              {!d.bots || d.bots.length === 0 ? <Text style={W.mutedC} style={{ paddingHorizontal: 4, marginTop: 6 }}>No bots yet.</Text> :
+                d.bots.map((b) => (
+                  <Pressable key={b.id} style={[W.tabRow, { paddingVertical: 8, paddingHorizontal: 4, borderBottomWidth: 1, borderColor: C.line }]}>
+                    <View style={{ flex: 1, minWidth: 0 }}>
+                      <Text style={{ color: C.text, fontWeight: '600', fontSize: 13 }}>{b.name}</Text>
+                      <Text style={W.gSub} fontSize={11}>{(b.job || 'Bot') + ' · ' + (b.approval_mode || 'ask')}</Text>
+                    </View>
+                    <View style={{ minWidth: 56, alignItems: 'flex-end' }}>
+                      <Text style={{ color: C.muted, fontSize: 11 }}>{b.owner || '—'}</Text>
+                    </View>
+                  </Pressable>
+                ))}
+              </View>
+            </>
+          )}
+        </View>
+      </ScrollView>
+    </View>
+  );
+}
+
+// ---------------------------------------------------------------- admin: settings
+export function AdminSettingsScreen({ settings: settingsProp, onRefresh }) {
+  const [d, setD] = useState(settingsProp || null);
+  const [loading, setLoading] = useState(!d);
+  useEffect(() => { (async () => {
+    if (loading) {
+      try { setD(await api('/api/admin/settings')); } catch (e) { setD({}); }
+      finally { setLoading(false); }
+    } else if (settingsProp) { setD(settingsProp); }
+  })(); }, []);
+  const s = (d && d.settings) || {};
+  const kv = (k, v) => (
+    <Pressable key={k} style={[W.tabRow, { paddingVertical: 8, paddingHorizontal: 4, borderBottomWidth: 1, borderColor: C.line }]}>
+      <View style={{ flex: 1, minWidth: 0 }}>
+        <Text style={{ color: C.text, fontWeight: '600', fontSize: 12 }}>{k}</Text>
+      </View>
+      <View style={{ minWidth: 120, alignItems: 'flex-end' }}>
+        <Text style={{ color: C.muted, fontSize: 11 }}>{v === undefined || v === null || v === '' ? '—' : String(v).length > 40 ? String(v).slice(0, 37) + '…' : String(v)}</Text>
+      </View>
+    </Pressable>
+  );
+  return (
+    <View style={W.screen}>
+      <WebTopBar title="Admin · settings" showBack conn={false} account="admin" onAvatar={() => {}} />
+      <ScrollView contentContainerStyle={{ paddingBottom: 30, paddingTop: 10 }} showsVerticalScrollIndicator={false}>
+        <View style={{ paddingHorizontal: 16 }}>
+          <View style={[W.card, { padding: 14, marginBottom: 10 }]}>
+            <Text style={{ color: C.text, fontWeight: '700', fontSize: 13 }}>{d.api_base || '—'}</Text>
+            <Text style={W.gSub} fontSize={11}>Server API base</Text>
+          </View>
+          {Object.entries(s).map(([section, val]) => {
+            if (typeof val !== 'object' || val === null || Array.isArray(val)) return null;
+            return (
+              <View key={section} style={{ marginBottom: 10 }}>
+                <Text style={{ color: C.muted, fontSize: 12, fontWeight: '600', textTransform: 'uppercase', letterSpacing: 1 }}>{section}</Text>
+                {Object.entries(val).map(([k, v]) => kv(section + '.' + k, typeof v === 'object' ? JSON.stringify(v) : v))}
+              </View>
+            );
+          })}
+        </View>
+      </ScrollView>
+    </View>
+  );
+}
+
+// ---------------------------------------------------------------- plan helpers (module-local)
+function auth_mod_plan_limits(plan) {
+  // mirror of server PLANS; kept in sync with core/auth.py PLANS
+  const P = {
+    free: { label: 'Free', price_usd: 0, max_bots: 3, weekly_tokens: 50000 },
+    starter: { label: 'Starter', price_usd: 2, max_bots: 10, weekly_tokens: 200000 },
+    pro: { label: 'Pro', price_usd: 5, max_bots: 50, weekly_tokens: 1000000 },
+    team: { label: 'Team', price_usd: 10, max_bots: 100, weekly_tokens: 5000000 },
+    business: { label: 'Business', price_usd: 20, max_bots: 0, weekly_tokens: 20000000 },
+  };
+  return P[plan] || P.free;
+}
+function auth_mod_plan_label(plan) {
+  const L = { free: 'Free', starter: 'Starter', pro: 'Pro', team: 'Team', business: 'Business' };
+  return L[plan] || 'Free';
+}
+function auth_mod_all_plans() {
+  return PLANS;
+}
+

@@ -2,7 +2,7 @@ import React, { useEffect, useRef, useState, useCallback } from 'react';
 import { SafeAreaProvider, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Modal, View, Text, TextInput, Pressable, FlatList, StyleSheet, Linking, Alert, ScrollView, BackHandler } from 'react-native';
 import { StatusBar as ExpoStatus } from 'expo-status-bar';
-import { api, connectEvents, loadKey, saveConf, tryConf, clearConf, conf, cfgGet, K_SERVER, K_TOKEN, K_EMAIL, K_PASS, loginEmail, signupEmail, loginGoogle, authStatus } from './src/session';
+import { api, connectEvents, loadKey, saveConf, tryConf, clearConf, conf, cfgGet, K_SERVER, K_TOKEN, K_EMAIL, K_PASS, loginEmail, signupEmail, loginGoogle, authStatus, me, adminUsers, adminAccount, adminSettings, adminSetPlan, adminSetAdmin } from './src/session';
 import { C } from './src/theme';
 import { checkUpdate, installUpdate, applyOta, otaStatus, APP_VERSION, APP_CODE } from './src/updates';
 import { lastError, send as reportNow, resend as resendLast, hydrate, note, noteOnce, breadcrumb } from './src/diag';
@@ -11,7 +11,7 @@ import Connect, { AuthModal } from './src/Connect';
 import Chat from './src/Chat';
 import ServerScreen from './src/ServerScreen';
 import { TopBar, DashboardScreen, MarketplaceScreen, ApprovalsScreen, McpScreen, RoutinesScreen, FilesScreen, WalletScreen, PluginItemsScreen } from './src/Screens';
-import { WebTopBar, TabSheet, BotsList, HomeView, InboxView, ComputerView, ScreenView, SkillsView, UsageView, ActionLogView, SearchPalette } from './src/WebUI';
+import { WebTopBar, TabSheet, BotsList, HomeView, InboxView, ComputerView, ScreenView, SkillsView, UsageView, ActionLogView, SearchPalette, PlanScreen, AdminStatsScreen, AdminUsersScreen, AdminUserDetailScreen, AdminSettingsScreen, TABS } from './src/WebUI';
 
 export default function App() {
   return (
@@ -92,6 +92,8 @@ function ZbRoot() {
   const [chat, setChat] = useState(null);                  // {bot, threadId, threads}
   const [groups, setGroups] = useState([]);                // group chats
   const [email, setEmail] = useState('');                  // account (avatar initials)
+  const [meInfo, setMeInfo] = useState(null);              // /api/me: plan, is_admin, usage
+  const [selectedAdminUser, setSelectedAdminUser] = useState(null);
   const [conn, setConn] = useState(false);                 // live-connection dot
   const [paletteOpen, setPaletteOpen] = useState(false);   // web ⌕ search palette
   const [screenBot, setScreenBot] = useState(null);        // Bot shown in the takeover screen
@@ -158,6 +160,17 @@ function ZbRoot() {
     }
     setReady(true);
   })(); }, []);
+
+  // Load current account (plan, is_admin, usage) after sign-in.
+  useEffect(() => { (async () => {
+    if (!signed || meInfo) return;
+    try { const m = await me(); setMeInfo(m); } catch (e) { /* me fails if not signed in yet */ }
+  })(); }, [signed, meInfo]);
+
+  // Clear the selected admin user when leaving the admin-user detail screen.
+  useEffect(() => {
+    if (screen !== 'admin-user') setSelectedAdminUser(null);
+  }, [screen]);
 
   const refresh = useCallback(async () => {
     try {
@@ -321,7 +334,7 @@ function ZbRoot() {
         onMenu={() => setMenuOpen(true)}
         modalOpenRef={modalOpenRef}
       />
-      <TabSheet {...menuProps} />
+      <TabSheet {...menuProps} tabs={meInfo && meInfo.is_admin ? TABS : TABS.filter(([k]) => k !== 'admin')} />
     </Shell>
   );
 
@@ -332,7 +345,7 @@ function ZbRoot() {
     </Shell>
   );
 
-  const menuBlock = <TabSheet {...menuProps} />;
+  const menuBlock = <TabSheet {...menuProps} tabs={meInfo && meInfo.is_admin ? TABS : TABS.filter(([k]) => k !== 'admin')} />;
 
   switch (screen) {
     case 'dash': return (
@@ -439,6 +452,53 @@ function ZbRoot() {
         {menuBlock}
       </Shell>
     );
+    case 'plan': return (
+      <Shell upd={upd} onUpd={doUpdate} updState={updState}>
+        <PlanScreen me={meInfo} onUpgrade={async (p) => {
+          if (!meInfo) return;
+          await adminSetPlan(meInfo.email, p);
+          setMeInfo((prev) => prev ? { ...prev, plan: p } : null);
+          refresh();
+        }} />
+        {menuBlock}
+      </Shell>
+    );
+    case 'admin': return meInfo && meInfo.is_admin ? (
+      <Shell upd={upd} onUpd={doUpdate} updState={updState}>
+        <AdminStatsScreen onRefresh={() => { setMeInfo(null); /* force reload on next render */ }} />
+        {menuBlock}
+      </Shell>
+    ) : null;
+    case 'admin-users': return meInfo && meInfo.is_admin ? (
+      <Shell upd={upd} onUpd={doUpdate} updState={updState}>
+        <AdminUsersScreen onSetPlan={async (email, plan) => {
+          await adminSetPlan(email, plan);
+          setMeInfo(null); // reload
+        }} onSetAdmin={async (email, isAdmin) => {
+          await adminSetAdmin(email, isAdmin);
+          setMeInfo(null);
+        }} onOpenUser={(u) => { setSelectedAdminUser(u); setScreenHistory((h) => [...h, screen]); setScreen('admin-user'); }} />
+        {menuBlock}
+      </Shell>
+    ) : null;
+    case 'admin-user': return meInfo && meInfo.is_admin ? (
+      <Shell upd={upd} onUpd={doUpdate} updState={updState}>
+        <AdminUserDetailScreen user={selectedAdminUser} onSetPlan={async (email, plan) => {
+          await adminSetPlan(email, plan);
+          setMeInfo(null);
+        }} onSetAdmin={async (email, isAdmin) => {
+          await adminSetAdmin(email, isAdmin);
+          setMeInfo(null);
+        }} />
+        {menuBlock}
+      </Shell>
+    ) : null;
+    case 'admin-settings': return meInfo && meInfo.is_admin ? (
+      <Shell upd={upd} onUpd={doUpdate} updState={updState}>
+        <AdminSettingsScreen onRefresh={() => { setMeInfo(null); }} />
+        {menuBlock}
+      </Shell>
+    ) : null;
     default: break;
   }
 

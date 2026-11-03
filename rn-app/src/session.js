@@ -126,6 +126,66 @@ export async function authStatus(base) {
   return d;
 }
 
+// Current account: email, is_admin, plan, usage this week. Requires a signed session.
+export async function me(base) {
+  const b = String(base || '').replace(/\/+$/, '');
+  const r = await fetch(b + '/api/me', { headers: { 'Content-Type': 'application/json' } });
+  const d = await r.json().catch(() => ({}));
+  if (r.status !== 200) throw new Error(d.error || d.detail || 'Could not load account.');
+  return d;
+}
+
+// Admin: list every account with per-user token usage.
+export async function adminUsers(base) {
+  const b = String(base || '').replace(/\/+$/, '');
+  const r = await fetch(b + '/api/admin/users', { headers: { 'Content-Type': 'application/json' } });
+  const d = await r.json().catch(() => ({}));
+  if (r.status !== 200) throw new Error(d.error || d.detail || 'Could not load users.');
+  return d;
+}
+
+// Admin: detail for one account.
+export async function adminAccount(base, email) {
+  const b = String(base || '').replace(/\/+$/, '');
+  const r = await fetch(b + '/api/admin/account/' + encodeURIComponent(email), { headers: { 'Content-Type': 'application/json' } });
+  const d = await r.json().catch(() => ({}));
+  if (r.status !== 200) throw new Error(d.error || d.detail || 'Could not load account.');
+  return d;
+}
+
+// Admin: server settings (masked secrets).
+export async function adminSettings(base) {
+  const b = String(base || '').replace(/\/+$/, '');
+  const r = await fetch(b + '/api/admin/settings', { headers: { 'Content-Type': 'application/json' } });
+  const d = await r.json().catch(() => ({}));
+  if (r.status !== 200) throw new Error(d.error || d.detail || 'Could not load settings.');
+  return d;
+}
+
+// Admin: set a user's plan tier.
+export async function adminSetPlan(base, email, plan) {
+  const b = String(base || '').replace(/\/+$/, '');
+  const r = await fetch(b + '/api/admin/account/' + encodeURIComponent(email) + '/plan', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ plan }),
+  });
+  const d = await r.json().catch(() => ({}));
+  if (r.status !== 200) throw new Error(d.error || d.detail || 'Could not set plan.');
+  return d;
+}
+
+// Admin: grant or revoke admin rights.
+export async function adminSetAdmin(base, email, isAdmin) {
+  const b = String(base || '').replace(/\/+$/, '');
+  const r = await fetch(b + '/api/admin/account/' + encodeURIComponent(email) + '/admin', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ is_admin: isAdmin }),
+  });
+  const d = await r.json().catch(() => ({}));
+  if (r.status !== 200) throw new Error(d.error || d.detail || 'Could not set admin.');
+  return d;
+}
+
 // Sign in with Google: the reader app hands the verified Google ID token here
 // and the server returns { ok, email, session } usable as the Bearer token.
 export async function loginGoogle(base, idToken) {
