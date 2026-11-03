@@ -1554,7 +1554,147 @@ google.accounts.id.renderButton(document.getElementById('gbtn'),
             "SELECT * FROM messages WHERE author='agent' AND bot_id IN (" + ",".join("?" * len(bot_ids)) + ") "
             "ORDER BY created_at DESC LIMIT 20", bot_ids)
         return {"messages": rows, "count": len(rows)}
-    # Proxies StreamableHTTP MCP requests to locally-running MCP servers
+
+    # ---------------------------------------------------------------- Tier 2: Web search
+    @app.post("/api/search", dependencies=[api])
+    def web_search(request: Request, body: dict = Body(...)) -> dict:
+        """Real-time web search for agent answers (DuckDuckGo HTML scrape)."""
+        user = current_user(request)
+        query = str(body.get("q", "")).strip()
+        if not query:
+            raise HTTPException(400, "Search query required.")
+        try:
+            import urllib.request as _ureq
+            q = quote(query)
+            url = f"https://html.duckduckgo.com/html/?q={q}"
+            req = _ureq.Request(url, headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"})
+            with _ureq.urlopen(req, timeout=20) as r:
+                html = r.read().decode("utf-8", errors="replace")
+            results = []
+            import re as _re
+            # Extract result titles and links
+            for m in _re.finditer(r'<a rel="nofollow" class="result__a" href="([^"]+)">([^<]+)</a>', html):
+                link = m.group(1)
+                title = _re.sub(r"<[^>]+>", "", m.group(2)).strip()
+                snippet_m = _re.search(r'<a class="result__snippet"[^>]*>([^<]+)</a>', html[m.end():m.end()+500])
+                snippet = snippet_m.group(1).strip() if snippet_m else ""
+                results.append({"title": title, "url": link, "snippet": snippet})
+                if len(results) >= 8:
+                    break
+            return {"query": query, "results": results, "count": len(results)}
+        except Exception as e:  # noqa: BLE001
+            raise HTTPException(500, f"Search failed: {type(e).__name__}: {e}")
+
+    # ---------------------------------------------------------------- Tier 2: Image understanding (vision)
+    @app.post("/api/image/understand", dependencies=[api])
+    async def image_understand(request: Request, body: dict = Body(...)) -> dict:
+        """Analyze an uploaded image and describe what's in it."""
+        user = current_user(request)
+        image_data = str(body.get("image_data", ""))  # base64 or data URI
+        prompt = str(body.get("prompt", "Describe this image in detail."))
+        if not image_data:
+            raise HTTPException(400, "image_data required.")
+        # Use the configured vision provider (OpenAI/Anthropic/etc.)
+        cid = str(eng.settings.get("auth.google_client_id") or "")
+        provider = eng.settings.get("default_profile", "anthropic")
+        try:
+            # Route through the provider's vision model
+            make = make_provider(provider, eng.settings, eng.plugins)
+            result = make.vision_describe(image_data, prompt)
+            return {"ok": True, "description": result, "provider": provider}
+        except Exception as e:  # noqa: BLE001
+            return {"ok": False, "error": str(e), "provider": provider}
+
+    # ---------------------------------------------------------------- Tier 3: Image generation
+    @app.post("/api/image/generate", dependencies=[api])
+    def image_generate(request: Request, body: dict = Body(...)) -> dict:
+        """Generate an image from a text prompt (DALL-E via OpenAI if configured)."""
+        user = current_user(request)
+        prompt = str(body.get("prompt", "")).strip()
+        if not prompt:
+            raise HTTPException(400, "Prompt required.")
+        # Try OpenAI DALL-E if API key is configured
+        api_key = eng.settings.get("providers.openai.api_key") or eng.secrets.get_secret("openai.api_key")
+        if not api_key:
+            raise HTTPException(400, "OpenAI API key not configured. Add it in Admin → Settings.")
+        try:
+            import httpx as _httpx
+            r = _httpx.post("https://api.openai.com/v1/images/generations",
+                            headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+                            json={"model": "dall-e-3", "prompt": prompt, "n": 1, "size": "1024x1024"},
+                            timeout=60)
+            if r.status_code != 200:
+                raise HTTPException(400, f"Image generation failed: {r.text[:200]}")
+            data = r.json()
+            image_url = data["data"][0]["url"]
+            return {"ok": True, "image_url": image_url, "prompt": prompt, "provider": "dall-e-3"}
+        except HTTPException:
+            raise
+        except Exception as e:  # noqa: BLE001
+            raise HTTPException(500, f"Image generation failed: {type(e).__name__}: {e}")
+
+    # ---------------------------------------------------------------- Tier 3: Code execution sandbox
+    @app.post("/api/code/execute", dependencies=[api])
+    def code_execute(request: Request, body: dict = Body(...)) -> dict:
+        """Execute Python code in a restricted sandbox."""
+        user = current_user(request)
+        code = str(body.get("code", "")).strip()
+        if not code:
+            raise HTTPException(400, "Code required.")
+        # Safety: block dangerous imports and operations
+        blocked = ["import os", "import subprocess", "import socket", "import shutil",
+                   "import smtplib", "import ctypes", "import multiprocessing",
+                   "import threading", "import asyncio", "__import__", "eval(", "exec(",
+                   "open(", "os.system", "subprocess."]
+        for b in blocked:
+            if b in code:
+                raise HTTPException(400, f"Blocked operation: {b}")
+        try:
+            import io, contextlib, tempfile, os as _os
+            buf = io.StringIO()
+            # Write to a temp file and run with restricted namespace
+            tmp = tempfile.NamedTemporaryFile(mode="w", suffix=".py", delete=False)
+            tmp.write(code)
+            tmp.close()
+            try:
+                with contextlib.redirect_stdout(buf):
+                    exec(compile(code, tmp.name, "exec"), {"__builtins__": {}}, {})
+                output = buf.getvalue()
+            finally:
+                try:
+                    _os.unlink(tmp.name)
+                except OSError:
+                    pass
+            return {"ok": True, "output": output or "(no output)", "language": "python"}
+        except HTTPException:
+            raise
+        except Exception as e:  # noqa: BLE001
+            return {"ok": False, "error": f"{type(e).__name__}: {e}"}
+
+    # ---------------------------------------------------------------- Tier 3: Multi-agent collaboration
+    @app.post("/api/agent/collaborate", dependencies=[api])
+    def agent_collaborate(request: Request, body: dict = Body(...)) -> dict:
+        """Multiple agents work together on a task (agent-to-agent handoff)."""
+        user = current_user(request)
+        task = str(body.get("task", "")).strip()
+        if not task:
+            raise HTTPException(400, "Task required.")
+        bots = eng.bots.list(owner=user)
+        if len(bots) < 2:
+            raise HTTPException(400, "Need at least 2 bots for collaboration.")
+        # Assign subtasks: bot 1 plans, bot 2 executes, bot 3 reviews
+        results = []
+        for i, bot in enumerate(bots[:3]):
+            role = ["planner", "executor", "reviewer"][i]
+            thread = eng.threads.create(bot_id=bot["id"], title=f"Collab: {task[:40]}", kind="dm", owner=user)
+            eng.threads.add(thread["id"], "agent", "text",
+                            [{"type": "text", "text": f"Role: {role}. Task: {task}"}],
+                            publish=True, bot_id=bot["id"])
+            results.append({"bot": bot["name"], "role": role, "thread_id": thread["id"],
+                            "status": "assigned"})
+        eng.events.publish("agents", change="collaborate", results=results)
+        return {"ok": True, "task": task, "agents": results, "count": len(results)}
+
     # (e.g. the QuickBooks MCP server on port 3333) so they are reachable
     # over the public HTTPS URL without exposing extra ports.
     @app.post("/api/mcp-proxy/{mcp_id:path}", dependencies=[api])

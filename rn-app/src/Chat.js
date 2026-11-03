@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { View, Text, TextInput, Pressable, FlatList, StyleSheet, KeyboardAvoidingView, Platform, Image, ActivityIndicator, ScrollView, Clipboard, Alert, Linking, Animated, Easing } from 'react-native';
 import { WebView } from 'react-native-webview';
-import { api, API_BASE, conf } from './session';
+import { api, API_BASE, conf, agentMessages } from './session';
 import md from './md';
 import { aiBody, uiPlain, uiStreamText } from './widgets';
 import { breadcrumb, note, noteOnce } from './diag';
@@ -214,6 +214,8 @@ function ChatScreen({ thread, threads, botName: propsBotName, onSwitch, onBack, 
   const [chatSearch, setChatSearch] = useState(''); // filter messages in this thread
   const [searchOpen, setSearchOpen] = useState(false); // shows/hides the search bar
   const [schedTime, setSchedTime] = useState(null); // scheduled send epoch ms
+  const [proactiveMsgs, setProactiveMsgs] = useState([]); // agent-initiated messages
+  const [proactiveLoaded, setProactiveLoaded] = useState(false);
   // Tell the hardware back button to close open sheets/modals instead of quitting.
   useEffect(() => {
     const open = !!histOpen || !!pick || !!attachOpen || liveFull || browserOpen;
@@ -291,6 +293,46 @@ function ChatScreen({ thread, threads, botName: propsBotName, onSwitch, onBack, 
     })();
     return () => { cancelled = true; };
   }, [thread.id, load, apply]);
+
+  // Load agent-initiated proactive messages for this chat.
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      if (proactiveLoaded) return;
+      try {
+        const d = await agentMessages();
+        if (!cancelled) {
+          setProactiveMsgs(d.messages || []);
+          setProactiveLoaded(true);
+        }
+      } catch (e) {
+        // Proactive messages are optional; don't block the chat.
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [proactiveLoaded]);
+
+  // Merge agent-initiated proactive messages into the chat items for display.
+  useEffect(() => {
+    if (!proactiveLoaded || !proactiveMsgs.length) return;
+    setItems((prev) => {
+      const existing = new Set(prev.map((i) => i.id));
+      const newRows = proactiveMsgs
+        .filter((m) => !existing.has(m.id))
+        .map((m) => ({
+          id: m.id,
+          author: 'agent',
+          role: 'agent',
+          kind: 'text',
+          content: [ { type: 'text', text: m.content || m.text || '' } ],
+          created_at: m.created_at || m.ts,
+          thread_id: m.thread_id,
+          bot_id: m.bot_id,
+          pending: false,
+        }));
+      return [...prev, ...newRows];
+    });
+  }, [proactiveLoaded, proactiveMsgs]);
 
   // Safety net: the phone's SSE can be blocked by a proxy or killed by the OS, and
   // then the answer never appeared while the screen kept saying "working". Poll the

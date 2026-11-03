@@ -350,3 +350,63 @@ export async function agentMessages(base) {
   if (r.status !== 200) throw new Error(d.error || d.detail || 'Could not load agent messages.');
   return d;
 }
+
+// ---------------------------------------------------------------- Tier 2: Web search
+export async function webSearch(base, query) {
+  const b = String(base || '').replace(/\/+$/, '');
+  const r = await fetch(b + '/api/search', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ q: query }),
+  });
+  const d = await r.json().catch(() => ({}));
+  if (r.status !== 200) throw new Error(d.error || d.detail || 'Search failed.');
+  return d;
+}
+
+// ---------------------------------------------------------------- Tier 2: Image understanding
+export async function imageUnderstand(base, imageData, prompt = 'Describe this image in detail.') {
+  const b = String(base || '').replace(/\/+$/, '');
+  const r = await fetch(b + '/api/image/understand', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ image_data: imageData, prompt }),
+  });
+  const d = await r.json().catch(() => ({}));
+  if (r.status !== 200) throw new Error(d.error || d.detail || 'Image understanding failed.');
+  return d;
+}
+
+// ---------------------------------------------------------------- Tier 3: Image generation
+export async function imageGenerate(base, prompt) {
+  const b = String(base || '').replace(/\/+$/, '');
+  const r = await fetch(b + '/api/image/generate', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ prompt }),
+  });
+  const d = await r.json().catch(() => ({}));
+  if (r.status !== 200) throw new Error(d.error || d.detail || 'Image generation failed.');
+  return d;
+}
+
+// ---------------------------------------------------------------- Tier 3: Code execution sandbox
+export async function codeExecute(base, code) {
+  const b = String(base || '').replace(/\/+$/, '');
+  const r = await fetch(b + '/api/code/execute', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ code }),
+  });
+  const d = await r.json().catch(() => ({}));
+  if (r.status !== 200) throw new Error(d.error || d.detail || 'Code execution failed.');
+  return d;
+}
+
+// ---------------------------------------------------------------- Tier 3: Multi-agent collaboration
+export async function agentCollaborate(base, task) {
+  const b = String(base || '').replace(/\/+$/, '');
+  const r = await fetch(b + '/api/agent/collaborate', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ task }),
+  });
+  const d = await r.json().catch(() => ({}));
+  if (r.status !== 200) throw new Error(d.error || d.detail || 'Agent collaboration failed.');
+  return d;
+}

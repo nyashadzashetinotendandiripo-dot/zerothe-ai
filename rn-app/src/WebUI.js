@@ -273,6 +273,11 @@ export const TABS = [
   ['ideas', 'Ideas'],
   ['goals', 'Goals'],
   ['finance', 'Spending'],
+  ['email', 'Email'],
+  ['search', 'Search'],
+  ['image', 'Images'],
+  ['code', 'Code'],
+  ['collab', 'Multi-Agent'],
   ['set', 'Settings'],
 ];
 export function TabSheet({ open, tab, inboxBadge, onGo, onClose, initial, tabs }) {
@@ -1840,6 +1845,349 @@ export function FinanceView({ conn, account, onAvatar }) {
               </View>
             </View>
           </View>
+        </View>
+      </ScrollView>
+    </View>
+  );
+}
+
+// ---------------------------------------------------------------- Tier 1: Email config UI
+export function EmailConfigScreen({ conn, account, onAvatar }) {
+  const [host, setHost] = useState('imap.gmail.com');
+  const [port, setPort] = useState('993');
+  const [username, setUsername] = useState('');
+  const [password, setPassword] = useState('');
+  const [useSsl, setUseSsl] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [status, setStatus] = useState('');
+
+  const doSave = async () => {
+    if (saving) return;
+    setSaving(true);
+    try {
+      await emailConfigure(
+        undefined,
+        host,
+        parseInt(port) || 993,
+        username,
+        password,
+        useSsl
+      );
+      setStatus('IMAP configured successfully.');
+    } catch (e) {
+      setStatus('Failed: ' + String(e.message || e));
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <View style={W.screen}>
+      <WebTopBar title="Email (IMAP)" showBack conn={conn} account={account} onAvatar={onAvatar} />
+      <ScrollView contentContainerStyle={{ paddingBottom: 30, paddingTop: 10 }} showsVerticalScrollIndicator={false}>
+        <View style={{ paddingHorizontal: 16 }}>
+          <Text style={W.museSection}>Connect your email</Text>
+          <Text style={W.gSub} marginBottom={12}>ZerotheBot reads your inbox and proposes actions — like filling out forms or sending follow-ups — so you only approve what gets sent.</Text>
+          <View style={[W.museCard, { padding: 14, marginBottom: 12 }]}>
+            <View style={{ flexDirection: 'row', gap: 10, marginBottom: 10 }}>
+              <View style={{ flex: 1 }}>
+                <Text style={W.tileCap}>IMAP Host</Text>
+                <TextInput style={[W.input, { flex: 1, borderRadius: 999, paddingVertical: 9 }]} value={host} onChangeText={setHost} placeholder="imap.gmail.com" />
+              </View>
+              <View style={{ minWidth: 70 }}>
+                <Text style={W.tileCap}>Port</Text>
+                <TextInput style={[W.input, { flex: 1, borderRadius: 999, paddingVertical: 9, textAlign: 'right' }]} value={port} onChangeText={setPort} placeholder="993" keyboardType="numeric" />
+              </View>
+            </View>
+            <View style={{ flexDirection: 'row', gap: 10, marginBottom: 10 }}>
+              <View style={{ flex: 1 }}>
+                <Text style={W.tileCap}>Username (email)</Text>
+                <TextInput style={[W.input, { flex: 1, borderRadius: 999, paddingVertical: 9 }]} value={username} onChangeText={setUsername} placeholder="you@gmail.com" autoCapitalize="none" />
+              </View>
+              <View style={{ flex: 1 }}>
+                <Text style={W.tileCap}>Password / App Password</Text>
+                <TextInput style={[W.input, { flex: 1, borderRadius: 999, paddingVertical: 9 }]} value={password} onChangeText={setPassword} secureTextEntry placeholder="app password" autoCapitalize="none" />
+              </View>
+            </View>
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 12 }}>
+              <Pressable style={[W.museGoalToggle, useSsl && W.museGoalToggleOn]} onPress={() => setUseSsl(!useSsl)}>
+                <Text style={{ fontSize: 10 }}>{useSsl ? '✓' : ''}</Text>
+              </Pressable>
+              <Text style={W.museSub}>Use SSL/TLS (recommended)</Text>
+            </View>
+          </View>
+          <Pressable onPress={doSave} disabled={saving}
+            style={[W.wideBlack, { marginTop: 8, opacity: saving ? 0.5 : 1 }]}>
+            <Text style={{ color: '#fff', fontWeight: '800', fontSize: 15 }}>
+              {saving ? 'Saving…' : 'Save IMAP Configuration'}
+            </Text>
+          </Pressable>
+          {status && (
+            <View style={{ marginTop: 12, padding: 12, backgroundColor: status.startsWith('Failed') ? '#fdeceb' : '#e4f5ea', borderRadius: 12, borderLeftWidth: 4, borderLeftColor: status.startsWith('Failed') ? C.bad : C.ok }}>
+              <Text style={{ color: status.startsWith('Failed') ? C.bad : C.ok, fontSize: 13, fontWeight: '600' }}>{status}</Text>
+            </View>
+          )}
+        </View>
+      </ScrollView>
+    </View>
+  );
+}
+
+// ---------------------------------------------------------------- Tier 2: Web search
+export function SearchScreen({ conn, account, onAvatar }) {
+  const [query, setQuery] = useState('');
+  const [results, setResults] = useState([]);
+  const [loading, setLoading] = useState(false);
+
+  const doSearch = async () => {
+    if (!query.trim() || loading) return;
+    setLoading(true);
+    try {
+      const d = await webSearch(undefined, query);
+      setResults(d.results || []);
+    } catch (e) {
+      Alert.alert('Search failed', String(e.message || e));
+    } finally { setLoading(false); }
+  };
+
+  return (
+    <View style={W.screen}>
+      <WebTopBar title="Search" showBack conn={conn} account={account} onAvatar={onAvatar} />
+      <ScrollView contentContainerStyle={{ paddingBottom: 30, paddingTop: 10 }} showsVerticalScrollIndicator={false}>
+        <View style={{ paddingHorizontal: 16 }}>
+          <View style={[W.museCard, { flexDirection: 'row', gap: 8, marginBottom: 14, padding: 12 }]}>
+            <TextInput style={{ flex: 1, color: C.text, fontSize: 14 }} placeholder="Search the web…" value={query} onChangeText={setQuery} onSubmitEditing={doSearch} />
+            <Pressable onPress={doSearch} disabled={loading} style={[W.pillBtn, { backgroundColor: C.solid, paddingHorizontal: 14 }]}>
+              <Text style={{ color: '#fff', fontWeight: '800' }}>Search</Text>
+            </Pressable>
+          </View>
+          {loading && <View style={{ padding: 20 }}><ActivityIndicator /></View>}
+          {results.length > 0 && (
+            <>
+              <Text style={W.museSection} marginTop={8}>Results</Text>
+              {results.map((r, i) => (
+                <Pressable key={i} style={[W.museCard, { padding: 12, marginBottom: 8 }]} onPress={() => Linking.openURL(r.url)}>
+                  <View style={{ flex: 1, minWidth: 0 }}>
+                    <Text style={{ color: C.text, fontWeight: '700', fontSize: 14 }} numberOfLines={2}>{r.title}</Text>
+                    <Text style={{ color: C.ok, fontSize: 11, marginTop: 2 }}>{r.url}</Text>
+                    <Text style={W.museSub} marginTop={4}>{r.snippet}</Text>
+                  </View>
+                  <Text style={{ color: C.muted, fontSize: 11 }}>▸</Text>
+                </Pressable>
+              ))}
+            </>
+          )}
+          {results.length === 0 && !loading && (
+            <Text style={W.mutedC} style={{ paddingHorizontal: 4, marginTop: 6 }}>No results yet. Enter a query and tap Search.</Text>
+          )}
+        </View>
+      </ScrollView>
+    </View>
+  );
+}
+
+// ---------------------------------------------------------------- Tier 2: Image understanding
+export function ImageUnderstandScreen({ conn, account, onAvatar }) {
+  const [imageData, setImageData] = useState('');
+  const [prompt, setPrompt] = useState('Describe this image in detail.');
+  const [result, setResult] = useState(null);
+  const [loading, setLoading] = useState(false);
+
+  const doAnalyze = async () => {
+    if (!imageData || loading) return;
+    setLoading(true);
+    try {
+      const d = await imageUnderstand(undefined, imageData, prompt);
+      setResult(d);
+    } catch (e) {
+      Alert.alert('Analysis failed', String(e.message || e));
+    } finally { setLoading(false); }
+  };
+
+  return (
+    <View style={W.screen}>
+      <WebTopBar title="Image Understanding" showBack conn={conn} account={account} onAvatar={onAvatar} />
+      <ScrollView contentContainerStyle={{ paddingBottom: 30, paddingTop: 10 }} showsVerticalScrollIndicator={false}>
+        <View style={{ paddingHorizontal: 16 }}>
+          <Text style={W.museSection}>Upload Image</Text>
+          <View style={[W.museCard, { alignItems: 'center', padding: 20, marginBottom: 12 }]}>
+            {imageData ? (
+              <Image source={{ uri: imageData }} style={{ width: 160, height: 160, borderRadius: 16 }} />
+            ) : (
+              <View style={{ width: 160, height: 160, borderRadius: 16, backgroundColor: C.panel2, alignItems: 'center', justifyContent: 'center' }}>
+                <Text style={{ fontSize: 40 }}>📷</Text>
+              </View>
+            )}
+          </View>
+          <Pressable style={[W.wideBlack, { marginBottom: 10 }]} onPress={() => Alert.alert('Image picker', 'Image upload via camera/photo library coming in next build. For now, paste a base64 image data URI below.')}>
+            <Text style={{ color: '#fff', fontWeight: '800' }}>Choose Image (simulated)</Text>
+          </Pressable>
+          <TextInput style={[W.input, { marginBottom: 10 }]} value={prompt} onChangeText={setPrompt} placeholder="Describe this image…" />
+          <Pressable onPress={doAnalyze} disabled={loading || !imageData}
+            style={[W.wideBlack, { marginTop: 8, opacity: (loading || !imageData) ? 0.5 : 1 }]}>
+            <Text style={{ color: '#fff', fontWeight: '800', fontSize: 15 }}>
+              {loading ? 'Analyzing…' : 'Analyze Image'}
+            </Text>
+          </Pressable>
+          {result && (
+            <View style={[W.museCard, { marginTop: 14, padding: 14 }]}>
+              <Text style={{ color: C.muted, fontSize: 12, fontWeight: '600', textTransform: 'uppercase' }}>Result</Text>
+              <Text style={{ color: C.text, fontSize: 13, marginTop: 6 }}>{result.description || result.error}</Text>
+              {result.provider && <Text style={{ color: C.muted, fontSize: 11, marginTop: 4 }}>Provider: {result.provider}</Text>}
+            </View>
+          )}
+        </View>
+      </ScrollView>
+    </View>
+  );
+}
+
+// ---------------------------------------------------------------- Tier 3: Image generation
+export function ImageGenerateScreen({ conn, account, onAvatar }) {
+  const [prompt, setPrompt] = useState('');
+  const [imageUrl, setImageUrl] = useState(null);
+  const [loading, setLoading] = useState(false);
+
+  const doGenerate = async () => {
+    if (!prompt.trim() || loading) return;
+    setLoading(true);
+    try {
+      const d = await imageGenerate(undefined, prompt);
+      setImageUrl(d.image_url);
+    } catch (e) {
+      Alert.alert('Generation failed', String(e.message || e));
+    } finally { setLoading(false); }
+  };
+
+  return (
+    <View style={W.screen}>
+      <WebTopBar title="Image Generation" showBack conn={conn} account={account} onAvatar={onAvatar} />
+      <ScrollView contentContainerStyle={{ paddingBottom: 30, paddingTop: 10 }} showsVerticalScrollIndicator={false}>
+        <View style={{ paddingHorizontal: 16 }}>
+          <Text style={W.museSection}>Generate Image</Text>
+          <TextInput style={[W.input, { marginBottom: 10 }]} value={prompt} onChangeText={setPrompt} placeholder="A futuristic city with flying cars…" />
+          <Pressable onPress={doGenerate} disabled={loading || !prompt.trim()}
+            style={[W.wideBlack, { marginBottom: 14, opacity: (loading || !prompt.trim()) ? 0.5 : 1 }]}>
+            <Text style={{ color: '#fff', fontWeight: '800', fontSize: 15 }}>
+              {loading ? 'Generating…' : 'Generate'}
+            </Text>
+          </Pressable>
+          {imageUrl && (
+            <View style={[W.museCard, { alignItems: 'center', padding: 16, marginBottom: 12 }]}>
+              <Image source={{ uri: imageUrl }} style={{ width: 260, height: 260, borderRadius: 20 }} />
+              <Text style={{ color: C.text, fontWeight: '700', marginTop: 10 }}>{prompt}</Text>
+            </View>
+          )}
+          {imageUrl && (
+            <Pressable style={[W.wideBlack, { marginBottom: 14 }]} onPress={() => Linking.openURL(imageUrl)}>
+              <Text style={{ color: '#fff', fontWeight: '800' }}>Open Full Image</Text>
+            </Pressable>
+          )}
+          <Text style={W.mutedC} style={{ paddingHorizontal: 4, marginTop: 6 }}>Powered by DALL·E 3 via OpenAI API key configured in Admin → Settings.</Text>
+        </View>
+      </ScrollView>
+    </View>
+  );
+}
+
+// ---------------------------------------------------------------- Tier 3: Code execution sandbox
+export function CodeExecuteScreen({ conn, account, onAvatar }) {
+  const [code, setCode] = useState('# Write Python code here\\nprint("Hello from ZerotheBot")');
+  const [output, setOutput] = useState(null);
+  const [loading, setLoading] = useState(false);
+
+  const doExecute = async () => {
+    if (!code.trim() || loading) return;
+    setLoading(true);
+    try {
+      const d = await codeExecute(undefined, code);
+      setOutput(d);
+    } catch (e) {
+      Alert.alert('Execution failed', String(e.message || e));
+    } finally { setLoading(false); }
+  };
+
+  return (
+    <View style={W.screen}>
+      <WebTopBar title="Code Sandbox" showBack conn={conn} account={account} onAvatar={onAvatar} />
+      <ScrollView contentContainerStyle={{ paddingBottom: 30, paddingTop: 10 }} showsVerticalScrollIndicator={false}>
+        <View style={{ paddingHorizontal: 16 }}>
+          <Text style={W.museSection}>Python Code</Text>
+          <Text style={W.gSub} marginBottom={8}>Safe sandbox — no network, filesystem, or system access.</Text>
+          <View style={[W.museCard, { marginBottom: 12 }]}>
+            <TextInput style={{ ...W.input, height: 200, textAlignVertical: 'top', paddingTop: 12 }} value={code} onChangeText={setCode} multiline numberOfLines={12} />
+          </View>
+          <Pressable onPress={doExecute} disabled={loading || !code.trim()}
+            style={[W.wideBlack, { marginBottom: 14, opacity: (loading || !code.trim()) ? 0.5 : 1 }]}>
+            <Text style={{ color: '#fff', fontWeight: '800', fontSize: 15 }}>
+              {loading ? 'Running…' : 'Run Code'}
+            </Text>
+          </Pressable>
+          {output && (
+            <View style={[W.museCard, { padding: 14 }]}>
+              <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 8 }}>
+                <Text style={{ color: C.muted, fontSize: 12, fontWeight: '600', textTransform: 'uppercase' }}>Output</Text>
+                <Text style={{ color: output.ok ? C.ok : C.bad, fontSize: 11, fontWeight: '700' }}>{output.ok ? 'OK' : 'ERROR'}</Text>
+              </View>
+              <Text style={{ color: C.text, fontFamily: 'monospace', fontSize: 11, lineHeight: 16 }}>{output.output || output.error}</Text>
+            </View>
+          )}
+        </View>
+      </ScrollView>
+    </View>
+  );
+}
+
+// ---------------------------------------------------------------- Tier 3: Multi-agent collaboration
+export function AgentCollaborateScreen({ conn, account, onAvatar }) {
+  const [task, setTask] = useState('');
+  const [results, setResults] = useState(null);
+  const [loading, setLoading] = useState(false);
+
+  const doCollaborate = async () => {
+    if (!task.trim() || loading) return;
+    setLoading(true);
+    try {
+      const d = await agentCollaborate(undefined, task);
+      setResults(d);
+    } catch (e) {
+      Alert.alert('Collaboration failed', String(e.message || e));
+    } finally { setLoading(false); }
+  };
+
+  return (
+    <View style={W.screen}>
+      <WebTopBar title="Multi-Agent" showBack conn={conn} account={account} onAvatar={onAvatar} />
+      <ScrollView contentContainerStyle={{ paddingBottom: 30, paddingTop: 10 }} showsVerticalScrollIndicator={false}>
+        <View style={{ paddingHorizontal: 16 }}>
+          <Text style={W.museSection}>Agent Collaboration</Text>
+          <Text style={W.gSub} marginBottom={12}>Multiple agents work together: Planner → Executor → Reviewer.</Text>
+          <TextInput style={[W.input, { marginBottom: 10 }]} value={task} onChangeText={setTask} placeholder="Plan a product launch for ZerotheBot…" />
+          <Pressable onPress={doCollaborate} disabled={loading || !task.trim()}
+            style={[W.wideBlack, { marginBottom: 14, opacity: (loading || !task.trim()) ? 0.5 : 1 }]}>
+            <Text style={{ color: '#fff', fontWeight: '800', fontSize: 15 }}>
+              {loading ? 'Collaborating…' : 'Start Collaboration'}
+            </Text>
+          </Pressable>
+          {results && (
+            <View style={[W.museCard, { padding: 14 }]}>
+              <Text style={{ color: C.muted, fontSize: 12, fontWeight: '600', textTransform: 'uppercase' }}>Task: {results.task}</Text>
+              <View style={{ marginTop: 10 }}>
+                {results.agents.map((a, i) => (
+                  <View key={i} style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 6 }}>
+                    <View style={{ width: 32, height: 32, borderRadius: 16, backgroundColor: C.panel2, alignItems: 'center', justifyContent: 'center' }}>
+                      <Text style={{ fontSize: 14 }}>🤖</Text>
+                    </View>
+                    <View style={{ flex: 1, minWidth: 0 }}>
+                      <Text style={{ color: C.text, fontWeight: '600', fontSize: 13 }}>{a.bot}</Text>
+                      <Text style={{ color: C.muted, fontSize: 11 }}>{a.role}</Text>
+                    </View>
+                    <Text style={{ color: C.ok, fontSize: 11, fontWeight: '700' }}>{a.status}</Text>
+                  </View>
+                ))}
+              </View>
+            </View>
+          )}
         </View>
       </ScrollView>
     </View>

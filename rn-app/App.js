@@ -2,7 +2,7 @@ import React, { useEffect, useRef, useState, useCallback } from 'react';
 import { SafeAreaProvider, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Modal, View, Text, TextInput, Pressable, FlatList, StyleSheet, Linking, Alert, ScrollView, BackHandler } from 'react-native';
 import { StatusBar as ExpoStatus } from 'expo-status-bar';
-import { api, connectEvents, loadKey, saveConf, tryConf, clearConf, conf, cfgGet, K_SERVER, K_TOKEN, K_EMAIL, K_PASS, loginEmail, signupEmail, loginGoogle, authStatus, me, adminUsers, adminAccount, adminSettings, adminSetPlan, adminSetAdmin, approvalsCenter, approvalDecide } from './src/session';
+import { api, connectEvents, loadKey, saveConf, tryConf, clearConf, conf, cfgGet, K_SERVER, K_TOKEN, K_EMAIL, K_PASS, loginEmail, signupEmail, loginGoogle, authStatus, me, adminUsers, adminAccount, adminSettings, adminSetPlan, adminSetAdmin, approvalsCenter, approvalDecide, webSearch, imageUnderstand, imageGenerate, codeExecute, agentCollaborate, emailConfigure, emailPoll, emailCreateApprovals, documentUpload, browserNavigate, browserClick, browserType, browserScreenshot, agentMessage, agentMessages } from './src/session';
 import { C } from './src/theme';
 import { checkUpdate, installUpdate, applyOta, otaStatus, APP_VERSION, APP_CODE } from './src/updates';
 import { lastError, send as reportNow, resend as resendLast, hydrate, note, noteOnce, breadcrumb } from './src/diag';
@@ -11,7 +11,7 @@ import Connect, { AuthModal } from './src/Connect';
 import Chat from './src/Chat';
 import ServerScreen from './src/ServerScreen';
 import { TopBar, DashboardScreen, MarketplaceScreen, ApprovalsScreen, McpScreen, RoutinesScreen, FilesScreen, WalletScreen, PluginItemsScreen } from './src/Screens';
-import { WebTopBar, TabSheet, BotsList, HomeView, InboxView, ComputerView, ScreenView, SkillsView, UsageView, ActionLogView, SearchPalette, PlanScreen, AdminStatsScreen, AdminUsersScreen, AdminUserDetailScreen, AdminSettingsScreen, ApprovalCenterView, MuseProfileView, ConnectorsView, IdeasView, GoalsView, FinanceView, TABS } from './src/WebUI';
+import { WebTopBar, TabSheet, BotsList, HomeView, InboxView, ComputerView, ScreenView, SkillsView, UsageView, ActionLogView, SearchPalette, PlanScreen, AdminStatsScreen, AdminUsersScreen, AdminUserDetailScreen, AdminSettingsScreen, ApprovalCenterView, MuseProfileView, ConnectorsView, IdeasView, GoalsView, FinanceView, EmailConfigScreen, SearchScreen, ImageUnderstandScreen, ImageGenerateScreen, CodeExecuteScreen, AgentCollaborateScreen, TABS } from './src/WebUI';
 
 export default function App() {
   return (
@@ -492,6 +492,58 @@ function ZbRoot() {
     case 'finance': return (
       <Shell upd={upd} onUpd={doUpdate} updState={updState}>
         <FinanceView conn={conn} account={email} onAvatar={() => setMenuOpen(true)} />
+        {menuBlock}
+      </Shell>
+    );
+    case 'email': return (
+      <Shell upd={upd} onUpd={doUpdate} updState={updState}>
+        <EmailConfigScreen conn={conn} account={email} onAvatar={() => setMenuOpen(true)} />
+        {menuBlock}
+      </Shell>
+    );
+    case 'search': return (
+      <Shell upd={upd} onUpd={doUpdate} updState={updState}>
+        <SearchScreen conn={conn} account={email} onAvatar={() => setMenuOpen(true)} />
+        {menuBlock}
+      </Shell>
+    );
+    case 'image': return meInfo && meInfo.plan === 'pro' || meInfo && meInfo.plan === 'team' || meInfo && meInfo.plan === 'business' ? (
+      <Shell upd={upd} onUpd={doUpdate} updState={updState}>
+        <ImageGenerateScreen conn={conn} account={email} onAvatar={() => setMenuOpen(true)} />
+        {menuBlock}
+      </Shell>
+    ) : (
+      <Shell upd={upd} onUpd={doUpdate} updState={updState}>
+        <View style={{ paddingHorizontal: 16, paddingTop: 20 }}>
+          <Text style={{ color: C.text, fontSize: 20, fontWeight: '800' }}>Pro Plan Required</Text>
+          <Text style={W.museSub} marginTop={8}>Image generation is available on Pro ($5/mo), Team ($10/mo), and Business ($20/mo) plans.</Text>
+          <Pressable onPress={() => setScreen('plan')} style={[W.wideBlack, { marginTop: 16 }]}>
+            <Text style={{ color: '#fff', fontWeight: '800' }}>Upgrade to Pro</Text>
+          </Pressable>
+        </View>
+        {menuBlock}
+      </Shell>
+    );
+    case 'code': return (
+      <Shell upd={upd} onUpd={doUpdate} updState={updState}>
+        <CodeExecuteScreen conn={conn} account={email} onAvatar={() => setMenuOpen(true)} />
+        {menuBlock}
+      </Shell>
+    );
+    case 'collab': return meInfo && meInfo.bots_count >= 2 ? (
+      <Shell upd={upd} onUpd={doUpdate} updState={updState}>
+        <AgentCollaborateScreen conn={conn} account={email} onAvatar={() => setMenuOpen(true)} />
+        {menuBlock}
+      </Shell>
+    ) : (
+      <Shell upd={upd} onUpd={doUpdate} updState={updState}>
+        <View style={{ paddingHorizontal: 16, paddingTop: 20 }}>
+          <Text style={{ color: C.text, fontSize: 20, fontWeight: '800' }}>Multi-Agent Collaboration</Text>
+          <Text style={W.museSub} marginTop={8}>Create at least 2 bots first, then agents can collaborate on tasks together.</Text>
+          <Pressable onPress={() => setScreen('bots')} style={[W.wideBlack, { marginTop: 16 }]}>
+            <Text style={{ color: '#fff', fontWeight: '800' }}>Create Bots</Text>
+          </Pressable>
+        </View>
         {menuBlock}
       </Shell>
     );
