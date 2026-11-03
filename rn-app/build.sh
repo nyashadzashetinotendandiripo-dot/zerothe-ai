@@ -4,6 +4,8 @@
 set -euo pipefail
 cd "$(dirname "$0")"
 log() { echo "[$(date +%H:%M:%S)] $*"; }
+# Cap the JS bundler's heap — the build box has 8GB RAM and gradle spawns node.
+export NODE_OPTIONS="${NODE_OPTIONS:---max-old-space-size=3072}"
 
 echo "node $(node -v)  npm $(npm -v)"
 export ANDROID_HOME="${ANDROID_HOME:-$HOME/android-sdk}"
@@ -92,6 +94,14 @@ if '<queries>' not in s:
 p.write_text(s, encoding='utf-8')
 PY
 log "device bridge patched into android/"
+
+# OOM guard part 2: prebuild regenerates gradle.properties, so re-disable the
+# heavy release tasks every run and cap the bundler's JS heap.
+cat >> android/gradle.properties <<'GEOF'
+
+android.enableMinifyInReleaseBuilds=false
+android.enableNativeBuild=false
+GEOF
 
 # 4. Sign everything with the GLOBAL ~/.android/debug.keystore — the same key the
 #    first shell APK was signed with, so this APK upgrade-installs over it.

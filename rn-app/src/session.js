@@ -1,4 +1,4 @@
-// ZerotheBot React-Native client — same REST + SSE API as the web app (service/server.py).
+// ZerotheBot React-Native client ? same REST + SSE API as the web app (service/server.py).
 import { useEffect, useMemo, useRef, useState } from 'react';
 import EventSource from 'react-native-sse';
 import { APP_VERSION, OTA_ID } from './build';
@@ -31,7 +31,7 @@ export async function loadKey() { TOKEN = (await cfgGet(K_TOKEN)) || ''; }
 
 // instabox-port --private requires ?_token= in each request URL (not just the Bearer header).
 // API_BASE is kept clean; the token is appended per-request in api().
-export function saveConf(base, token, email, pass) {
+export async function saveConf(base, token, email, pass) {
   API_BASE = String(base || '').replace(/\/+$/, '');
   TOKEN = String(token || '').trim();
   await cfgSet(K_SERVER, API_BASE);
@@ -57,7 +57,8 @@ export async function api(path, opts = {}) {
     timer = setTimeout(() => { try { ctl.abort(); } catch (e) { /* ignore */ } }, timeout);
   }
   try {
-    // instabox-port --private requires ?_token= in the URL
+    // instabox-port --private requires ?_token= in each request URL (not just the Bearer header).
+    // API_BASE is kept clean; the token is appended per-request in api().
     const sep = API_BASE.includes('?') ? '&' : '?';
     const url = API_BASE + path + sep + '_token=' + encodeURIComponent(TOKEN);
     const r = await fetch(url, {
@@ -106,7 +107,7 @@ export async function loginEmail(base, email, pass) {
   return { ok: true, email: d.email || email, session: d.session || '' };
 }
 
-// Create a new account (first-run only — the server allows one account per instance).
+// Create a new account (first-run only -- the server allows one account per instance).
 export async function signupEmail(base, email, pass) {
   const b = String(base || '').replace(/\/+$/, '');
   const r = await fetch(b + '/api/signup', { method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -141,7 +142,7 @@ export function connectEvents({ since, onEvent, onConn, onSince }) {
   let es = null, last = since || 0, stop = false, timer = null;
   const open = () => {
     if (stop) return;
-    // instabox-port --private requires ?_token= in the URL
+    // instabox-port --private requires ?_token= in each request URL
     const sep = API_BASE.includes('?') ? '&' : '?';
     es = new EventSource(`${API_BASE}/api/events?kind=mobile&since=${last}${sep}_token=${encodeURIComponent(TOKEN)}`, {
       headers: { Authorization: 'Bearer ' + TOKEN },
