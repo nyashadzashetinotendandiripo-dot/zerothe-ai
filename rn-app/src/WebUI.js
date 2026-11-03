@@ -1368,11 +1368,10 @@ export function AdminUserDetailScreen({ user: userProp, onSetPlan, onSetAdmin })
                     </View>
                   </Pressable>
                 ))}
-              </View>
-            </>
-          )}
-        </View>
-      </ScrollView>
+              </>
+            )}
+          </View>
+        </ScrollView>
     </View>
   );
 }
