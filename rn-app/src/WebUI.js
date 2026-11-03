@@ -2194,7 +2194,6 @@ export function AgentCollaborateScreen({ conn, account, onAvatar }) {
     </View>
   );
 }
-}
 
 // ---------------------------------------------------------------- InstaBox Android Box screen
 // Bots drive Android on InstaBox machines instead of the user's phone.
