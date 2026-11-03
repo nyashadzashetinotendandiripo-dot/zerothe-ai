@@ -1695,6 +1695,196 @@ google.accounts.id.renderButton(document.getElementById('gbtn'),
         eng.events.publish("agents", change="collaborate", results=results)
         return {"ok": True, "task": task, "agents": results, "count": len(results)}
 
+    # ---------------------------------------------------------------- InstaBox Android Boxes
+    # Bots drive Android on InstaBox machines (Redroid container, no emulator),
+    # not on the user's phone. This replaces the removed AccessibilityService.
+    INSTABOX_API_BASE = "https://api.instabox.sh"
+
+    def _ib_headers(request: Request) -> dict:
+        key = request.headers.get("X-Instabox-Key") or ""
+        if not key:
+            # Fall back to env var for server-initiated calls
+            import os as _os
+            key = _os.environ.get("INSTABOX_API_KEY", "")
+        return {"Authorization": "Bearer " + key, "Content-Type": "application/json"}
+
+    @app.post("/api/instabox/machines", dependencies=[api])
+    def ib_create_machine(request: Request, body: dict = Body(...)) -> dict:
+        """Create an InstaBox Android box (Redroid container, Android 14)."""
+        key = request.headers.get("X-Instabox-Key") or ""
+        import os as _os
+        if not key:
+            key = _os.environ.get("INSTABOX_API_KEY", "")
+        if not key:
+            raise HTTPException(400, "INSTABOX_API_KEY not configured.")
+        name = str(body.get("name", "zerothebot-android")).strip()
+        try:
+            r = httpx.post(INSTABOX_API_BASE + "/v1/machines",
+                           headers={"Authorization": "Bearer " + key},
+                           json={"name": name, "templateId": "android", "templateVersion": "2026-11-02.7-android.1"},
+                           timeout=30)
+            if r.status_code >= 400:
+                raise HTTPException(r.status_code, f"InstaBox create failed: {r.text[:200]}")
+            return r.json()
+        except httpx.HTTPError as e:
+            raise HTTPException(502, f"InstaBox error: {e}")
+
+    @app.get("/api/instabox/machines", dependencies=[api])
+    def ib_list_machines(request: Request) -> dict:
+        """List InstaBox machines."""
+        key = request.headers.get("X-Instabox-Key") or ""
+        import os as _os
+        if not key:
+            key = _os.environ.get("INSTABOX_API_KEY", "")
+        if not key:
+            raise HTTPException(400, "INSTABOX_API_KEY not configured.")
+        try:
+            r = httpx.get(INSTABOX_API_BASE + "/v1/machines",
+                          headers={"Authorization": "Bearer " + key}, timeout=30)
+            if r.status_code >= 400:
+                raise HTTPException(r.status_code, f"InstaBox list failed: {r.text[:200]}")
+            return r.json()
+        except httpx.HTTPError as e:
+            raise HTTPException(502, f"InstaBox error: {e}")
+
+    @app.get("/api/instabox/machines/{mid}", dependencies=[api])
+    def ib_get_machine(request: Request, mid: str) -> dict:
+        """Get one InstaBox machine."""
+        key = request.headers.get("X-Instabox-Key") or ""
+        import os as _os
+        if not key:
+            key = _os.environ.get("INSTABOX_API_KEY", "")
+        if not key:
+            raise HTTPException(400, "INSTABOX_API_KEY not configured.")
+        try:
+            r = httpx.get(f"{INSTABOX_API_BASE}/v1/machines/{mid}",
+                          headers={"Authorization": "Bearer " + key}, timeout=30)
+            if r.status_code >= 400:
+                raise HTTPException(r.status_code, f"InstaBox get failed: {r.text[:200]}")
+            return r.json()
+        except httpx.HTTPError as e:
+            raise HTTPException(502, f"InstaBox error: {e}")
+
+    @app.post("/api/instabox/machines/{mid}/adb", dependencies=[api])
+    def ib_adb(request: Request, mid: str, body: dict = Body(...)) -> dict:
+        """Run an adb command on an InstaBox Android box."""
+        key = request.headers.get("X-Instabox-Key") or ""
+        import os as _os
+        if not key:
+            key = _os.environ.get("INSTABOX_API_KEY", "")
+        if not key:
+            raise HTTPException(400, "INSTABOX_API_KEY not configured.")
+        cmd = str(body.get("cmd", "")).strip()
+        if not cmd:
+            raise HTTPException(400, "adb cmd required.")
+        try:
+            r = httpx.post(f"{INSTABOX_API_BASE}/v1/machines/{mid}/exec",
+                           headers={"Authorization": "Bearer " + key},
+                           json={"cmd": cmd, "timeoutSeconds": 60}, timeout=90)
+            if r.status_code >= 400:
+                raise HTTPException(r.status_code, f"InstaBox exec failed: {r.text[:200]}")
+            return r.json()
+        except httpx.HTTPError as e:
+            raise HTTPException(502, f"InstaBox error: {e}")
+
+    @app.post("/api/instabox/machines/{mid}/desktop/start", dependencies=[api])
+    def ib_desktop_start(request: Request, mid: str, body: dict = Body(default={})) -> dict:
+        """Start the desktop on an InstaBox machine."""
+        key = request.headers.get("X-Instabox-Key") or ""
+        import os as _os
+        if not key:
+            key = _os.environ.get("INSTABOX_API_KEY", "")
+        if not key:
+            raise HTTPException(400, "INSTABOX_API_KEY not configured.")
+        try:
+            r = httpx.post(f"{INSTABOX_API_BASE}/v1/machines/{mid}/desktop",
+                           headers={"Authorization": "Bearer " + key},
+                           json={"action": "start", "width": body.get("width", 1280), "height": body.get("height", 800)},
+                           timeout=30)
+            if r.status_code >= 400:
+                raise HTTPException(r.status_code, f"InstaBox desktop start failed: {r.text[:200]}")
+            return r.json()
+        except httpx.HTTPError as e:
+            raise HTTPException(502, f"InstaBox error: {e}")
+
+    @app.post("/api/instabox/machines/{mid}/desktop/screenshot", dependencies=[api])
+    def ib_desktop_screenshot(request: Request, mid: str) -> dict:
+        """Take a screenshot of the InstaBox machine desktop."""
+        key = request.headers.get("X-Instabox-Key") or ""
+        import os as _os
+        if not key:
+            key = _os.environ.get("INSTABOX_API_KEY", "")
+        if not key:
+            raise HTTPException(400, "INSTABOX_API_KEY not configured.")
+        try:
+            r = httpx.get(f"{INSTABOX_API_BASE}/v1/machines/{mid}/desktop/screenshot",
+                          headers={"Authorization": "Bearer " + key}, timeout=30)
+            if r.status_code >= 400:
+                raise HTTPException(r.status_code, f"InstaBox screenshot failed: {r.text[:200]}")
+            return {"ok": True, "screenshot": r.content, "content_type": r.headers.get("content-type", "image/png")}
+        except httpx.HTTPError as e:
+            raise HTTPException(502, f"InstaBox error: {e}")
+
+    @app.post("/api/instabox/machines/{mid}/desktop/stream", dependencies=[api])
+    def ib_desktop_stream(request: Request, mid: str, body: dict = Body(default={})) -> dict:
+        """Get a desktop stream URL for an InstaBox machine."""
+        key = request.headers.get("X-Instabox-Key") or ""
+        import os as _os
+        if not key:
+            key = _os.environ.get("INSTABOX_API_KEY", "")
+        if not key:
+            raise HTTPException(400, "INSTABOX_API_KEY not configured.")
+        try:
+            r = httpx.post(f"{INSTABOX_API_BASE}/v1/machines/{mid}/desktop/stream",
+                           headers={"Authorization": "Bearer " + key},
+                           json={"viewOnly": body.get("viewOnly", True), "ttlSeconds": body.get("ttlSeconds", 3600)},
+                           timeout=30)
+            if r.status_code >= 400:
+                raise HTTPException(r.status_code, f"InstaBox stream failed: {r.text[:200]}")
+            return r.json()
+        except httpx.HTTPError as e:
+            raise HTTPException(502, f"InstaBox error: {e}")
+
+    @app.post("/api/instabox/machines/{mid}/desktop/click", dependencies=[api])
+    def ib_desktop_click(request: Request, mid: str, body: dict = Body(...)) -> dict:
+        """Click on the InstaBox machine desktop."""
+        key = request.headers.get("X-Instabox-Key") or ""
+        import os as _os
+        if not key:
+            key = _os.environ.get("INSTABOX_API_KEY", "")
+        if not key:
+            raise HTTPException(400, "INSTABOX_API_KEY not configured.")
+        x = int(body.get("x", 0)); y = int(body.get("y", 0))
+        try:
+            r = httpx.post(f"{INSTABOX_API_BASE}/v1/machines/{mid}/desktop",
+                           headers={"Authorization": "Bearer " + key},
+                           json={"action": "click", "x": x, "y": y}, timeout=30)
+            if r.status_code >= 400:
+                raise HTTPException(r.status_code, f"InstaBox click failed: {r.text[:200]}")
+            return r.json()
+        except httpx.HTTPError as e:
+            raise HTTPException(502, f"InstaBox error: {e}")
+
+    @app.post("/api/instabox/machines/{mid}/desktop/type", dependencies=[api])
+    def ib_desktop_type(request: Request, mid: str, body: dict = Body(...)) -> dict:
+        """Type text on the InstaBox machine desktop."""
+        key = request.headers.get("X-Instabox-Key") or ""
+        import os as _os
+        if not key:
+            key = _os.environ.get("INSTABOX_API_KEY", "")
+        if not key:
+            raise HTTPException(400, "INSTABOX_API_KEY not configured.")
+        text = str(body.get("text", ""))
+        try:
+            r = httpx.post(f"{INSTABOX_API_BASE}/v1/machines/{mid}/desktop",
+                           headers={"Authorization": "Bearer " + key},
+                           json={"action": "type", "text": text}, timeout=30)
+            if r.status_code >= 400:
+                raise HTTPException(r.status_code, f"InstaBox type failed: {r.text[:200]}")
+            return r.json()
+        except httpx.HTTPError as e:
+            raise HTTPException(502, f"InstaBox error: {e}")
+
     # (e.g. the QuickBooks MCP server on port 3333) so they are reachable
     # over the public HTTPS URL without exposing extra ports.
     @app.post("/api/mcp-proxy/{mcp_id:path}", dependencies=[api])

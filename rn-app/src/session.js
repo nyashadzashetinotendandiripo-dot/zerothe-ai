@@ -410,3 +410,102 @@ export async function agentCollaborate(base, task) {
   if (r.status !== 200) throw new Error(d.error || d.detail || 'Agent collaboration failed.');
   return d;
 }
+
+// ---------------------------------------------------------------- InstaBox Android Boxes
+// Bots drive Android on InstaBox machines instead of the user's phone.
+// No AccessibilityService needed on the phone.
+export async function ibCreateMachine(base, name) {
+  const b = String(base || '').replace(/\/+$/, '');
+  const r = await fetch(b + '/api/instabox/machines', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name }),
+  });
+  const d = await r.json().catch(() => ({}));
+  if (r.status !== 200) throw new Error(d.error || d.detail || 'InstaBox create failed.');
+  return d;
+}
+
+export async function ibListMachines(base) {
+  const b = String(base || '').replace(/\/+$/, '');
+  const r = await fetch(b + '/api/instabox/machines', {
+    headers: { 'Content-Type': 'application/json' },
+  });
+  const d = await r.json().catch(() => ({}));
+  if (r.status !== 200) throw new Error(d.error || d.detail || 'InstaBox list failed.');
+  return d;
+}
+
+export async function ibGetMachine(base, mid) {
+  const b = String(base || '').replace(/\/+$/, '');
+  const r = await fetch(b + '/api/instabox/machines/' + encodeURIComponent(mid), {
+    headers: { 'Content-Type': 'application/json' },
+  });
+  const d = await r.json().catch(() => ({}));
+  if (r.status !== 200) throw new Error(d.error || d.detail || 'InstaBox get failed.');
+  return d;
+}
+
+export async function ibAdb(base, mid, cmd) {
+  const b = String(base || '').replace(/\/+$/, '');
+  const r = await fetch(b + '/api/instabox/machines/' + encodeURIComponent(mid) + '/adb', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ cmd }),
+  });
+  const d = await r.json().catch(() => ({}));
+  if (r.status !== 200) throw new Error(d.error || d.detail || 'InstaBox adb failed.');
+  return d;
+}
+
+export async function ibDesktopStart(base, mid, width = 1280, height = 800) {
+  const b = String(base || '').replace(/\/+$/, '');
+  const r = await fetch(b + '/api/instabox/machines/' + encodeURIComponent(mid) + '/desktop/start', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ width, height }),
+  });
+  const d = await r.json().catch(() => ({}));
+  if (r.status !== 200) throw new Error(d.error || d.detail || 'InstaBox desktop start failed.');
+  return d;
+}
+
+export async function ibDesktopScreenshot(base, mid) {
+  const b = String(base || '').replace(/\/+$/, '');
+  const r = await fetch(b + '/api/instabox/machines/' + encodeURIComponent(mid) + '/desktop/screenshot', {
+    headers: { 'Content-Type': 'application/json' },
+  });
+  const d = await r.json().catch(() => ({}));
+  if (r.status !== 200) throw new Error(d.error || d.detail || 'InstaBox screenshot failed.');
+  return d;
+}
+
+export async function ibDesktopStream(base, mid, viewOnly = true, ttlSeconds = 3600) {
+  const b = String(base || '').replace(/\/+$/, '');
+  const r = await fetch(b + '/api/instabox/machines/' + encodeURIComponent(mid) + '/desktop/stream', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ viewOnly, ttlSeconds }),
+  });
+  const d = await r.json().catch(() => ({}));
+  if (r.status !== 200) throw new Error(d.error || d.detail || 'InstaBox stream failed.');
+  return d;
+}
+
+export async function ibDesktopClick(base, mid, x, y) {
+  const b = String(base || '').replace(/\/+$/, '');
+  const r = await fetch(b + '/api/instabox/machines/' + encodeURIComponent(mid) + '/desktop/click', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ x, y }),
+  });
+  const d = await r.json().catch(() => ({}));
+  if (r.status !== 200) throw new Error(d.error || d.detail || 'InstaBox click failed.');
+  return d;
+}
+
+export async function ibDesktopType(base, mid, text) {
+  const b = String(base || '').replace(/\/+$/, '');
+  const r = await fetch(b + '/api/instabox/machines/' + encodeURIComponent(mid) + '/desktop/type', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ text }),
+  });
+  const d = await r.json().catch(() => ({}));
+  if (r.status !== 200) throw new Error(d.error || d.detail || 'InstaBox type failed.');
+  return d;
+}

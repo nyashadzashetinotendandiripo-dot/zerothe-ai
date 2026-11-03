@@ -278,6 +278,7 @@ export const TABS = [
   ['image', 'Images'],
   ['code', 'Code'],
   ['collab', 'Multi-Agent'],
+  ['android', 'Android Box'],
   ['set', 'Settings'],
 ];
 export function TabSheet({ open, tab, inboxBadge, onGo, onClose, initial, tabs }) {
@@ -2187,6 +2188,148 @@ export function AgentCollaborateScreen({ conn, account, onAvatar }) {
                 ))}
               </View>
             </View>
+          )}
+        </View>
+      </ScrollView>
+    </View>
+  );
+}
+}
+
+// ---------------------------------------------------------------- InstaBox Android Box screen
+// Bots drive Android on InstaBox machines instead of the user's phone.
+// No AccessibilityService needed on the phone.
+export function AndroidBoxScreen({ conn, account, onAvatar }) {
+  const [machines, setMachines] = useState([]);
+  const [selectedMid, setSelectedMid] = useState(null);
+  const [streamUrl, setStreamUrl] = useState(null);
+  const [loading, setLoading] = useState(false);
+  const [adbCmd, setAdbCmd] = useState('');
+  const [adbResult, setAdbResult] = useState(null);
+
+  useEffect(() => { (async () => {
+    try { const d = await ibListMachines(); setMachines(d.machines || []); } catch (e) { setMachines([]); }
+  })(); }, []);
+
+  const createMachine = async () => {
+    setLoading(true);
+    try {
+      const d = await ibCreateMachine(undefined, 'zerothebot-android');
+      setMachines((prev) => [...prev, d]);
+      setSelectedMid(d.id || d.machineId);
+    } catch (e) { Alert.alert('Create failed', String(e.message || e)); }
+    finally { setLoading(false); }
+  };
+
+  const startDesktop = async () => {
+    if (!selectedMid) return;
+    setLoading(true);
+    try {
+      await ibDesktopStart(undefined, selectedMid);
+      const d = await ibDesktopStream(undefined, selectedMid, true, 3600);
+      setStreamUrl(d.url);
+    } catch (e) { Alert.alert('Desktop start failed', String(e.message || e)); }
+    finally { setLoading(false); }
+  };
+
+  const runAdb = async () => {
+    if (!selectedMid || !adbCmd.trim()) return;
+    setLoading(true);
+    try {
+      const d = await ibAdb(undefined, selectedMid, adbCmd);
+      setAdbResult(JSON.stringify(d, null, 2));
+    } catch (e) { Alert.alert('adb failed', String(e.message || e)); }
+    finally { setLoading(false); }
+  };
+
+  const takeScreenshot = async () => {
+    if (!selectedMid) return;
+    setLoading(true);
+    try {
+      const d = await ibDesktopScreenshot(undefined, selectedMid);
+      // screenshot returns binary; we'd need to display it as base64 data URI
+      Alert.alert('Screenshot', 'Screenshot captured (binary response). Check server logs.');
+    } catch (e) { Alert.alert('Screenshot failed', String(e.message || e)); }
+    finally { setLoading(false); }
+  };
+
+  return (
+    <View style={W.screen}>
+      <WebTopBar title="Android Box" showBack conn={conn} account={account} onAvatar={onAvatar} />
+      <ScrollView contentContainerStyle={{ paddingBottom: 30, paddingTop: 10 }} showsVerticalScrollIndicator={false}>
+        <View style={{ paddingHorizontal: 16 }}>
+          <Text style={W.museSection}>InstaBox Android Boxes</Text>
+          <Text style={W.gSub} marginBottom={12}>Bots drive Android on InstaBox machines (Redroid, no emulator), not on your phone. No AccessibilityService needed.</Text>
+
+          <View style={[W.museCard, { marginBottom: 12 }]}>
+            <View style={{ flexDirection: 'row', gap: 8, marginBottom: 10 }}>
+              <Pressable onPress={createMachine} disabled={loading}
+                style={[W.pillBtn, { backgroundColor: C.solid, paddingHorizontal: 14 }]}>
+                <Text style={{ color: '#fff', fontWeight: '800' }}>Create Android Box</Text>
+              </Pressable>
+              <Pressable onPress={() => setLoading(true) || ibListMachines(undefined).then(d => setMachines(d.machines || [])).finally(() => setLoading(false))}
+                style={[W.pillBtn, { backgroundColor: C.panel2, paddingHorizontal: 14 }]}>
+                <Text style={{ color: C.text, fontWeight: '700' }}>Refresh</Text>
+              </Pressable>
+            </View>
+            {loading ? <View style={{ padding: 10 }}><ActivityIndicator /></View> :
+              machines.length === 0 ? (
+                <Text style={W.mutedC} textAlign='center'>No Android boxes yet. Create one to start.</Text>
+              ) : (
+                machines.map((m) => (
+                  <Pressable key={m.id} onPress={() => setSelectedMid(m.id)}
+                    style={[W.museCard, { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', padding: 12, marginBottom: 8, borderWidth: selectedMid === m.id ? 2 : 0, borderColor: selectedMid === m.id ? C.ok : 'transparent' }]}>
+                    <View style={{ flex: 1, minWidth: 0 }}>
+                      <Text style={{ color: C.text, fontWeight: '700', fontSize: 14 }}>{m.name || m.id}</Text>
+                      <Text style={W.museSub}>{m.state || 'unknown'} · {m.state === 'running' ? 'ready' : 'starting…'}</Text>
+                    </View>
+                    <Text style={{ color: m.state === 'running' ? C.ok : C.muted, fontSize: 11, fontWeight: '700' }}>{m.state}</Text>
+                  </Pressable>
+                ))
+              )}
+          </View>
+
+          {selectedMid && (
+            <>
+              <Text style={W.museSection} marginTop={10}>Desktop Control</Text>
+              <View style={[W.museCard, { marginBottom: 12 }]}>
+                {streamUrl ? (
+                  <View style={{ alignItems: 'center' }}>
+                    <Text style={{ color: C.muted, fontSize: 11, marginBottom: 6 }}>Android desktop stream</Text>
+                    <Image source={{ uri: streamUrl }} style={{ width: 260, height: 460, borderRadius: 16, backgroundColor: '#000' }} />
+                  </View>
+                ) : (
+                  <Pressable onPress={startDesktop} disabled={loading}
+                    style={[W.wideBlack, { paddingVertical: 14 }]}>
+                    <Text style={{ color: '#fff', fontWeight: '800', fontSize: 15 }}>
+                      {loading ? 'Starting desktop…' : 'Start Android Desktop'}
+                    </Text>
+                  </Pressable>
+                )}
+              </View>
+
+              <View style={[W.museCard, { marginBottom: 12 }]}>
+                <Text style={W.museSection} marginBottom={8}>adb Commands</Text>
+                <View style={{ flexDirection: 'row', gap: 6, marginBottom: 8 }}>
+                  <TextInput style={[W.rowInput, { flex: 1 }]} value={adbCmd} onChangeText={setAdbCmd} placeholder="adb devices" />
+                  <Pressable onPress={runAdb} disabled={loading || !selectedMid}
+                    style={[W.pillBtn, { backgroundColor: C.solid, paddingHorizontal: 14 }]}>
+                    <Text style={{ color: '#fff', fontWeight: '800' }}>{loading ? '…' : 'Run'}</Text>
+                  </Pressable>
+                </View>
+                {adbResult && (
+                  <View style={{ backgroundColor: C.panel2, borderRadius: 10, padding: 10 }}>
+                    <Text style={{ color: C.text, fontFamily: 'monospace', fontSize: 11 }}>{adbResult}</Text>
+                  </View>
+                )}
+                <View style={{ flexDirection: 'row', gap: 6, marginTop: 8 }}>
+                  <Pressable onPress={takeScreenshot} disabled={loading || !selectedMid}
+                    style={[W.pillBtn, { backgroundColor: C.panel2, paddingHorizontal: 12 }]}>
+                    <Text style={{ color: C.text, fontWeight: '700', fontSize: 12 }}>Screenshot</Text>
+                  </Pressable>
+                </View>
+              </View>
+            </>
           )}
         </View>
       </ScrollView>

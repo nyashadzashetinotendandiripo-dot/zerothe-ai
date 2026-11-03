@@ -11,7 +11,7 @@ import Connect, { AuthModal } from './src/Connect';
 import Chat from './src/Chat';
 import ServerScreen from './src/ServerScreen';
 import { TopBar, DashboardScreen, MarketplaceScreen, ApprovalsScreen, McpScreen, RoutinesScreen, FilesScreen, WalletScreen, PluginItemsScreen } from './src/Screens';
-import { WebTopBar, TabSheet, BotsList, HomeView, InboxView, ComputerView, ScreenView, SkillsView, UsageView, ActionLogView, SearchPalette, PlanScreen, AdminStatsScreen, AdminUsersScreen, AdminUserDetailScreen, AdminSettingsScreen, ApprovalCenterView, MuseProfileView, ConnectorsView, IdeasView, GoalsView, FinanceView, EmailConfigScreen, SearchScreen, ImageUnderstandScreen, ImageGenerateScreen, CodeExecuteScreen, AgentCollaborateScreen, TABS } from './src/WebUI';
+import { WebTopBar, TabSheet, BotsList, HomeView, InboxView, ComputerView, ScreenView, SkillsView, UsageView, ActionLogView, SearchPalette, PlanScreen, AdminStatsScreen, AdminUsersScreen, AdminUserDetailScreen, AdminSettingsScreen, ApprovalCenterView, MuseProfileView, ConnectorsView, IdeasView, GoalsView, FinanceView, EmailConfigScreen, SearchScreen, ImageUnderstandScreen, ImageGenerateScreen, CodeExecuteScreen, AgentCollaborateScreen, AndroidBoxScreen, TABS } from './src/WebUI';
 
 export default function App() {
   return (
@@ -544,6 +544,12 @@ function ZbRoot() {
             <Text style={{ color: '#fff', fontWeight: '800' }}>Create Bots</Text>
           </Pressable>
         </View>
+        {menuBlock}
+      </Shell>
+    );
+    case 'android': return (
+      <Shell upd={upd} onUpd={doUpdate} updState={updState}>
+        <AndroidBoxScreen conn={conn} account={email} onAvatar={() => setMenuOpen(true)} />
         {menuBlock}
       </Shell>
     );
