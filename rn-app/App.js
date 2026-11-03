@@ -2,7 +2,7 @@ import React, { useEffect, useRef, useState, useCallback } from 'react';
 import { SafeAreaProvider, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Modal, View, Text, TextInput, Pressable, FlatList, StyleSheet, Linking, Alert, ScrollView, BackHandler } from 'react-native';
 import { StatusBar as ExpoStatus } from 'expo-status-bar';
-import { api, connectEvents, loadKey, saveConf, tryConf, clearConf, conf, cfgGet, K_SERVER, K_TOKEN, K_EMAIL, K_PASS, loginEmail, signupEmail, loginGoogle, authStatus, me, adminUsers, adminAccount, adminSettings, adminSetPlan, adminSetAdmin } from './src/session';
+import { api, connectEvents, loadKey, saveConf, tryConf, clearConf, conf, cfgGet, K_SERVER, K_TOKEN, K_EMAIL, K_PASS, loginEmail, signupEmail, loginGoogle, authStatus, me, adminUsers, adminAccount, adminSettings, adminSetPlan, adminSetAdmin, approvalsCenter, approvalDecide } from './src/session';
 import { C } from './src/theme';
 import { checkUpdate, installUpdate, applyOta, otaStatus, APP_VERSION, APP_CODE } from './src/updates';
 import { lastError, send as reportNow, resend as resendLast, hydrate, note, noteOnce, breadcrumb } from './src/diag';
@@ -11,7 +11,7 @@ import Connect, { AuthModal } from './src/Connect';
 import Chat from './src/Chat';
 import ServerScreen from './src/ServerScreen';
 import { TopBar, DashboardScreen, MarketplaceScreen, ApprovalsScreen, McpScreen, RoutinesScreen, FilesScreen, WalletScreen, PluginItemsScreen } from './src/Screens';
-import { WebTopBar, TabSheet, BotsList, HomeView, InboxView, ComputerView, ScreenView, SkillsView, UsageView, ActionLogView, SearchPalette, PlanScreen, AdminStatsScreen, AdminUsersScreen, AdminUserDetailScreen, AdminSettingsScreen, TABS } from './src/WebUI';
+import { WebTopBar, TabSheet, BotsList, HomeView, InboxView, ComputerView, ScreenView, SkillsView, UsageView, ActionLogView, SearchPalette, PlanScreen, AdminStatsScreen, AdminUsersScreen, AdminUserDetailScreen, AdminSettingsScreen, ApprovalCenterView, TABS } from './src/WebUI';
 
 export default function App() {
   return (
@@ -89,6 +89,7 @@ function ZbRoot() {
   const [templates, setTemplates] = useState([]);
   const [busy, setBusy] = useState({});                    // bot_id -> {status, thread_id}
   const [apps, setApps] = useState([]);                    // pending approvals, server-wide
+  const [approvals, setApprovals] = useState([]);          // Muse-style approval center items
   const [chat, setChat] = useState(null);                  // {bot, threadId, threads}
   const [groups, setGroups] = useState([]);                // group chats
   const [email, setEmail] = useState('');                  // account (avatar initials)
@@ -180,6 +181,7 @@ function ZbRoot() {
       setTemplates(d.templates || []);
       setApps(d.approvals || []);
       if (d.last_event > lastRef.current) lastRef.current = d.last_event;
+      try { const c = await approvalsCenter(); setApprovals(c.approvals || []); } catch (e) { /* ignore */ }
       const b = {};
       for (const [id, st] of Object.entries(d.status || {})) if (st && st.status && st.status !== 'idle') b[id] = st;
       setBusy(b);
@@ -309,7 +311,7 @@ function ZbRoot() {
 
   const menuProps = {
     open: menuOpen,
-    inboxBadge: apps.length,
+    inboxBadge: apps.length + approvals.length,
     tab: screen,
     onGo: go,
     onClose: () => setMenuOpen(false),
@@ -460,6 +462,12 @@ function ZbRoot() {
           setMeInfo((prev) => prev ? { ...prev, plan: p } : null);
           refresh();
         }} />
+        {menuBlock}
+      </Shell>
+    );
+    case 'approvals': return (
+      <Shell upd={upd} onUpd={doUpdate} updState={updState}>
+        <ApprovalCenterView conn={conn} account={email} onAvatar={() => setMenuOpen(true)} />
         {menuBlock}
       </Shell>
     );

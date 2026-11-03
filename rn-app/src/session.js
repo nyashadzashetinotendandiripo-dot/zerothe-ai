@@ -186,6 +186,27 @@ export async function adminSetAdmin(base, email, isAdmin) {
   return d;
 }
 
+// Approval center: Muse-style pending actions with merchant/price/item details.
+export async function approvalsCenter(base) {
+  const b = String(base || '').replace(/\/+$/, '');
+  const r = await fetch(b + '/api/approvals/center', { headers: { 'Content-Type': 'application/json' } });
+  const d = await r.json().catch(() => ({}));
+  if (r.status !== 200) throw new Error(d.error || d.detail || 'Could not load approvals.');
+  return d;
+}
+
+// Decide an approval: approve or deny.
+export async function approvalDecide(base, aid, approve, remember = false, note = '') {
+  const b = String(base || '').replace(/\/+$/, '');
+  const r = await fetch(b + '/api/approvals/' + encodeURIComponent(aid) + '/decide', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ approve, remember, note }),
+  });
+  const d = await r.json().catch(() => ({}));
+  if (r.status !== 200) throw new Error(d.error || d.detail || 'Could not decide approval.');
+  return d;
+}
+
 // Sign in with Google: the reader app hands the verified Google ID token here
 // and the server returns { ok, email, session } usable as the Bearer token.
 export async function loginGoogle(base, idToken) {

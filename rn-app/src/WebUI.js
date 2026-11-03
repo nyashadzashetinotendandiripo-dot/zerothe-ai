@@ -225,6 +225,7 @@ export const TABS = [
   ['actionlog', 'Action log'],
   ['plan', 'Plan'],
   ['admin', 'Admin'],
+  ['approvals', 'Approvals'],
   ['set', 'Settings'],
 ];
 export function TabSheet({ open, tab, inboxBadge, onGo, onClose, initial, tabs }) {
@@ -1415,6 +1416,97 @@ export function AdminSettingsScreen({ settings: settingsProp, onRefresh }) {
               </View>
             );
           })}
+        </View>
+      </ScrollView>
+    </View>
+  );
+}
+
+// ---------------------------------------------------------------- approval center (Muse-style Allow/Deny)
+export function ApprovalCenterView({ conn, account, onAvatar, onOpenThread }) {
+  const [items, setItems] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [deciding, setDeciding] = useState({});
+
+  useEffect(() => { (async () => {
+    try {
+      const d = await api('/api/approvals/center');
+      setItems(d.approvals || []);
+    } catch (e) { setItems([]); }
+    finally { setLoading(false); }
+  })(); }, []);
+
+  const decide = async (item, approve) => {
+    setDeciding((prev) => ({ ...prev, [item.id]: true }));
+    try {
+      await approvalDecide(item.id, approve);
+      setItems(items.filter((i) => i.id !== item.id));
+      if (onOpenThread && item.thread_id) {
+        // handled by parent navigation
+      }
+    } catch (e) {
+      Alert.alert('Decision failed', String(e.message || e));
+    }
+    finally { setDeciding((prev) => { const n = { ...prev }; delete n[item.id]; return n; }); }
+  };
+
+  const priceText = (item) => {
+    const c = item.currency || '$';
+    const p = item.price || '';
+    return p ? c + ' ' + p : (c === '$' ? 'Price not shown' : '');
+  };
+
+  return (
+    <View style={W.screen}>
+      <WebTopBar title="Approvals" showBack conn={conn} account={account} onAvatar={onAvatar} />
+      <ScrollView contentContainerStyle={{ paddingBottom: 30, paddingTop: 10 }} showsVerticalScrollIndicator={false}>
+        <View style={{ paddingHorizontal: 16 }}>
+          {loading ? <View style={{ padding: 20 }}><ActivityIndicator /></View> :
+            items.length === 0 ? (
+              <View style={[W.card, { alignItems: 'center', padding: 30 }]}>
+                <Text style={{ fontSize: 40 }}>✅</Text>
+                <Text style={{ color: C.text, fontWeight: '700', marginTop: 10 }}>All caught up</Text>
+                <Text style={W.gSub} textAlign='center'>No actions waiting for your approval.</Text>
+              </View>
+            ) : (
+              items.map((item) => (
+                <Pressable key={item.id} style={[W.card, { flexDirection: 'row', gap: 12, padding: 14, marginBottom: 12 }]}>
+                  {item.image_url ? (
+                    <Image source={{ uri: item.image_url }} style={{ width: 70, height: 70, borderRadius: 10 }} />
+                  ) : (
+                    <View style={{ width: 70, height: 70, borderRadius: 10, backgroundColor: C.panel2, alignItems: 'center', justifyContent: 'center' }}>
+                      <Text style={{ fontSize: 28 }}>🤖</Text>
+                    </View>
+                  )}
+                  <View style={{ flex: 1, minWidth: 0 }}>
+                    <Text style={{ color: C.text, fontWeight: '700', fontSize: 15, minWidth: 0 }} numberOfLines={2}>
+                      {item.item || item.summary || item.title}
+                    </Text>
+                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 4 }}>
+                      {item.merchant ? <Text style={{ color: C.muted, fontSize: 11, fontWeight: '600' }}>{item.merchant}</Text> : null}
+                      <Text style={{ color: C.muted, fontSize: 11 }}>{item.action || item.category}</Text>
+                    </View>
+                    <Text style={{ color: priceText(item).includes('not') ? C.muted : C.ok, fontWeight: '800', fontSize: 16, marginTop: 6 }}>
+                      {priceText(item)}
+                    </Text>
+                  </View>
+                  <View style={{ gap: 8 }}>
+                    <Pressable onPress={() => decide(item, false)} disabled={deciding[item.id]}
+                      style={[W.pillBtn, { backgroundColor: '#b00020', paddingHorizontal: 14, paddingVertical: 8, minWidth: 60 }]}>
+                      <Text style={{ color: '#fff', fontWeight: '800', fontSize: 13 }}>
+                        {deciding[item.id] ? '…' : 'Deny'}
+                      </Text>
+                    </Pressable>
+                    <Pressable onPress={() => decide(item, true)} disabled={deciding[item.id]}
+                      style={[W.wideBlack, { paddingHorizontal: 16, paddingVertical: 8, minWidth: 70 }]}>
+                      <Text style={{ color: '#fff', fontWeight: '800', fontSize: 13 }}>
+                        {deciding[item.id] ? '…' : 'Allow'}
+                      </Text>
+                    </Pressable>
+                  </View>
+                </Pressable>
+              ))
+            )}
         </View>
       </ScrollView>
     </View>

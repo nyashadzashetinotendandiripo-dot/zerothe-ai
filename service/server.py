@@ -587,6 +587,35 @@ def create_app(engine: Engine, token: str) -> FastAPI:
             raise HTTPException(404, "No such approval.")
         return r
 
+    @app.get("/api/approvals/center", dependencies=[api])
+    def approvals_center(request: Request) -> dict:
+        """Muse-style approval center: pending actions with merchant/price/item details for the mobile UI."""
+        user = current_user(request)
+        bots = eng.bots.list(owner=user)
+        bot_ids = [b["id"] for b in bots]
+        out = []
+        for bid in bot_ids:
+            for a in eng.approvals.list("pending", bot_id=bid, limit=50):
+                details = a.get("details") or {}
+                out.append({
+                    "id": a["id"],
+                    "bot_id": a["bot_id"],
+                    "bot_name": a.get("bot_name") or (next((b for b in bots if b["id"] == a["bot_id"]), {}) or {}).get("name", "Bot"),
+                    "category": a.get("category", "purchase"),
+                    "summary": a.get("summary", ""),
+                    "title": a.get("title", "Action needed"),
+                    "merchant": details.get("merchant") or details.get("store") or "",
+                    "price": details.get("price") or details.get("total") or "",
+                    "currency": details.get("currency") or "$",
+                    "item": details.get("item") or details.get("product") or "",
+                    "image_url": details.get("image_url") or details.get("thumbnail") or "",
+                    "action": details.get("action") or details.get("tool") or "",
+                    "created_at": a.get("created_at", 0),
+                    "thread_id": a.get("thread_id", ""),
+                })
+        out.sort(key=lambda x: x.get("created_at", 0), reverse=True)
+        return {"approvals": out, "count": len(out)}
+
     # ------------------------------------------------- device bridge (phone)
     # The ZerotheBot Android app runs an AccessibilityService poller that calls
     # /api/device/pull, executes the job on the phone and posts the result back.
