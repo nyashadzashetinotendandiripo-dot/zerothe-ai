@@ -208,6 +208,7 @@ function ChatScreen({ thread, threads, botName: propsBotName, onSwitch, onBack, 
   const [online, setOnline] = useState(true);    // SSE / poll connection state
   const [notifCount, setNotifCount] = useState(0); // unread notification count
   const [chatSearch, setChatSearch] = useState(''); // filter messages in this thread
+  const [searchOpen, setSearchOpen] = useState(false); // shows/hides the search bar
   const [schedTime, setSchedTime] = useState(null); // scheduled send epoch ms
   // Tell the hardware back button to close open sheets/modals instead of quitting.
   useEffect(() => {
@@ -773,7 +774,7 @@ function ChatScreen({ thread, threads, botName: propsBotName, onSwitch, onBack, 
       </View>
 
       {/* Feature 7: search within chat */}
-      {chatSearch ? (
+      {searchOpen ? (
         <View style={st.searchBar}>
           <TextInput
             style={st.searchInput}
@@ -782,13 +783,14 @@ function ChatScreen({ thread, threads, botName: propsBotName, onSwitch, onBack, 
             placeholder="Search messages…"
             placeholderTextColor={MUTED}
             onSubmitEditing={() => {}}
+            autoFocus
           />
-          <Pressable onPress={() => setChatSearch('')} style={st.searchClear}>
+          <Pressable onPress={() => { setSearchOpen(false); setChatSearch(''); }} style={st.searchClear}>
             <Text style={st.searchClearT}>✕</Text>
           </Pressable>
         </View>
       ) : (
-        <Pressable onPress={() => { /* toggle search via histOpen-like sheet */ setChatSearch(chatSearch ? '' : ''); }} hitSlop={8} style={st.searchBtn}>
+        <Pressable onPress={() => { setSearchOpen(!searchOpen); if (searchOpen) setChatSearch(''); }} hitSlop={8} style={st.searchBtn}>
           <Text style={st.searchBtnT}>🔍</Text>
         </Pressable>
       )}
