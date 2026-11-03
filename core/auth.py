@@ -30,6 +30,76 @@ _GOOGLE_ISSUERS = {"https://accounts.google.com", "accounts.google.com"}
 _GOOGLE_CERTS_URL = "https://www.googleapis.com/oauth2/v3/certs"
 _CERT_CACHE_SECONDS = 3600
 
+# ----------------------------------------------------------------- plans
+# Plan tiers: free / starter / pro / team / business
+# limits are per-week token budgets and per-account bot caps.
+# Tokens reset weekly on Monday (matches usage.week_bounds).
+PLANS = {
+    "free": {
+        "label": "Free", "price_usd": 0, "interval": "month",
+        "max_bots": 3, "weekly_tokens": 50_000,
+        "google_signin": False, "api_access": False,
+        "scheduled_routines": False, "export_import": False,
+        "support": "community",
+    },
+    "starter": {
+        "label": "Starter", "price_usd": 2, "interval": "month",
+        "max_bots": 10, "weekly_tokens": 200_000,
+        "google_signin": True, "api_access": False,
+        "scheduled_routines": False, "export_import": False,
+        "support": "email",
+    },
+    "pro": {
+        "label": "Pro", "price_usd": 5, "interval": "month",
+        "max_bots": 50, "weekly_tokens": 1_000_000,
+        "google_signin": True, "api_access": True,
+        "scheduled_routines": True, "export_import": True,
+        "support": "priority_email",
+    },
+    "team": {
+        "label": "Team", "price_usd": 10, "interval": "month",
+        "max_bots": 100, "weekly_tokens": 5_000_000,
+        "google_signin": True, "api_access": True,
+        "scheduled_routines": True, "export_import": True,
+        "support": "priority_email_discord",
+        "max_team_members": 5,
+    },
+    "business": {
+        "label": "Business", "price_usd": 20, "interval": "month",
+        "max_bots": 0, "weekly_tokens": 20_000_000,   # 0 = unlimited
+        "google_signin": True, "api_access": True,
+        "scheduled_routines": True, "export_import": True,
+        "support": "phone_email",
+        "max_team_members": 0,   # 0 = unlimited
+    },
+}
+
+DEFAULT_PLAN = "free"
+
+
+def plan_limits(plan: str | None = None) -> dict:
+    """Return the plan dict for a tier, falling back to free."""
+    p = (plan or DEFAULT_PLAN or DEFAULT_PLAN).strip().lower()
+    return PLANS.get(p, PLANS[DEFAULT_PLAN])
+
+
+def plan_for(email: str) -> str:
+    """Return the plan tier for an account (default free)."""
+    acc = _read_account(_normalize(email))
+    return acc.get("plan") or DEFAULT_PLAN
+
+
+def set_plan(email: str, plan: str) -> None:
+    """Change an account's plan tier (admin only)."""
+    if plan not in PLANS:
+        raise ValueError(f"Unknown plan '{plan}'. Choose from: {', '.join(PLANS)}.")
+    email = _normalize(email)
+    acc = _read_account(email)
+    if not acc.get("email"):
+        raise ValueError("No such account.")
+    acc["plan"] = plan
+    _write_account(email, acc)
+
 
 def _accounts_dir():  # lazy import: core.paths is heavyweight for unit tests
     from core import paths
@@ -59,6 +129,7 @@ def _migrate_legacy() -> None:
             return
         if data.get("email"):
             data["is_admin"] = True   # legacy sole owner becomes admin
+            data["plan"] = data.get("plan") or DEFAULT_PLAN
             _write_account(data["email"], data)
             try:
                 legacy.unlink()
@@ -146,7 +217,7 @@ def set_google_email(email: str, addr: str) -> None:
     _write_account(email, acc)
 
 
-def create_account(addr: str, password: str | None = None, *, google_only: bool = False, is_admin: bool = False) -> None:
+def create_account(addr: str, password: str | None = None, *, google_only: bool = False, is_admin: bool = False, plan: str | None = None) -> None:
     """Create an account for ``addr``.
 
     ``password`` is required unless ``google_only`` is set (Google sign-up).
@@ -156,6 +227,9 @@ def create_account(addr: str, password: str | None = None, *, google_only: bool 
         raise ValueError("That email address does not look right.")
     if has_account(addr):
         raise ValueError("An account with that email already exists.")
+    tier = plan or DEFAULT_PLAN
+    if tier not in PLANS:
+        tier = DEFAULT_PLAN
     if not google_only:
         pw = password or ""
         if len(pw) < MIN_LENGTH:
@@ -166,6 +240,7 @@ def create_account(addr: str, password: str | None = None, *, google_only: bool 
             "hash": f"pbkdf2${_ITERATIONS}${salt.hex()}${_hash_password(pw, salt)}",
             "google_only": False,
             "is_admin": bool(is_admin),
+            "plan": tier,
             "created_at": time.time(),
         }
     else:
@@ -174,6 +249,7 @@ def create_account(addr: str, password: str | None = None, *, google_only: bool 
             "hash": None,
             "google_only": True,
             "is_admin": bool(is_admin),
+            "plan": tier,
             "created_at": time.time(),
         }
     _write_account(addr, acc)

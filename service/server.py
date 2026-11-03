@@ -219,6 +219,30 @@ def create_app(engine: Engine, token: str) -> FastAPI:
         return {"needs_setup": not auth_mod.has_account(), "signed_in": bool(user),
                 "email": user, "google_ready": bool(auth_mod.google_email(user)) if user else False}
 
+    @app.get("/api/me", dependencies=[api])
+    def me(request: Request) -> dict:
+        """Current account: email, admin flag, plan, usage this week."""
+        user = current_user(request)
+        if not user:
+            raise HTTPException(401, "Sign in required.")
+        acc = auth_mod._read_account(user)
+        pl = auth_mod.plan_for(user)
+        limits = auth_mod.plan_limits(pl)
+        eng.usage.backfill_owners()
+        us = eng.usage.user_summary(user)
+        return {
+            "email": user,
+            "is_admin": bool(acc.get("is_admin")),
+            "plan": pl,
+            "plan_label": limits["label"],
+            "plan_price": limits["price_usd"],
+            "max_bots": limits["max_bots"],
+            "weekly_tokens": limits["weekly_tokens"],
+            "today_tokens": us["today"],
+            "week_tokens": us["total"],
+            "bots_count": len(eng.bots.list(owner=user)),
+        }
+
     @app.post("/api/signup")
     def signup(request: Request, response: Response, body: dict = Body(...)) -> dict:
         ip = request.client.host if request.client else "?"
@@ -325,6 +349,11 @@ def create_app(engine: Engine, token: str) -> FastAPI:
     @app.post("/api/bots", dependencies=[api])
     def bots_create(request: Request, body: dict = Body(...)) -> dict:
         user = current_user(request)
+        # Plan enforcement: bot cap.
+        limits = auth_mod.plan_limits(auth_mod.plan_for(user))
+        existing = eng.bots.list(owner=user)
+        if limits["max_bots"] and len(existing) >= limits["max_bots"]:
+            raise HTTPException(403, f"Your {limits['label']} plan allows {limits['max_bots']} bots. Upgrade to create more.")
         bot = eng.bots.create(body.get("name", ""), job=body.get("job", ""), instructions=body.get("instructions", ""), emoji=body.get("emoji", "🤖"),
                               owner=user,
                               **{k: v for k, v in body.items() if k in ("profile", "model", "approval_mode", "step_limit", "net_mode", "net_allow", "net_deny", "grants", "proactive", "template", "avatar")})
@@ -1605,6 +1634,25 @@ google.accounts.id.renderButton(document.getElementById('gbtn'),
                 "today_tokens": us["today"], "week_tokens": us["total"],
                 "input_tokens": us["input_tokens"], "output_tokens": us["output_tokens"],
                 "bots": bots, "per_bot": us["per_bot"]}
+
+    @app.post("/api/admin/account/{email}/plan", dependencies=[api])
+    def admin_set_plan(request: Request, email: str, body: dict = Body(default={})) -> dict:
+        """Set a user's plan tier (admin only)."""
+        require_admin(request)
+        new_plan = str(body.get("plan", "")).strip().lower()
+        if new_plan not in auth_mod.PLANS:
+            raise HTTPException(400, f"Unknown plan '{new_plan}'. Choose: {', '.join(auth_mod.PLANS)}.")
+        auth_mod.set_plan(email, new_plan)
+        return {"ok": True, "email": email, "plan": new_plan,
+                "label": auth_mod.plan_limits(new_plan)["label"]}
+
+    @app.post("/api/admin/account/{email}/admin", dependencies=[api])
+    def admin_set_admin(request: Request, email: str, body: dict = Body(default={})) -> dict:
+        """Grant or revoke admin rights (admin only)."""
+        require_admin(request)
+        is_admin = bool(body.get("is_admin", True))
+        auth_mod.set_admin(email, is_admin)
+        return {"ok": True, "email": email, "is_admin": is_admin}
 
     @app.get("/api/admin/settings", dependencies=[api])
     def admin_settings(request: Request) -> dict:
