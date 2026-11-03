@@ -58,6 +58,7 @@ def _migrate_legacy() -> None:
         except (OSError, ValueError):
             return
         if data.get("email"):
+            data["is_admin"] = True   # legacy sole owner becomes admin
             _write_account(data["email"], data)
             try:
                 legacy.unlink()
@@ -145,7 +146,7 @@ def set_google_email(email: str, addr: str) -> None:
     _write_account(email, acc)
 
 
-def create_account(addr: str, password: str | None = None, *, google_only: bool = False) -> None:
+def create_account(addr: str, password: str | None = None, *, google_only: bool = False, is_admin: bool = False) -> None:
     """Create an account for ``addr``.
 
     ``password`` is required unless ``google_only`` is set (Google sign-up).
@@ -164,6 +165,7 @@ def create_account(addr: str, password: str | None = None, *, google_only: bool 
             "email": addr,
             "hash": f"pbkdf2${_ITERATIONS}${salt.hex()}${_hash_password(pw, salt)}",
             "google_only": False,
+            "is_admin": bool(is_admin),
             "created_at": time.time(),
         }
     else:
@@ -171,9 +173,30 @@ def create_account(addr: str, password: str | None = None, *, google_only: bool 
             "email": addr,
             "hash": None,
             "google_only": True,
+            "is_admin": bool(is_admin),
             "created_at": time.time(),
         }
     _write_account(addr, acc)
+
+
+def set_admin(email: str, is_admin: bool = True) -> None:
+    """Grant or revoke admin rights for an account."""
+    email = _normalize(email)
+    acc = _read_account(email)
+    if not acc.get("email"):
+        raise ValueError("No such account.")
+    acc["is_admin"] = bool(is_admin)
+    _write_account(email, acc)
+
+
+def is_admin(email: str | None = None) -> bool:
+    """True if the given email (or the first/legacy account) is an admin."""
+    if email is None:
+        accts = list_accounts()
+        email = accts[0] if accts else ""
+    if not email:
+        return False
+    return bool(_read_account(_normalize(email)).get("is_admin"))
 
 
 def verify_password(email: str, password: str) -> bool:

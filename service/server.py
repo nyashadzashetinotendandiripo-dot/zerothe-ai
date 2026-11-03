@@ -161,6 +161,13 @@ def create_app(engine: Engine, token: str) -> FastAPI:
         """Email of the signed-in user from the session, else empty string."""
         return read_session(request.cookies) or session_email(presented(request)) or ""
 
+    def require_admin(request: Request) -> str:
+        """Return the current user's email if they are an admin, else raise 403."""
+        user = current_user(request)
+        if not user or not auth_mod.is_admin(user):
+            raise HTTPException(403, "Admin access required.")
+        return user
+
     def session_string(addr: str) -> str:
         """Build the signed session string (also stored as the zt_session cookie)."""
         payload = base64.urlsafe_b64encode(
@@ -1557,6 +1564,82 @@ google.accounts.id.renderButton(document.getElementById('gbtn'),
     def admin() -> dict:
         eng.admin.reload()
         return eng.admin.summary()
+
+    # ------------------------------------------------------------- admin: multi-user
+    @app.get("/api/admin/users", dependencies=[api])
+    def admin_users(request: Request) -> dict:
+        """List every account with per-user token usage (admin only)."""
+        admin_user = require_admin(request)
+        eng.usage.backfill_owners()
+        out = []
+        for email in auth_mod.list_accounts():
+            acc = auth_mod._read_account(email)
+            us = eng.usage.user_summary(email)
+            out.append({
+                "email": email,
+                "is_admin": bool(acc.get("is_admin")),
+                "google_only": bool(acc.get("google_only")),
+                "created_at": acc.get("created_at", 0),
+                "today_tokens": us["today"],
+                "week_tokens": us["total"],
+                "input_tokens": us["input_tokens"],
+                "output_tokens": us["output_tokens"],
+                "bots_count": len(us["per_bot"]),
+            })
+        out.sort(key=lambda x: x["email"])
+        return {"current_admin": admin_user, "users": out, "count": len(out)}
+
+    @app.get("/api/admin/account/{email}", dependencies=[api])
+    def admin_account(request: Request, email: str) -> dict:
+        """Detail for one account: bots and per-bot usage (admin only)."""
+        require_admin(request)
+        eng.usage.backfill_owners()
+        if not auth_mod.has_account(email):
+            raise HTTPException(404, "No such account.")
+        acc = auth_mod._read_account(email)
+        us = eng.usage.user_summary(email)
+        bots = eng.bots.list(owner=email)
+        return {"email": email, "is_admin": bool(acc.get("is_admin")),
+                "google_only": bool(acc.get("google_only")),
+                "created_at": acc.get("created_at", 0),
+                "today_tokens": us["today"], "week_tokens": us["total"],
+                "input_tokens": us["input_tokens"], "output_tokens": us["output_tokens"],
+                "bots": bots, "per_bot": us["per_bot"]}
+
+    @app.get("/api/admin/settings", dependencies=[api])
+    def admin_settings(request: Request) -> dict:
+        """Server settings visible to admin: API base, provider status, masked keys (admin only)."""
+        require_admin(request)
+        s = eng.settings.all()
+        # Mask sensitive values
+        safe = dict(s)
+        providers = safe.get("providers", {})
+        if isinstance(providers, dict):
+            for pid, p in providers.items():
+                if isinstance(p, dict) and p.get("api_key"):
+                    p["api_key"] = "***masked***"
+        safe["providers"] = providers
+        return {
+            "api_base": eng.base_url,
+            "public_base_url": eng.settings.get("auth.public_base_url", "") or "",
+            "google_client_id": eng.settings.get("auth.google_client_id", "") or "",
+            "session_secret_set": bool(eng.settings.get("auth.session_secret")),
+            "settings": safe,
+            "version": VERSION,
+        }
+
+    @app.get("/api/admin/stats", dependencies=[api])
+    def admin_stats(request: Request) -> dict:
+        """Overall server stats (admin only)."""
+        require_admin(request)
+        eng.usage.backfill_owners()
+        total_bots = len(eng.bots.list(include_archived=True))
+        total_threads = len(eng.threads.db.query("SELECT id FROM threads"))
+        total_usage = eng.usage.summary()
+        accounts = auth_mod.list_accounts()
+        return {"accounts": len(accounts), "bots": total_bots, "threads": total_threads,
+                "week_tokens": total_usage["total"], "today_tokens": total_usage["input_tokens"] + total_usage["output_tokens"],
+                "version": VERSION}
 
     # ----------------------------------------------------------- action log
     @app.get("/api/actions", dependencies=[api])

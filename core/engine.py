@@ -88,6 +88,12 @@ class Engine:
         self.started = time.time()
         self._notif_lock = threading.Lock()
 
+        # Backfill owner on legacy usage records so the admin per-user view works.
+        try:
+            self.usage.backfill_owners()
+        except Exception:  # noqa: BLE001
+            pass
+
     # ------------------------------------------------------------- lifecycle
     def start(self) -> None:
         self.recover()
