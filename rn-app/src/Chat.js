@@ -16,7 +16,11 @@ const C = {
   light: { BG: '#ffffff', PANEL: '#f2f2f2', BUBBLE: '#e7e7e7', TEXT: '#111111', MUTED: '#666666', LINE: '#cccccc', ACCENT: '#000000' },
   dark:  { BG: '#0a0a0a', PANEL: '#121212', BUBBLE: '#2b2b2b', TEXT: '#ececec', MUTED: '#8f8f8f', LINE: '#1f1f1f', ACCENT: '#ffffff' },
 };
-const t = (key) => C[theme][key];
+// Module constants must not reference the component's `theme` state from any
+// place inline (module scope) — use the light palette here. Otherwise the
+// bundle crashes at require time: ReferenceError: Property 'theme' doesn't exist.
+const themeKey = 'light';
+const t = (key) => C[themeKey][key];
 const BG = t('BG');
 const PANEL = t('PANEL');
 const BUBBLE = t('BUBBLE');
