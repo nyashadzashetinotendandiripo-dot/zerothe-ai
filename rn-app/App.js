@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState, useCallback } from 'react';
 import { SafeAreaProvider, useSafeAreaInsets } from 'react-native-safe-area-context';
-import { Animated, Modal, View, Text, TextInput, Pressable, FlatList, StyleSheet, Linking, Alert, ScrollView, BackHandler } from 'react-native';
+import { Modal, View, Text, TextInput, Pressable, FlatList, StyleSheet, Linking, Alert, ScrollView, BackHandler } from 'react-native';
 import { StatusBar as ExpoStatus } from 'expo-status-bar';
 import { api, connectEvents, loadKey, saveConf, tryConf, clearConf, conf, cfgGet, K_SERVER, K_TOKEN, K_EMAIL, K_PASS, loginEmail, signupEmail, loginGoogle, authStatus } from './src/session';
 import { C } from './src/theme';
@@ -11,33 +11,7 @@ import Connect, { AuthModal } from './src/Connect';
 import Chat from './src/Chat';
 import ServerScreen from './src/ServerScreen';
 import { TopBar, DashboardScreen, MarketplaceScreen, ApprovalsScreen, McpScreen, RoutinesScreen, FilesScreen, WalletScreen, PluginItemsScreen } from './src/Screens';
-
-function AnsRow({ onSend, placeholder }) {
-  const [v, setV] = useState('');
-  return (
-    <View style={{ flexDirection: 'row', gap: 8, marginTop: 4 }}>
-      <TextInput
-        value={v}
-        onChangeText={setV}
-        placeholder={placeholder}
-        placeholderTextColor={C.muted}
-        style={{ flex: 1, color: C.text, fontSize: 13, borderWidth: 1, borderColor: C.warn, borderRadius: 10, paddingHorizontal: 10, paddingVertical: 7 }}
-        autoCapitalize="none"
-        autoCorrect={false}
-        returnKeyType="send"
-        onSubmitEditing={() => { const t = v.trim(); if (t) { onSend(t); setV(''); } }}
-      />
-      <Pressable onPress={() => { const t = v.trim(); if (t) { onSend(t); setV(''); } }}
-        style={({ pressed }) => [n.appB, pressed && { opacity: 0.85 }]}>
-        <Text style={n.appOk}>Send</Text>
-      </Pressable>
-    </View>
-  );
-}
-
-function asky(a) {
-  return a.category === 'question' || a.tool === 'ask_code';
-}
+import { WebTopBar, TabSheet, BotsList, HomeView, InboxView, ComputerView, ScreenView, SkillsView, UsageView, ActionLogView, SearchPalette } from './src/WebUI';
 
 export default function App() {
   return (
@@ -81,9 +55,9 @@ class ErrorBoundary extends React.Component {
 function ZbRoot() {
   const [ready, setReady] = useState(false);
   const [signed, setSigned] = useState(false);
-  const [screen, setScreen] = useState('home');            // dash home chat market approvals plugins mcp routines files wallet set
+  const [screen, setScreen] = useState('bots');            // bots home chat inbox marketplace computer files skills routines plugins usage actionlog set
   const [screenHistory, setScreenHistory] = useState([]);  // back-stack for hardware back button
-  const [menuOpen, setMenuOpen] = useState(false);         // side drawer
+  const [menuOpen, setMenuOpen] = useState(false);         // bottom tab sheet (web #tabs)
   const modalOpenRef = useRef(false);                      // any screen can set this when a sheet/modal is open
 
   // Hardware back button: close any open modal/sheet first, otherwise walk back
@@ -98,7 +72,7 @@ function ZbRoot() {
         setScreen(prev);
         return true;
       }
-      if (screen !== 'home') { setScreenHistory([]); setScreen('home'); return true; }
+      if (screen !== 'bots') { setScreenHistory([]); setScreen('bots'); return true; }
       return false;  // exit the app
     });
     return () => sub.remove();
@@ -115,9 +89,13 @@ function ZbRoot() {
   const [templates, setTemplates] = useState([]);
   const [busy, setBusy] = useState({});                    // bot_id -> {status, thread_id}
   const [apps, setApps] = useState([]);                    // pending approvals, server-wide
-  const [noteBadge, setNoteBadge] = useState(0);           // unread notifications
-  const [noteOpen, setNoteOpen] = useState(false);
   const [chat, setChat] = useState(null);                  // {bot, threadId, threads}
+  const [groups, setGroups] = useState([]);                // group chats
+  const [email, setEmail] = useState('');                  // account (avatar initials)
+  const [conn, setConn] = useState(false);                 // live-connection dot
+  const [paletteOpen, setPaletteOpen] = useState(false);   // web ⌕ search palette
+  const [screenBot, setScreenBot] = useState(null);        // Bot shown in the takeover screen
+  const [newBotOpen, setNewBotOpen] = useState(false);     // New-bot sheet from the topbar ＋
   const lastRef = useRef(0);
   const evtRef = useRef(null);
   const chatHandler = useRef(null);
@@ -158,6 +136,7 @@ function ZbRoot() {
     breadcrumb('boot', APP_VERSION + ' ' + (OTA_ID || 'embedded'));
     try { const prev = await hydrate(); if (prev) breadcrumb('previous error', prev.message); } catch (e) { /* ignore */ }
     await loadKey();
+    cfgGet(K_EMAIL).then(setEmail).catch(() => {});
     const saved = await cfgGet(K_SERVER), tok = await cfgGet(K_TOKEN);
     const mail = await cfgGet(K_EMAIL), pass = await cfgGet(K_PASS);
     if (saved && tok) {
@@ -184,6 +163,7 @@ function ZbRoot() {
     try {
       const d = await api('/api/bootstrap');
       setBots(d.bots || []);
+      setGroups(d.groups || []);
       setTemplates(d.templates || []);
       setApps(d.approvals || []);
       if (d.last_event > lastRef.current) lastRef.current = d.last_event;
@@ -210,7 +190,7 @@ function ZbRoot() {
       if (ev.type === 'bots' || ev.type === 'groups' || ev.type === 'approval') refresh();
       if (ev.type === 'notification') { setNoteBadge((b) => b + 1); refresh(); }
       if (['message', 'delta', 'delta_reset', 'turn', 'approval'].includes(ev.type)) chatHandler.current && chatHandler.current(ev);
-    } catch (e) {
+      if (ev.type === 'notification') refresh();
       note('event', e, 'app event ' + String(ev && ev.type));
     }
   }, [refresh, chatHandler]);
@@ -218,10 +198,9 @@ function ZbRoot() {
   // one live connection for the whole app
   useEffect(() => {
     if (!signed) return undefined;
-    evtRef.current = connectEvents({ since: lastRef.current, onEvent, onConn: () => {}, onSince: () => {} });
+    evtRef.current = connectEvents({ since: lastRef.current, onEvent, onConn: setConn, onSince: () => {} });
     api('/api/notifications?unread_only=1&limit=200').then((rows) => setNoteBadge(Array.isArray(rows) ? rows.length : 0)).catch(() => {});
     return evtRef.current;
-  }, [signed, onEvent]);
 
   const openBot = async (bot) => {
     // Open the chat immediately: the bot list already carries the main thread
@@ -245,6 +224,31 @@ function ZbRoot() {
       setChat({ bot, threadId: main.id, threads: rows });
       pushScreen('chat');
     } catch (e) { /* ignore */ }
+  };
+
+  // Open a thread by id — group rows, search results and home cards use this
+  // (a thread may belong to a Bot or a group chat without a single Bot).
+  const openThreadBy = (tid, title, botId) => {
+    if (!tid) return;
+    const bot = botId ? (((bots || []).find((b) => b.id === botId)) || { id: botId, name: title || 'Bot' }) : { name: title || 'Group chat' };
+    setChat({ bot, threadId: tid, threads: [] });
+    setScreenHistory([]);
+    setScreen('chat');
+  };
+  // Undo overlay back: return to whatever screen was under it.
+  const popScreen = () => {
+    const prev = screenHistory[screenHistory.length - 1] || 'bots';
+    setScreenHistory(screenHistory.slice(0, -1));
+    setScreen(prev);
+  };
+  const unhideBot = async (b) => {
+    try { await api('/api/bots/' + b.id, { method: 'PUT', body: JSON.stringify({ hidden: false }) }); await refresh(); }
+    catch (e) { /* ignore */ }
+  };
+  const takeScreen = (botId) => {
+    const b = ((bots || []).find((x) => x.id === botId)) || { id: botId, name: 'Bot' };
+    setScreenBot(b);
+    pushScreen('screen');
   };
 
   const newBot = async (name, job, emoji) => {
@@ -279,17 +283,20 @@ function ZbRoot() {
   const openChatTab = useCallback(() => {
     if (chat && chat.threadId) pushScreen('chat');
     else if (bots.length) openBot(bots[0]);
-    else pushScreen('home');
+    else pushScreen('bots');
   }, [chat, bots, openBot]);
   const openChatTabRef = useRef(null);
   useEffect(() => { openChatTabRef.current = openChatTab; }, [openChatTab]);
-  const go = useCallback((k) => { setMenuOpen(false); if (k === 'chat') openChatTabRef.current && openChatTabRef.current(); else pushScreen(k); }, []);
+  const go = useCallback((k) => {
+    setMenuOpen(false);
+    if (k === 'signout') { clearConf(); setSigned(false); }
+    else if (k === 'chat') openChatTabRef.current && openChatTabRef.current();
+    else pushScreen(k);
+  }, []);
 
   const menuProps = {
     open: menuOpen,
-    working: Object.keys(busy).length,
-    approvals: apps.length,
-    notes: noteBadge,
+    inboxBadge: apps.length,
     tab: screen,
     onGo: go,
     onClose: () => setMenuOpen(false),
@@ -298,7 +305,7 @@ function ZbRoot() {
   if (!ready) return null;
   if (!signed) return (
     <Shell upd={upd} onUpd={doUpdate} updState={updState}>
-      <Login onDone={() => { setSigned(true); setScreenHistory([]); setScreen('home'); refresh(); }} />
+      <Login onDone={() => { setSigned(true); setScreenHistory([]); setScreen('bots'); refresh(); }} />
     </Shell>
   );
 
@@ -309,23 +316,23 @@ function ZbRoot() {
         threads={chat.threads}
         botName={chat.bot.name}
         onSwitch={(tid) => setChat(c => ({ ...c, threadId: tid }))}
-        onBack={() => { setScreenHistory([]); setScreen('home'); }}
+        onBack={() => { setScreenHistory([]); setScreen('bots'); }}
         onEvent={chatHandler}
         onMenu={() => setMenuOpen(true)}
         modalOpenRef={modalOpenRef}
       />
-      <Drawer {...menuProps} />
+      <TabSheet {...menuProps} />
     </Shell>
   );
 
   if (screen === 'plugins') return (
     <Shell upd={upd} onUpd={doUpdate} updState={updState}>
       <Connect onBack={() => { setScreenHistory([]); setScreen('home'); }} onMenu={() => setMenuOpen(true)} />
-      <Drawer {...menuProps} />
+      <TabSheet {...menuProps} />
     </Shell>
   );
 
-  const menuBlock = <Drawer {...menuProps} />;
+  const menuBlock = <TabSheet {...menuProps} />;
 
   switch (screen) {
     case 'dash': return (
@@ -337,12 +344,6 @@ function ZbRoot() {
     case 'market': return (
       <Shell upd={upd} onUpd={doUpdate} updState={updState}>
         <MarketplaceScreen onMenu={() => setMenuOpen(true)} onRefresh={refresh} onHired={openBot} />
-        {menuBlock}
-      </Shell>
-    );
-    case 'approvals': return (
-      <Shell upd={upd} onUpd={doUpdate} updState={updState}>
-        <ApprovalsScreen onMenu={() => setMenuOpen(true)} apps={apps} bots={bots} decide={decideApp} />
         {menuBlock}
       </Shell>
     );
@@ -385,7 +386,56 @@ function ZbRoot() {
     case 'set': return (
       <Shell upd={upd} onUpd={doUpdate} updState={updState}>
         <Settings onOut={async () => { await clearConf(); setSigned(false); }} onCheck={runCheck} onPlug={() => pushScreen('plugins')} onMenu={() => setMenuOpen(true)} onServer={() => pushScreen('server')} modalOpenRef={modalOpenRef} />
-        <DragMenu onMenu={() => setMenuOpen(true)} />
+        {menuBlock}
+      </Shell>
+    );
+    case 'inbox': case 'approvals': return (
+      <Shell upd={upd} onUpd={doUpdate} updState={updState}>
+        <InboxView bots={bots} apps={apps} decide={(a, ap) => decideApp(a, ap, false)} onScreen={(bid) => takeScreen(bid)} conn={conn} account={email} onAvatar={() => setMenuOpen(true)} />
+        {menuBlock}
+      </Shell>
+    );
+    case 'home': return (
+      <Shell upd={upd} onUpd={doUpdate} updState={updState}>
+        <HomeView bots={bots} busy={busy} apps={apps} onOpen={openBot} onOpenThread={openThreadBy} conn={conn}
+          account={email} onAvatar={() => setMenuOpen(true)} onSearch={() => setPaletteOpen(true)}
+          onBack={() => { setScreenHistory([]); setScreen('bots'); }} />
+        {menuBlock}
+      </Shell>
+    );
+    case 'computer': return (
+      <Shell upd={upd} onUpd={doUpdate} updState={updState}>
+        <ComputerView bots={bots} busy={busy} conn={conn} account={email} onAvatar={() => setMenuOpen(true)} onScreen={takeScreen} />
+        {menuBlock}
+      </Shell>
+    );
+    case 'screen': return (
+      <Shell upd={upd} onUpd={doUpdate} updState={updState}>
+        <ScreenView bot={screenBot || { id: '', name: 'Bot' }} onClose={popScreen} onHandback={popScreen} />
+        {menuBlock}
+      </Shell>
+    );
+    case 'skills': return (
+      <Shell upd={upd} onUpd={doUpdate} updState={updState}>
+        <SkillsView bots={bots} conn={conn} account={email} onAvatar={() => setMenuOpen(true)} onOpenThread={openThreadBy} />
+        {menuBlock}
+      </Shell>
+    );
+    case 'usage': return (
+      <Shell upd={upd} onUpd={doUpdate} updState={updState}>
+        <UsageView conn={conn} account={email} onAvatar={() => setMenuOpen(true)} />
+        {menuBlock}
+      </Shell>
+    );
+    case 'actionlog': return (
+      <Shell upd={upd} onUpd={doUpdate} updState={updState}>
+        <ActionLogView bots={bots} conn={conn} account={email} onAvatar={() => setMenuOpen(true)} />
+        {menuBlock}
+      </Shell>
+    );
+    case 'marketplace': return (
+      <Shell upd={upd} onUpd={doUpdate} updState={updState}>
+        <MarketplaceScreen onMenu={() => setMenuOpen(true)} onRefresh={refresh} onHired={openBot} />
         {menuBlock}
       </Shell>
     );
@@ -394,123 +444,38 @@ function ZbRoot() {
 
   return (
     <Shell upd={upd} onUpd={doUpdate} updState={updState}>
-      <Home bots={bots} busy={busy} apps={apps} noteBadge={noteBadge} onOpen={openBot} onPlug={() => pushScreen('plugins')} onBell={() => setNoteOpen(true)} onNew={newBot} onHire={hireBot} templates={templates} onDecide={decideApp} onBotLong={setBotModal} onMenu={() => setMenuOpen(true)} />
-      <DragMenu onMenu={() => setMenuOpen(true)} />
-      {!!botModal && <BotModal bot={botModal} onClose={() => setBotModal(null)} onCloseSaved={() => { setBotModal(null); refresh(); }} onBotDeleted={(bid) => { setBotModal(null); setScreen('home'); refresh(); }} />}
-      {noteOpen && <NotifSheet onClose={() => setNoteOpen(false)} onReadAll={() => setNoteBadge(0)} />}
+      <BotsList
+        bots={bots} groups={groups} templates={templates} busy={busy}
+        onOpen={openBot}
+        onOpenGroup={(g) => openThreadBy(g.thread_id || g.id, g.name, null)}
+        onHire={hireBot}
+        onNew={() => setNewBotOpen(true)}
+        onDecideHidden={unhideBot}
+        onBotLong={setBotModal}
+        conn={conn} account={email}
+        onAvatar={() => setMenuOpen(true)}
+        onSearch={() => setPaletteOpen(true)}
+      />
+      {!!newBotOpen && (
+        <NewBotModal
+          templates={templates}
+          onDone={(nm, j, em) => { setNewBotOpen(false); nm && newBot(nm, j, em); }}
+          onHire={(tid, nm) => { setNewBotOpen(false); hireBot(tid, nm); }}
+        />
+      )}
+      {!!botModal && <BotModal bot={botModal} onClose={() => setBotModal(null)} onCloseSaved={() => { setBotModal(null); refresh(); }} onBotDeleted={(bid) => { setBotModal(null); setScreen('bots'); refresh(); }} />}
+      {paletteOpen && (
+        <SearchPalette
+          onClose={() => setPaletteOpen(false)}
+          onOpenBot={openBot}
+          onOpenThread={openThreadBy}
+          onGoView={(k) => pushScreen(k)}
+        />
+      )}
       {menuBlock}
     </Shell>
   );
 }
-
-// floating handle that opens the side menu from every screen
-function DragMenu({ onMenu }) {
-  return (
-    <Pressable onPress={onMenu} hitSlop={12}
-      style={{ position: 'absolute', left: 0, top: '50%', marginTop: -34, width: 30, height: 68, borderTopRightRadius: 20, borderBottomRightRadius: 20, backgroundColor: C.panel2, borderWidth: 1, borderLeftWidth: 0, borderColor: C.line, alignItems: 'center', justifyContent: 'center', elevation: 8 }}>
-      <Text style={{ color: C.muted, fontSize: 16 }}>»</Text>
-    </Pressable>
-  );
-}
-
-// ------------------------------------------------------------ 11-tab side drawer
-const DR = StyleSheet.create({
-  scrim: { opacity: 0 },
-  panel: { position: 'absolute', left: 0, top: 0, bottom: 0, backgroundColor: C.bg, borderRightWidth: 1, borderColor: C.line, elevation: 16, paddingHorizontal: 10, paddingTop: 54 },
-  brand: { color: C.text, fontSize: 19, fontWeight: '900', letterSpacing: -.4 },
-  vs: { color: C.muted, fontSize: 11 },
-  grp: { color: C.muted, fontSize: 10.5, fontWeight: '800', letterSpacing: 1.4, marginTop: 14, marginBottom: 4, paddingHorizontal: 8 },
-  item: { flexDirection: 'row', alignItems: 'center', gap: 10, borderRadius: 12, paddingVertical: 10, paddingHorizontal: 10 },
-  itemOn: { backgroundColor: C.panel2 },
-  ic: { fontSize: 17, width: 22, textAlign: 'center' },
-  lbl: { color: C.muted, fontSize: 14.5, fontWeight: '600', flex: 1 },
-  lblOn: { color: C.text, fontWeight: '800' },
-  cnt: { minWidth: 22, textAlign: 'center', color: C.onSolid, backgroundColor: C.bad, borderRadius: 999, overflow: 'hidden', fontSize: 11.5, fontWeight: '800', paddingHorizontal: 5, paddingVertical: 2 },
-});
-
-const TAB_GROUPS = [
-  ['OVERVIEW', [
-    ['dash', '📈', 'Dashboard'],
-    ['home', '🤖', 'Team Status'],
-  ]],
-  ['COMMUNICATIONS', [
-    ['chat', '💬', 'Chats Room'],
-    ['gmail', '📧', 'Gmail'],
-  ]],
-  ['HIRE & EXTEND', [
-    ['market', '🛍', 'Bot Marketplace'],
-    ['approvals', '🛂', 'Approvals'],
-    ['plugins', '🧩', 'Plugins Hub'],
-    ['mcp', '🔌', 'MCP Tools'],
-  ]],
-  ['AUTOMATION', [
-    ['routines', '⏱', 'Routines'],
-    ['files', '🗄', 'File Vault'],
-  ]],
-  ['ADMIN', [
-    ['server', '🖥', 'Server'],
-    ['wallet', '💳', 'Wallet'],
-    ['set', '⚙️', 'Settings'],
-  ]],
-];
-
-function Drawer({ open, tab, onGo, onClose, approvals, working, notes }) {
-  const dIns = useSafeAreaInsets();
-  const [shown, setShown] = useState(false);
-  const dx = useRef(new Animated.Value(0)).current;
-  useEffect(() => {
-    if (open) {
-      setShown(true);
-      Animated.timing(dx, { toValue: 1, duration: 200, useNativeDriver: true }).start();
-    } else if (shown) {
-      Animated.timing(dx, { toValue: 0, duration: 180, useNativeDriver: true }).start(() => setShown(false));
-    }
-  }, [open]);
-  if (!shown) return null;
-  const W = 268;
-  const tx = dx.interpolate({ inputRange: [0, 1], outputRange: [-W, 0] });
-  const sc = dx.interpolate({ inputRange: [0, 1], outputRange: [0, 0.55] });
-  const counts = { approvals, work: working, notes };
-  return (
-    <Modal transparent visible onRequestClose={onClose}>
-      <View style={{ flex: 1, backgroundColor: 'transparent' }}>
-        <Animated.View style={[{ flex: 1, backgroundColor: '#000' }, { opacity: sc }]}>
-          <Pressable style={{ flex: 1 }} onPress={onClose} />
-        </Animated.View>
-        <Animated.View style={[DR.panel, { width: W, paddingTop: (dIns.top || 0) + 14, transform: [{ translateX: tx }] }]}>
-          <View style={{ paddingHorizontal: 8 }}>
-            <Text style={DR.brand}>🤖 ZerotheBot</Text>
-            <Text style={DR.vs}>v{APP_VERSION}{working ? ' · ' + working + ' working' : ''}</Text>
-          </View>
-          <FlatList
-            data={TAB_GROUPS}
-            keyExtractor={([g]) => g}
-            showsVerticalScrollIndicator={false}
-            contentContainerStyle={{ paddingBottom: 18 + (dIns.bottom || 0) }}
-            renderItem={({ item: [g, rows] }) => (
-              <View>
-                <Text style={DR.grp}>{g}</Text>
-                {rows.map(([k, ic, lbl]) => {
-                  const on = tab === k || (k === 'home' && !tabSPECIAL.includes(tab));
-                  const badge = k === 'approvals' ? approvals : k === 'chat' ? notes : 0;
-                  return (
-                    <Pressable key={k} onPress={() => onGo(k)}
-                      style={({ pressed }) => [DR.item, on && DR.itemOn, pressed && { opacity: .88 }]}>
-                      <Text style={DR.ic}>{ic}</Text>
-                      <Text style={[DR.lbl, on && DR.lblOn]} numberOfLines={1}>{lbl}</Text>
-                      {badge > 0 && <Text style={DR.cnt}>{badge > 99 ? '99+' : badge}</Text>}
-                    </Pressable>
-                  );
-                })}
-              </View>
-            )}
-          />
-        </Animated.View>
-      </View>
-    </Modal>
-  );
-}
-const tabSPECIAL = ['chat', 'dash', 'market', 'approvals', 'plugins', 'gmail', 'mcp', 'routines', 'files', 'wallet', 'server', 'set'];
 
 function Shell({ children, upd, onUpd, updState }) {
   const insets = useSafeAreaInsets();
@@ -615,30 +580,49 @@ function Login({ onDone }) {
     ? (!!mail.trim() && !!pass && !!pass2 && pass === pass2)
     : (!!mail.trim() && !!pass);
   return (
-    <View style={[l.box, { justifyContent: 'flex-start', paddingTop: 80 }]}>
-      <Text style={l.h1}>ZerotheBot</Text>
-      <Text style={l.cap}>{signup ? 'Create your account.' : 'Sign in to your account.'}</Text>
-      <Text style={l.lbl}>Email</Text>
-      <TextInput style={l.inl} value={mail} autoCapitalize="none" autoCorrect={false} keyboardType="email-address" onChangeText={setMail} />
-      <Text style={l.lbl}>Password</Text>
-      <TextInput style={l.inl} value={pass} secureTextEntry onChangeText={setPass} />
-      {signup && (
-        <>
-          <Text style={l.lbl}>Confirm password</Text>
-          <TextInput style={l.inl} value={pass2} secureTextEntry onChangeText={setPass2} />
-        </>
-      )}
-      {!!err && <Text style={l.err}>{err}</Text>}
-      <Pressable onPress={save} disabled={!ready || go} style={({ pressed }) => [l.btn, !ready && { opacity: .5 }, pressed && { opacity: .9 }]}>
-        <Text style={l.btnT}>{go ? 'Checking…' : (signup ? 'Create account' : 'Sign in')}</Text>
-      </Pressable>
-      <Pressable onPress={() => setSignup(!signup)} hitSlop={8} style={l.toggle}>
-        <Text style={l.toggleT}>{signup ? 'Already have an account? Sign in' : 'New here? Create an account'}</Text>
-      </Pressable>
-      <Pressable onPress={google} disabled={go} style={({ pressed }) => [l.btnG, pressed && { opacity: .9 }]}>
-        <Text style={l.btnGT}>Continue with Google</Text>
-      </Pressable>
-      <Text style={l.cap}>One time per install — from then on the app keeps you signed in across updates.</Text>
+    <View style={lg.screen}>
+      <ScrollView contentContainerStyle={lg.wrap} showsVerticalScrollIndicator={false}>
+        <View style={lg.card}>
+          <View style={lg.blobField} pointerEvents="none">
+            <View style={lg.bfGreen} />
+            <View style={lg.bfOrange} />
+            <View style={lg.bfRed} />
+            <View style={lg.bfBlue} />
+            <View style={lg.bfPink} />
+          </View>
+          <View style={lg.inner}>
+            <Text style={lg.h1}>ZerotheBot</Text>
+            <Text style={lg.cap}>{signup ? 'Create your account.' : 'Sign in to your account.'}</Text>
+            <Text style={l.lbl}>Email</Text>
+            <TextInput style={l.inl} value={mail} autoCapitalize="none" autoCorrect={false} keyboardType="email-address" onChangeText={setMail} />
+            <Text style={l.lbl}>Password</Text>
+            <TextInput style={l.inl} value={pass} secureTextEntry onChangeText={setPass} />
+            {signup && (
+              <>
+                <Text style={l.lbl}>Confirm password</Text>
+                <TextInput style={l.inl} value={pass2} secureTextEntry onChangeText={setPass2} />
+              </>
+            )}
+            {!!err && <Text style={l.err}>{err}</Text>}
+            <Pressable onPress={save} disabled={!ready || go} style={({ pressed }) => [lg.btn, !ready && { opacity: .5 }, pressed && { opacity: .9 }]}>
+              <Text style={lg.btnT}>{go ? 'Checking…' : (signup ? 'Create account' : 'Sign in')}</Text>
+            </Pressable>
+            <View style={lg.divider}>
+              <View style={lg.dline} />
+              <Text style={lg.dt}>or</Text>
+              <View style={lg.dline} />
+            </View>
+            <Pressable onPress={google} disabled={go} style={({ pressed }) => [lg.google, pressed && { opacity: .9 }]}>
+              <Text style={lg.gIcon}>G</Text>
+              <Text style={lg.googleT}>Continue with Google</Text>
+            </Pressable>
+            <Pressable onPress={() => setSignup(!signup)} hitSlop={8}>
+              <Text style={[lg.cap, { textDecorationLine: 'underline', marginHorizontal: 0, marginBottom: 0 }]}>{signup ? 'Already have an account? Sign in' : 'New here? Create an account'}</Text>
+            </Pressable>
+            <Text style={[lg.cap, { fontSize: 11.5, marginHorizontal: 0, marginBottom: 0 }]}>One time per install — from then on the app keeps you signed in across updates.</Text>
+          </View>
+        </View>
+      </ScrollView>
       {ov && (
         <AuthModal
           o={{ url: ov, auto: false, name: 'Google', title: 'Sign in with Google' }}
@@ -647,104 +631,7 @@ function Login({ onDone }) {
       )}
     </View>
   );
-}// ----------------------------------------------------------------- home
-function Home({ bots, busy, apps, noteBadge, onOpen, onPlug, onBell, onNew, onHire, templates, onDecide, onBotLong, onMenu }) {
-  const ins = useSafeAreaInsets();
-  const [modal, setModal] = useState(null);
-  const working = Object.keys(busy).length;
-  return (
-    <View style={n.screen}>
-      <View style={[n.hdr, { paddingTop: 14 + ins.top }]}>
-        <Pressable onPress={onMenu} hitSlop={8}><View style={n.hbtn}><Text style={{ fontSize: 16, color: C.text }}>☰</Text></View></Pressable>
-        <View style={{ flex: 1 }}>
-          <Text style={n.brand}>ZerotheBot</Text>
-          <Text style={n.sub}>
-            {bots.length === 0
-              ? 'your 24/7 AI teammates live on your server'
-              : bots.length + (bots.length === 1 ? ' Bot' : ' Bots') + (working ? '  ·  ' + working + ' working' : '  ·  all idle')}
-          </Text>
-        </View>
-        <Pressable onPress={onBell} hitSlop={8}>
-          <View style={n.hbtn}>
-            <Text style={{ fontSize: 15 }}>🔔</Text>
-            {noteBadge > 0 && <View style={n.badgeDot} collapsable={false} />}
-          </View>
-        </Pressable>
-      </View>
-      <FlatList
-        data={bots}
-        keyExtractor={(x) => x.id}
-        ListEmptyComponent={
-          <View style={n.empty}>
-            <Text style={{ fontSize: 44 }}>🤖</Text>
-            <Text style={n.emptyT}>No Bots yet</Text>
-            <Text style={n.emptyS}>A Bot is an AI teammate that keeps working while your phone is locked — give it a job and chat with it from anywhere.</Text>
-          </View>
-        }
-        contentContainerStyle={{ padding: 16, gap: 10, paddingBottom: 100 }}
-        ListHeaderComponent={
-          apps.length ? (
-            <View style={{ gap: 8, marginBottom: 4 }}>
-              {apps.slice(0, 5).map((a) => {
-                const b2 = bots.find((x) => x.id === a.bot_id) || {};
-                const isAsk = asky(a);
-                return (
-                  <View key={a.id} style={n.appCard}>
-                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
-                      <Text style={{ fontSize: 18 }}>{b2.emoji || '🤖'}</Text>
-                      <Text style={[n.rowL, { flex: 1, fontSize: 13.5 }]} numberOfLines={1}>{b2.name || 'Bot'} {isAsk ? 'needs your answer' : 'needs your OK'}</Text>
-                    </View>
-                    <Text style={n.job} numberOfLines={3}>{(a.category || '').toUpperCase()}{a.tool ? ' · ' + a.tool : ''}{a.summary ? ' — ' + a.summary : ''}</Text>
-                    {isAsk ? (
-                      <AnsRow onSend={(t) => onDecide(a, true, false, t)} placeholder={a.tool === 'ask_code' ? 'Paste the code' : 'Type an answer'} />
-                    ) : null}
-                    <View style={{ flexDirection: 'row', gap: 8, marginTop: 2 }}>
-                      {!isAsk && (
-                        <>
-                          <Pressable onPress={() => onDecide(a, true, true)} style={n.appB}><Text style={n.appOk}>✅ Always</Text></Pressable>
-                          <Pressable onPress={() => onDecide(a, true, false)} style={n.appB}><Text style={n.appOk}>Approve</Text></Pressable>
-                        </>
-                      )}
-                      <Pressable onPress={() => onDecide(a, false, false)} style={n.appB}><Text style={n.appNo}>{isAsk ? "Can't do it" : 'Deny'}</Text></Pressable>
-                    </View>
-                  </View>
-                );
-              })}
-              {apps.length > 5 ? <Text style={n.job}>{apps.length - 5} more waiting — open the Bot to see all.</Text> : null}
-            </View>
-          ) : null
-        }
-        renderItem={({ item }) => {
-          const s = busy[item.id];
-          const pill = s ? (s.status === 'waiting_approval' ? ['needs you', C.warn] : ['working', C.ok]) : null;
-          return (
-            <Pressable onPress={() => onOpen(item)} onLongPress={() => onBotLong(item)} delayLongPress={400} style={({ pressed }) => [n.card, pressed && { opacity: .92 }]}>
-              <View style={n.av}><Text style={{ fontSize: 22 }}>{item.emoji || '🤖'}</Text></View>
-              <View style={{ flex: 1, gap: 2 }}>
-                <Text style={n.name} numberOfLines={1}>{item.name}</Text>
-                <Text style={n.job} numberOfLines={1}>{'job' in item && item.job ? item.job : 'Tap to open the conversation'}</Text>
-              </View>
-              {pill
-                ? <View style={n.pill}><Text style={{ color: pill[1], fontSize: 11, fontWeight: '800' }}>● {pill[0]}</Text></View>
-                : <Text style={n.chev}>›</Text>}
-            </Pressable>
-          );
-        }}
-      />
-      <Pressable onPress={() => setModal({})} style={({ pressed }) => [n.fab, { bottom: 24 + (ins.bottom || 0) }, pressed && { opacity: .9 }]}>
-        <Text style={n.fabT}>＋  New Bot</Text>
-      </Pressable>
-      {!!modal && (
-        <NewBotModal
-          templates={templates}
-          onDone={(nm, j, em) => { setModal(null); nm && onNew(nm, j, em); }}
-          onHire={(tid, nm) => { setModal(null); onHire && onHire(tid, nm); }}
-        />
-      )}
-    </View>
-  );
 }
-
 function NewBotModal({ onDone, onHire, templates }) {
   const [name, setName] = useState('');
   const [job, setJob] = useState('');
@@ -1247,6 +1134,53 @@ const l = StyleSheet.create({
   toggleT: { color: C.muted, fontSize: 13, textDecorationLine: 'underline' },
 });
 
+// login screen — the web app's blob card (web/style.css #login)
+const lg = StyleSheet.create({
+  screen: { flex: 1, backgroundColor: C.panel },
+  wrap: { flexGrow: 1, justifyContent: 'center', padding: 20 },
+  card: {
+    alignSelf: 'center', width: '100%', maxWidth: 420,
+    backgroundColor: C.bg, borderRadius: 26, overflow: 'hidden',
+    paddingVertical: 34, paddingHorizontal: 24,
+    elevation: 8, shadowColor: '#111', shadowOpacity: 0.08, shadowRadius: 18, shadowOffset: { width: 0, height: 6 },
+  },
+  blobField: { position: 'absolute', left: 0, right: 0, top: 0, bottom: 0 },
+  bf: { position: 'absolute', opacity: 0.9 },
+  bfGreen: { width: 58, height: 58, backgroundColor: '#22C55E', borderRadius: 29, top: 18, left: 18 },
+  bfOrange: {
+    width: 62, height: 58, backgroundColor: '#FF9500', top: 30, right: 16,
+    borderTopLeftRadius: 34, borderTopRightRadius: 24, borderBottomRightRadius: 32, borderBottomLeftRadius: 26,
+  },
+  bfRed: {
+    width: 58, height: 58, backgroundColor: '#FF3B30', bottom: 34, left: 14,
+    borderTopLeftRadius: 20, borderTopRightRadius: 34, borderBottomRightRadius: 30, borderBottomLeftRadius: 28,
+    transform: [{ rotate: '-14deg' }],
+  },
+  bfBlue: {
+    width: 70, height: 66, backgroundColor: '#2E7CF6', bottom: 20, right: 12,
+    borderTopLeftRadius: 38, borderTopRightRadius: 32, borderBottomRightRadius: 29, borderBottomLeftRadius: 40,
+  },
+  bfPink: {
+    width: 60, height: 56, backgroundColor: '#FF2D78', bottom: -18, left: '46%',
+    borderTopLeftRadius: 29, borderTopRightRadius: 31, borderBottomRightRadius: 35, borderBottomLeftRadius: 25,
+  },
+  inner: { gap: 12 },
+  h1: { color: C.text, fontSize: 30, fontWeight: '800', letterSpacing: -0.02, textAlign: 'center', marginTop: 12 },
+  cap: { color: C.muted, fontSize: 13, textAlign: 'center', marginHorizontal: 20, marginBottom: 8 },
+  lbl: { marginTop: 4 },
+  btn: { backgroundColor: C.solid, borderRadius: 999, paddingVertical: 14, alignItems: 'center', marginTop: 6 },
+  btnT: { color: C.onSolid, fontWeight: '800', fontSize: 15 },
+  divider: { flexDirection: 'row', alignItems: 'center', gap: 10, marginTop: 6, marginBottom: 2 },
+  dline: { flex: 1, height: 1, backgroundColor: C.line },
+  dt: { color: C.muted, fontSize: 12 },
+  google: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 10,
+    backgroundColor: '#fff', borderWidth: 1, borderColor: C.line, borderRadius: 999, paddingVertical: 13,
+  },
+  googleT: { color: '#1f1f1f', fontWeight: '700', fontSize: 15 },
+  gIcon: { fontWeight: '700', fontSize: 18, color: '#4285f4' },
+});
+
 const n = StyleSheet.create({
   screen: { flex: 1, backgroundColor: C.bg },
   hdr: { flexDirection: 'row', alignItems: 'center', gap: 12, paddingHorizontal: 16, paddingTop: 14, paddingBottom: 10, borderBottomWidth: 1, borderColor: C.line },
@@ -1300,52 +1234,3 @@ const m = StyleSheet.create({
 });
 const st3 = { gap: { flex: 1 } };
 
-// ----------------------------------------------------------------- notification inbox
-const KIND_ICON = { approval: '🛂', question: '❓', finished: '✅', error: '⚠️', routine: '🗓', digest: '📰', test: '🔔', takeover: '🖥', login: '🔐' };
-
-function NotifSheet({ onClose, onReadAll }) {
-  const [rows, setRows] = useState(null);
-  const load = useCallback(async () => {
-    try { const d = await api('/api/notifications?limit=60'); setRows(Array.isArray(d) ? d : (d.items || [])); }
-    catch (e) { setRows([]); }
-  }, []);
-  useEffect(() => { load(); }, [load]);
-  const readAll = async () => {
-    try { await api('/api/notifications/read', { method: 'POST', body: '{}' }); } catch (e) { /* ignore */ }
-    onReadAll(); load();
-  };
-  return (
-    <View style={m.scrim}>
-      <View style={[m.modal, { gap: 6 }]}>
-        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
-          <Text style={l.h2}>Notifications</Text>
-          <View style={st3.gap} />
-          <Pressable onPress={readAll}><Text style={[l.cap, { color: C.ok, fontSize: 13 }]}>Mark all read</Text></Pressable>
-          <Pressable onPress={onClose} hitSlop={8}><Text style={l.cap}>✕</Text></Pressable>
-        </View>
-        <View style={{ maxHeight: 380 }}>
-          {rows === null ? <Text style={l.cap}>Loading…</Text> : (rows.length ? rows.map((r) => (
-            <View key={r.id} style={[m.memRow, { alignItems: 'flex-start', opacity: r.read ? .65 : 1 }]}>
-              <Text style={{ fontSize: 16, width: 22 }}>{KIND_ICON[r.kind] || '🤖'}</Text>
-              <View style={{ flex: 1 }}>
-                <Text style={[n.rowL, { fontSize: 13.5 }]} numberOfLines={1}>{r.title}</Text>
-                {!!r.body && <Text style={n.rowS} numberOfLines={3}>{r.body}</Text>}
-                <Text style={[n.rowS, { fontSize: 10.5, marginTop: 2 }]}>{r.bot_name || ''}{r.bot_name ? ' · ' : ''}{timeAgo(r.ts)}</Text>
-              </View>
-            </View>
-          )) : <Text style={l.cap}>Nothing yet. Bots will tap you here when they finish jobs, need approval, or hit an error.</Text>)}
-        </View>
-      </View>
-    </View>
-  );
-}
-
-function timeAgo(ts) {
-  const n = Number(ts);
-  if (!isFinite(n) || n <= 0) return '';
-  const d = Math.max(0, (Date.now() - n * 1000) / 1000);
-  if (d < 60) return 'just now';
-  if (d < 3600) return Math.round(d / 60) + 'm ago';
-  if (d < 86400) return Math.round(d / 3600) + 'h ago';
-  return Math.round(d / 86400) + 'd ago';
-}
