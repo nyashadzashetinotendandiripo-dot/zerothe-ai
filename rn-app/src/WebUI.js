@@ -1307,7 +1307,7 @@ export function AdminUserDetailScreen({ user: userProp, onSetPlan, onSetAdmin })
   };
   return (
     <View style={W.screen}>
-      <WebTopBar title="Admin · " + (d ? d.email : 'user') + " account" showBack conn={false} account="admin" onAvatar={() => {}} />
+      <WebTopBar title={"Admin · " + (d ? d.email : 'user') + " account"} showBack conn={false} account="admin" onAvatar={() => {}} />
       <ScrollView contentContainerStyle={{ paddingBottom: 30, paddingTop: 10 }} showsVerticalScrollIndicator={false}>
         <View style={{ paddingHorizontal: 16 }}>
           {!d ? <View style={{ padding: 20 }}><ActivityIndicator /></View> : (
