@@ -1708,7 +1708,7 @@ google.accounts.id.renderButton(document.getElementById('gbtn'),
             key = _os.environ.get("INSTABOX_API_KEY", "")
         return {"Authorization": "Bearer " + key, "Content-Type": "application/json"}
 
-    @app.post("/api/instabox/machines", dependencies=[api])
+    @app.post("/api/instabox/machines")
     def ib_create_machine(request: Request, body: dict = Body(...)) -> dict:
         """Create an InstaBox Android box (Redroid container, Android 14)."""
         key = request.headers.get("X-Instabox-Key") or ""
@@ -1729,7 +1729,7 @@ google.accounts.id.renderButton(document.getElementById('gbtn'),
         except httpx.HTTPError as e:
             raise HTTPException(502, f"InstaBox error: {e}")
 
-    @app.get("/api/instabox/machines", dependencies=[api])
+    @app.get("/api/instabox/machines")
     def ib_list_machines(request: Request) -> dict:
         """List InstaBox machines."""
         key = request.headers.get("X-Instabox-Key") or ""
@@ -1747,7 +1747,7 @@ google.accounts.id.renderButton(document.getElementById('gbtn'),
         except httpx.HTTPError as e:
             raise HTTPException(502, f"InstaBox error: {e}")
 
-    @app.get("/api/instabox/machines/{mid}", dependencies=[api])
+    @app.get("/api/instabox/machines/{mid}")
     def ib_get_machine(request: Request, mid: str) -> dict:
         """Get one InstaBox machine."""
         key = request.headers.get("X-Instabox-Key") or ""
@@ -1765,7 +1765,7 @@ google.accounts.id.renderButton(document.getElementById('gbtn'),
         except httpx.HTTPError as e:
             raise HTTPException(502, f"InstaBox error: {e}")
 
-    @app.post("/api/instabox/machines/{mid}/adb", dependencies=[api])
+    @app.post("/api/instabox/machines/{mid}/adb")
     def ib_adb(request: Request, mid: str, body: dict = Body(...)) -> dict:
         """Run an adb command on an InstaBox Android box."""
         key = request.headers.get("X-Instabox-Key") or ""
@@ -1787,7 +1787,7 @@ google.accounts.id.renderButton(document.getElementById('gbtn'),
         except httpx.HTTPError as e:
             raise HTTPException(502, f"InstaBox error: {e}")
 
-    @app.post("/api/instabox/machines/{mid}/desktop/start", dependencies=[api])
+    @app.post("/api/instabox/machines/{mid}/desktop/start")
     def ib_desktop_start(request: Request, mid: str, body: dict = Body(default={})) -> dict:
         """Start the desktop on an InstaBox machine."""
         key = request.headers.get("X-Instabox-Key") or ""
@@ -1807,7 +1807,7 @@ google.accounts.id.renderButton(document.getElementById('gbtn'),
         except httpx.HTTPError as e:
             raise HTTPException(502, f"InstaBox error: {e}")
 
-    @app.post("/api/instabox/machines/{mid}/desktop/screenshot", dependencies=[api])
+    @app.post("/api/instabox/machines/{mid}/desktop/screenshot")
     def ib_desktop_screenshot(request: Request, mid: str) -> dict:
         """Take a screenshot of the InstaBox machine desktop."""
         key = request.headers.get("X-Instabox-Key") or ""
@@ -1825,7 +1825,7 @@ google.accounts.id.renderButton(document.getElementById('gbtn'),
         except httpx.HTTPError as e:
             raise HTTPException(502, f"InstaBox error: {e}")
 
-    @app.post("/api/instabox/machines/{mid}/desktop/stream", dependencies=[api])
+    @app.post("/api/instabox/machines/{mid}/desktop/stream")
     def ib_desktop_stream(request: Request, mid: str, body: dict = Body(default={})) -> dict:
         """Get a desktop stream URL for an InstaBox machine."""
         key = request.headers.get("X-Instabox-Key") or ""
@@ -1845,7 +1845,7 @@ google.accounts.id.renderButton(document.getElementById('gbtn'),
         except httpx.HTTPError as e:
             raise HTTPException(502, f"InstaBox error: {e}")
 
-    @app.post("/api/instabox/machines/{mid}/desktop/click", dependencies=[api])
+    @app.post("/api/instabox/machines/{mid}/desktop/click")
     def ib_desktop_click(request: Request, mid: str, body: dict = Body(...)) -> dict:
         """Click on the InstaBox machine desktop."""
         key = request.headers.get("X-Instabox-Key") or ""
@@ -1865,7 +1865,7 @@ google.accounts.id.renderButton(document.getElementById('gbtn'),
         except httpx.HTTPError as e:
             raise HTTPException(502, f"InstaBox error: {e}")
 
-    @app.post("/api/instabox/machines/{mid}/desktop/type", dependencies=[api])
+    @app.post("/api/instabox/machines/{mid}/desktop/type")
     def ib_desktop_type(request: Request, mid: str, body: dict = Body(...)) -> dict:
         """Type text on the InstaBox machine desktop."""
         key = request.headers.get("X-Instabox-Key") or ""
