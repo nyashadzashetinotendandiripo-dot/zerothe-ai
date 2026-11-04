@@ -1401,22 +1401,40 @@ google.accounts.id.renderButton(document.getElementById('gbtn'),
         return page("Signed in", f"{addr}<br>Taking you back to the app…", deep)
 
     @app.get("/api/mcp", dependencies=[api])
-    def mcp_list() -> list[dict]:
-        return eng.mcp.configs()
+    def mcp_list(request: Request) -> list[dict]:
+        user = current_user(request)
+        rows = eng.mcp.configs()
+        if user and auth_mod.is_admin(user):
+            return rows
+        # A user sees their own servers plus pre-multi-user servers with no owner.
+        return [r for r in rows if not str(r.get("owner", "") or "") or r.get("owner") == user]
 
     @app.post("/api/mcp", dependencies=[api])
-    def mcp_save(body: dict = Body(...)) -> dict:
+    def mcp_save(request: Request, body: dict = Body(...)) -> dict:
+        user = current_user(request)
         if body.get("import_json"):
-            return {"servers": eng.mcp.import_json(body["import_json"])}
-        return eng.mcp.save(body)
+            return {"servers": eng.mcp.import_json(body["import_json"], owner=user)}
+        return eng.mcp.save({**body, "owner": user})
+
+    def _mcp_owned(sid: str, user: str) -> None:
+        row = eng.db.one("SELECT owner FROM mcp_servers WHERE id=?", (sid,))
+        if not row:
+            raise HTTPException(404, "Unknown MCP server.")
+        owner = str(row["owner"] or "")
+        if owner and owner != user and not (user and auth_mod.is_admin(user)):
+            raise HTTPException(403, "This MCP server belongs to another account.")
 
     @app.delete("/api/mcp/{sid}", dependencies=[api])
-    def mcp_delete(sid: str) -> dict:
+    def mcp_delete(request: Request, sid: str) -> dict:
+        user = current_user(request)
+        _mcp_owned(sid, user)
         eng.mcp.delete(sid)
         return {"ok": True}
 
     @app.post("/api/mcp/{sid}/restart", dependencies=[api])
-    def mcp_restart(sid: str) -> dict:
+    def mcp_restart(request: Request, sid: str) -> dict:
+        user = current_user(request)
+        _mcp_owned(sid, user)
         eng.mcp.restart(sid)
         return {"ok": True}
 
@@ -1481,39 +1499,71 @@ google.accounts.id.renderButton(document.getElementById('gbtn'),
                 pass
 
     # ---------------------------------------------------------------- browser-in-chat (agent computer use)
+    # These drive a Bot's embedded browser through the real Screen API in
+    # core/browser.py. bot_id selects which Bot's tab to act on; actions run on
+    # the browser host's own loop via BrowserHost.call.
+    def _browser_screen(body_bot_id: str = ""):
+        bid = str(body_bot_id or "").strip()
+        if not bid:
+            raise HTTPException(400, "bot_id required.")
+        return eng.computer.browser.screen(bid)
+
     @app.post("/api/browser/navigate", dependencies=[api])
     def browser_navigate(request: Request, body: dict = Body(...)) -> dict:
         """Agent navigates to a URL in the embedded browser (Muse-style booking)."""
-        user = current_user(request)
+        scr = _browser_screen(body.get("bot_id"))
         url = str(body.get("url", "")).strip()
         if not url:
             raise HTTPException(400, "URL required.")
-        result = eng.computer.browser.navigate(url, owner=user)
+        try:
+            result = eng.computer.browser.call(scr.goto, url, timeout=60)
+        except BrowserError as e:
+            raise HTTPException(400, str(e))
         return {"ok": True, "url": url, "result": result}
 
     @app.post("/api/browser/click", dependencies=[api])
     def browser_click(request: Request, body: dict = Body(...)) -> dict:
-        """Agent clicks an element in the embedded browser."""
-        user = current_user(request)
-        selector = str(body.get("selector", "")).strip()
-        result = eng.computer.browser.click(selector, owner=user)
-        return {"ok": True, "selector": selector, "result": result}
+        """Agent clicks an element (snapshot id) or coordinates in the embedded browser."""
+        scr = _browser_screen(body.get("bot_id"))
+        element, x, y = body.get("element"), body.get("x"), body.get("y")
+        try:
+            if element is not None:
+                result = eng.computer.browser.call(scr.click, element=int(element), timeout=40)
+            elif x is not None and y is not None:
+                result = eng.computer.browser.call(scr.click, x=int(x), y=int(y), timeout=40)
+            else:
+                raise HTTPException(400, "Provide element (from browser_snapshot) or x and y.")
+        except BrowserError as e:
+            raise HTTPException(400, str(e))
+        return {"ok": True, "result": result}
 
     @app.post("/api/browser/type", dependencies=[api])
     def browser_type(request: Request, body: dict = Body(...)) -> dict:
         """Agent types text into a field in the embedded browser."""
-        user = current_user(request)
-        selector = str(body.get("selector", "")).strip()
-        text = str(body.get("text", "")).strip()
-        result = eng.computer.browser.type(selector, text, owner=user)
-        return {"ok": True, "selector": selector, "result": result}
+        scr = _browser_screen(body.get("bot_id"))
+        text = str(body.get("text", ""))
+        if not text:
+            raise HTTPException(400, "Text required.")
+        element = body.get("element")
+        try:
+            result = eng.computer.browser.call(
+                scr.type_text, text,
+                element=int(element) if element is not None else None,
+                clear=bool(body.get("clear", True)), submit=bool(body.get("submit", False)), timeout=60)
+        except BrowserError as e:
+            raise HTTPException(400, str(e))
+        return {"ok": True, "result": result}
 
     @app.get("/api/browser/screenshot", dependencies=[api])
-    def browser_screenshot(request: Request) -> dict:
+    def browser_screenshot(request: Request, bot_id: str = "") -> dict:
         """Get a screenshot of the current browser state for the chat view."""
-        user = current_user(request)
-        result = eng.computer.browser.screenshot(owner=user)
-        return {"ok": True, "screenshot": result}
+        scr = _browser_screen(bot_id)
+        try:
+            data, _ = eng.computer.browser.call(scr.screenshot, False, 70, False, timeout=30)
+        except BrowserError as e:
+            raise HTTPException(400, str(e))
+        url = scr.page.url if scr.page is not None and not scr.page.is_closed() else ""
+        return {"ok": True, "screenshot": base64.b64encode(data).decode("ascii"), "url": url}
 
     # ---------------------------------------------------------------- agent-initiated proactive messages
     @app.post("/api/agent/message", dependencies=[api])
@@ -1700,23 +1750,16 @@ google.accounts.id.renderButton(document.getElementById('gbtn'),
     # not on the user's phone. This replaces the removed AccessibilityService.
     INSTABOX_API_BASE = "https://api.instabox.sh"
 
-    def _ib_headers(request: Request) -> dict:
-        key = request.headers.get("X-Instabox-Key") or ""
-        if not key:
-            # Fall back to env var for server-initiated calls
-            import os as _os
-            key = _os.environ.get("INSTABOX_API_KEY", "")
-        return {"Authorization": "Bearer " + key, "Content-Type": "application/json"}
+    def _ib_key() -> str:
+        """The server's own InstaBox API key. Clients never supply credentials here."""
+        return os.environ.get("INSTABOX_API_KEY", "")
 
-    @app.post("/api/instabox/machines")
+    @app.post("/api/instabox/machines", dependencies=[api])
     def ib_create_machine(request: Request, body: dict = Body(...)) -> dict:
         """Create an InstaBox Android box (Redroid container, Android 14)."""
-        key = request.headers.get("X-Instabox-Key") or ""
-        import os as _os
+        key = _ib_key()
         if not key:
-            key = _os.environ.get("INSTABOX_API_KEY", "")
-        if not key:
-            raise HTTPException(400, "INSTABOX_API_KEY not configured.")
+            raise HTTPException(400, "INSTABOX_API_KEY not configured on the server.")
         name = str(body.get("name", "zerothebot-android")).strip()
         try:
             r = httpx.post(INSTABOX_API_BASE + "/v1/machines",
@@ -1729,15 +1772,12 @@ google.accounts.id.renderButton(document.getElementById('gbtn'),
         except httpx.HTTPError as e:
             raise HTTPException(502, f"InstaBox error: {e}")
 
-    @app.get("/api/instabox/machines")
+    @app.get("/api/instabox/machines", dependencies=[api])
     def ib_list_machines(request: Request) -> dict:
         """List InstaBox machines."""
-        key = request.headers.get("X-Instabox-Key") or ""
-        import os as _os
+        key = _ib_key()
         if not key:
-            key = _os.environ.get("INSTABOX_API_KEY", "")
-        if not key:
-            raise HTTPException(400, "INSTABOX_API_KEY not configured.")
+            raise HTTPException(400, "INSTABOX_API_KEY not configured on the server.")
         try:
             r = httpx.get(INSTABOX_API_BASE + "/v1/machines",
                           headers={"Authorization": "Bearer " + key}, timeout=30)
@@ -1747,15 +1787,12 @@ google.accounts.id.renderButton(document.getElementById('gbtn'),
         except httpx.HTTPError as e:
             raise HTTPException(502, f"InstaBox error: {e}")
 
-    @app.get("/api/instabox/machines/{mid}")
+    @app.get("/api/instabox/machines/{mid}", dependencies=[api])
     def ib_get_machine(request: Request, mid: str) -> dict:
         """Get one InstaBox machine."""
-        key = request.headers.get("X-Instabox-Key") or ""
-        import os as _os
+        key = _ib_key()
         if not key:
-            key = _os.environ.get("INSTABOX_API_KEY", "")
-        if not key:
-            raise HTTPException(400, "INSTABOX_API_KEY not configured.")
+            raise HTTPException(400, "INSTABOX_API_KEY not configured on the server.")
         try:
             r = httpx.get(f"{INSTABOX_API_BASE}/v1/machines/{mid}",
                           headers={"Authorization": "Bearer " + key}, timeout=30)
@@ -1765,15 +1802,12 @@ google.accounts.id.renderButton(document.getElementById('gbtn'),
         except httpx.HTTPError as e:
             raise HTTPException(502, f"InstaBox error: {e}")
 
-    @app.post("/api/instabox/machines/{mid}/adb")
+    @app.post("/api/instabox/machines/{mid}/adb", dependencies=[api])
     def ib_adb(request: Request, mid: str, body: dict = Body(...)) -> dict:
         """Run an adb command on an InstaBox Android box."""
-        key = request.headers.get("X-Instabox-Key") or ""
-        import os as _os
+        key = _ib_key()
         if not key:
-            key = _os.environ.get("INSTABOX_API_KEY", "")
-        if not key:
-            raise HTTPException(400, "INSTABOX_API_KEY not configured.")
+            raise HTTPException(400, "INSTABOX_API_KEY not configured on the server.")
         cmd = str(body.get("cmd", "")).strip()
         if not cmd:
             raise HTTPException(400, "adb cmd required.")
@@ -1787,15 +1821,12 @@ google.accounts.id.renderButton(document.getElementById('gbtn'),
         except httpx.HTTPError as e:
             raise HTTPException(502, f"InstaBox error: {e}")
 
-    @app.post("/api/instabox/machines/{mid}/desktop/start")
+    @app.post("/api/instabox/machines/{mid}/desktop/start", dependencies=[api])
     def ib_desktop_start(request: Request, mid: str, body: dict = Body(default={})) -> dict:
         """Start the desktop on an InstaBox machine."""
-        key = request.headers.get("X-Instabox-Key") or ""
-        import os as _os
+        key = _ib_key()
         if not key:
-            key = _os.environ.get("INSTABOX_API_KEY", "")
-        if not key:
-            raise HTTPException(400, "INSTABOX_API_KEY not configured.")
+            raise HTTPException(400, "INSTABOX_API_KEY not configured on the server.")
         try:
             r = httpx.post(f"{INSTABOX_API_BASE}/v1/machines/{mid}/desktop",
                            headers={"Authorization": "Bearer " + key},
@@ -1807,33 +1838,28 @@ google.accounts.id.renderButton(document.getElementById('gbtn'),
         except httpx.HTTPError as e:
             raise HTTPException(502, f"InstaBox error: {e}")
 
-    @app.post("/api/instabox/machines/{mid}/desktop/screenshot")
+    @app.post("/api/instabox/machines/{mid}/desktop/screenshot", dependencies=[api])
     def ib_desktop_screenshot(request: Request, mid: str) -> dict:
         """Take a screenshot of the InstaBox machine desktop."""
-        key = request.headers.get("X-Instabox-Key") or ""
-        import os as _os
+        key = _ib_key()
         if not key:
-            key = _os.environ.get("INSTABOX_API_KEY", "")
-        if not key:
-            raise HTTPException(400, "INSTABOX_API_KEY not configured.")
+            raise HTTPException(400, "INSTABOX_API_KEY not configured on the server.")
         try:
             r = httpx.get(f"{INSTABOX_API_BASE}/v1/machines/{mid}/desktop/screenshot",
                           headers={"Authorization": "Bearer " + key}, timeout=30)
             if r.status_code >= 400:
                 raise HTTPException(r.status_code, f"InstaBox screenshot failed: {r.text[:200]}")
-            return {"ok": True, "screenshot": r.content, "content_type": r.headers.get("content-type", "image/png")}
+            return {"ok": True, "screenshot": base64.b64encode(r.content).decode("ascii"),
+                    "content_type": r.headers.get("content-type", "image/png")}
         except httpx.HTTPError as e:
             raise HTTPException(502, f"InstaBox error: {e}")
 
-    @app.post("/api/instabox/machines/{mid}/desktop/stream")
+    @app.post("/api/instabox/machines/{mid}/desktop/stream", dependencies=[api])
     def ib_desktop_stream(request: Request, mid: str, body: dict = Body(default={})) -> dict:
         """Get a desktop stream URL for an InstaBox machine."""
-        key = request.headers.get("X-Instabox-Key") or ""
-        import os as _os
+        key = _ib_key()
         if not key:
-            key = _os.environ.get("INSTABOX_API_KEY", "")
-        if not key:
-            raise HTTPException(400, "INSTABOX_API_KEY not configured.")
+            raise HTTPException(400, "INSTABOX_API_KEY not configured on the server.")
         try:
             r = httpx.post(f"{INSTABOX_API_BASE}/v1/machines/{mid}/desktop/stream",
                            headers={"Authorization": "Bearer " + key},
@@ -1845,15 +1871,12 @@ google.accounts.id.renderButton(document.getElementById('gbtn'),
         except httpx.HTTPError as e:
             raise HTTPException(502, f"InstaBox error: {e}")
 
-    @app.post("/api/instabox/machines/{mid}/desktop/click")
+    @app.post("/api/instabox/machines/{mid}/desktop/click", dependencies=[api])
     def ib_desktop_click(request: Request, mid: str, body: dict = Body(...)) -> dict:
         """Click on the InstaBox machine desktop."""
-        key = request.headers.get("X-Instabox-Key") or ""
-        import os as _os
+        key = _ib_key()
         if not key:
-            key = _os.environ.get("INSTABOX_API_KEY", "")
-        if not key:
-            raise HTTPException(400, "INSTABOX_API_KEY not configured.")
+            raise HTTPException(400, "INSTABOX_API_KEY not configured on the server.")
         x = int(body.get("x", 0)); y = int(body.get("y", 0))
         try:
             r = httpx.post(f"{INSTABOX_API_BASE}/v1/machines/{mid}/desktop",
@@ -1865,15 +1888,12 @@ google.accounts.id.renderButton(document.getElementById('gbtn'),
         except httpx.HTTPError as e:
             raise HTTPException(502, f"InstaBox error: {e}")
 
-    @app.post("/api/instabox/machines/{mid}/desktop/type")
+    @app.post("/api/instabox/machines/{mid}/desktop/type", dependencies=[api])
     def ib_desktop_type(request: Request, mid: str, body: dict = Body(...)) -> dict:
         """Type text on the InstaBox machine desktop."""
-        key = request.headers.get("X-Instabox-Key") or ""
-        import os as _os
+        key = _ib_key()
         if not key:
-            key = _os.environ.get("INSTABOX_API_KEY", "")
-        if not key:
-            raise HTTPException(400, "INSTABOX_API_KEY not configured.")
+            raise HTTPException(400, "INSTABOX_API_KEY not configured on the server.")
         text = str(body.get("text", ""))
         try:
             r = httpx.post(f"{INSTABOX_API_BASE}/v1/machines/{mid}/desktop",

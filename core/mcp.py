@@ -155,7 +155,8 @@ class McpManager:
         name = re.sub(r"[^A-Za-z0-9_-]+", "_", (cfg.get("name") or "server").strip())[:32] or "server"
         row = {"id": sid, "name": name, "transport": cfg.get("transport", "stdio"), "command": cfg.get("command", ""),
                "args": jdump(cfg.get("args", [])), "env": jdump(cfg.get("env", {})), "url": cfg.get("url", ""),
-               "headers": jdump(cfg.get("headers", {})), "enabled": int(bool(cfg.get("enabled", True))), "trust": cfg.get("trust", "ask")}
+               "headers": jdump(cfg.get("headers", {})), "enabled": int(bool(cfg.get("enabled", True))), "trust": cfg.get("trust", "ask"),
+               "owner": str(cfg.get("owner", "") or "")}
         if row["transport"] not in ("stdio", "http", "sse"):
             raise ValueError("transport must be stdio, http or sse")
         if row["transport"] == "stdio" and not row["command"]:
@@ -169,7 +170,7 @@ class McpManager:
         self.restart(sid)
         return next(c for c in self.configs() if c["id"] == sid)
 
-    def import_json(self, text: str) -> list[dict]:
+    def import_json(self, text: str, owner: str = "") -> list[dict]:
         """Accepts the common {"mcpServers": {name: {command,args,env | url,headers}}} format."""
         data = json.loads(text)
         servers = data.get("mcpServers") or data.get("servers") or data
@@ -179,7 +180,7 @@ class McpManager:
                 continue
             transport = "stdio" if c.get("command") else ("sse" if c.get("type") == "sse" else "http")
             out.append(self.save({"name": name, "transport": transport, "command": c.get("command", ""), "args": c.get("args", []),
-                                  "env": c.get("env", {}), "url": c.get("url", ""), "headers": c.get("headers", {})}))
+                                  "env": c.get("env", {}), "url": c.get("url", ""), "headers": c.get("headers", {}), "owner": owner}))
         return out
 
     def delete(self, sid: str) -> None:
@@ -218,10 +219,16 @@ class McpManager:
         self.loop.call_soon_threadsafe(self.loop.stop)
 
     # -- tools -------------------------------------------------------------------
-    def tool_specs(self, granted: set[str], names_only: bool = False) -> list[ToolSpec]:
+    def tool_specs(self, granted: set[str], names_only: bool = False, owner: str = "") -> list[ToolSpec]:
         specs: list[ToolSpec] = []
         for sid, conn in list(self.conns.items()):
             if conn.status != "connected" or f"mcp:{conn.cfg['name']}" not in granted:
+                continue
+            # Owner scoping: a server added by one account is not visible to another
+            # account's bots. Servers with no owner (added before multi-user, or
+            # deliberately shared by the admin) stay visible to everyone.
+            srv_owner = str(conn.cfg.get("owner", "") or "")
+            if srv_owner and owner and srv_owner != owner:
                 continue
             server = conn.cfg["name"]
             trust = conn.cfg.get("trust", "ask")

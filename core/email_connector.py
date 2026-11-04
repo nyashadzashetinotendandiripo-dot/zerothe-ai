@@ -185,7 +185,7 @@ class EmailConnector:
 
             ctx = type("Ctx", (), {
                 "bot": bot, "thread_id": thread["id"], "turn_id": "",
-                "run": type("Run", (), {"tainted": False, "stop": type("Stop", (), {"is_set": lambda self: False}})(),
+                "run": type("Run", (), {"tainted": False, "stop": type("Stop", (), {"is_set": lambda self: False})}),
             })()  # noqa: E501
 
             risk = type("Risk", (), {

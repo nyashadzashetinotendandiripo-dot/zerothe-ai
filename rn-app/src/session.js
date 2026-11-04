@@ -1,4 +1,4 @@
-// ZerotheBot React-Native client ? same REST + SSE API as the web app (service/server.py).
+// ZerotheBot React-Native client — same REST + SSE API as the web app (service/server.py).
 import { useEffect, useMemo, useRef, useState } from 'react';
 import EventSource from 'react-native-sse';
 import { APP_VERSION, OTA_ID } from './build';
@@ -56,6 +56,7 @@ export async function api(path, opts = {}) {
     ctl = new AbortController();
     timer = setTimeout(() => { try { ctl.abort(); } catch (e) { /* ignore */ } }, timeout);
   }
+  const isForm = typeof FormData !== 'undefined' && rest.body instanceof FormData;
   try {
     // instabox-port --private requires ?_token= in each request URL (not just the Bearer header).
     // API_BASE is kept clean; the token is appended per-request in api().
@@ -66,7 +67,8 @@ export async function api(path, opts = {}) {
       signal: ctl ? ctl.signal : undefined,
       headers: {
         'Authorization': 'Bearer ' + TOKEN,
-        'Content-Type': 'application/json',
+        // FormData sets its own multipart Content-Type with the boundary.
+        ...(isForm ? {} : { 'Content-Type': 'application/json' }),
         // Lets the server log which bundle the phone is really running, so
         // "I updated but nothing changed" is answerable from the server side.
         'X-ZB-App': APP_VERSION,
@@ -86,6 +88,22 @@ export async function api(path, opts = {}) {
   } finally {
     if (timer) clearTimeout(timer);
   }
+}
+
+// Authenticated fetch for wrappers that receive an explicit base URL (login
+// flows pass the server the user just typed; everything else falls back to
+// the saved API_BASE). Adds the Bearer header + ?_token= the private port needs.
+async function authed(base, path, opts = {}) {
+  const b = String(base || API_BASE || '').replace(/\/+$/, '');
+  const url = b + path;
+  const sep = url.includes('?') ? '&' : '?';
+  const r = await fetch(url + sep + '_token=' + encodeURIComponent(TOKEN), {
+    ...opts,
+    headers: { 'Authorization': 'Bearer ' + TOKEN, ...(opts.headers || {}) },
+  });
+  const data = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(data.error || data.detail || ('HTTP ' + r.status));
+  return data;
 }
 
 export async function tryConf(base, token) {          // validate before saving
@@ -128,132 +146,126 @@ export async function authStatus(base) {
 
 // Current account: email, is_admin, plan, usage this week. Requires a signed session.
 export async function me(base) {
-  const b = String(base || '').replace(/\/+$/, '');
-  const r = await fetch(b + '/api/me', { headers: { 'Content-Type': 'application/json' } });
-  const d = await r.json().catch(() => ({}));
-  if (r.status !== 200) throw new Error(d.error || d.detail || 'Could not load account.');
-  return d;
+  return authed(base, '/api/me');
 }
 
 // Admin: list every account with per-user token usage.
 export async function adminUsers(base) {
-  const b = String(base || '').replace(/\/+$/, '');
-  const r = await fetch(b + '/api/admin/users', { headers: { 'Content-Type': 'application/json' } });
-  const d = await r.json().catch(() => ({}));
-  if (r.status !== 200) throw new Error(d.error || d.detail || 'Could not load users.');
-  return d;
+  return authed(base, '/api/admin/users');
 }
 
 // Admin: detail for one account.
 export async function adminAccount(base, email) {
-  const b = String(base || '').replace(/\/+$/, '');
-  const r = await fetch(b + '/api/admin/account/' + encodeURIComponent(email), { headers: { 'Content-Type': 'application/json' } });
-  const d = await r.json().catch(() => ({}));
-  if (r.status !== 200) throw new Error(d.error || d.detail || 'Could not load account.');
-  return d;
+  return authed(base, '/api/admin/account/' + encodeURIComponent(email));
 }
 
 // Admin: server settings (masked secrets).
 export async function adminSettings(base) {
-  const b = String(base || '').replace(/\/+$/, '');
-  const r = await fetch(b + '/api/admin/settings', { headers: { 'Content-Type': 'application/json' } });
-  const d = await r.json().catch(() => ({}));
-  if (r.status !== 200) throw new Error(d.error || d.detail || 'Could not load settings.');
-  return d;
+  return authed(base, '/api/admin/settings');
 }
 
 // Admin: set a user's plan tier.
 export async function adminSetPlan(base, email, plan) {
-  const b = String(base || '').replace(/\/+$/, '');
-  const r = await fetch(b + '/api/admin/account/' + encodeURIComponent(email) + '/plan', {
-    method: 'POST', headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ plan }),
+  return authed(base, '/api/admin/account/' + encodeURIComponent(email) + '/plan', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ plan }),
   });
-  const d = await r.json().catch(() => ({}));
-  if (r.status !== 200) throw new Error(d.error || d.detail || 'Could not set plan.');
-  return d;
 }
 
 // Admin: grant or revoke admin rights.
 export async function adminSetAdmin(base, email, isAdmin) {
-  const b = String(base || '').replace(/\/+$/, '');
-  const r = await fetch(b + '/api/admin/account/' + encodeURIComponent(email) + '/admin', {
-    method: 'POST', headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ is_admin: isAdmin }),
+  return authed(base, '/api/admin/account/' + encodeURIComponent(email) + '/admin', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ is_admin: isAdmin }),
   });
-  const d = await r.json().catch(() => ({}));
-  if (r.status !== 200) throw new Error(d.error || d.detail || 'Could not set admin.');
-  return d;
 }
 
 // Approval center: Muse-style pending actions with merchant/price/item details.
 export async function approvalsCenter(base) {
-  const b = String(base || '').replace(/\/+$/, '');
-  const r = await fetch(b + '/api/approvals/center', { headers: { 'Content-Type': 'application/json' } });
-  const d = await r.json().catch(() => ({}));
-  if (r.status !== 200) throw new Error(d.error || d.detail || 'Could not load approvals.');
-  return d;
+  return authed(base, '/api/approvals/center');
 }
 
 // Decide an approval: approve or deny.
 export async function approvalDecide(base, aid, approve, remember = false, note = '') {
-  const b = String(base || '').replace(/\/+$/, '');
-  const r = await fetch(b + '/api/approvals/' + encodeURIComponent(aid) + '/decide', {
+  return authed(base, '/api/approvals/' + encodeURIComponent(aid) + '/decide', {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ approve, remember, note }),
   });
-  const d = await r.json().catch(() => ({}));
-  if (r.status !== 200) throw new Error(d.error || d.detail || 'Could not decide approval.');
-  return d;
+}
+
+// ---------------------------------------------------------------- plugins & connectors
+// List every connector with connection status, fields and tools.
+export async function pluginsList(base) {
+  return authed(base, '/api/plugins');
+}
+
+// Start an OAuth sign-in. Returns { url } — open it in the system browser.
+// mobile=1 makes the server's callback deep-link back into the app.
+export async function pluginConnect(base, pid, mobile = true) {
+  return authed(base, '/api/plugins/' + encodeURIComponent(pid) + '/connect?mobile=' + (mobile ? 1 : 0), { method: 'POST' });
+}
+
+// Forget a connector's stored credentials.
+export async function pluginDisconnect(base, pid) {
+  return authed(base, '/api/plugins/' + encodeURIComponent(pid) + '/disconnect', { method: 'POST' });
+}
+
+// Save config fields (client ids, tokens, region overrides...).
+export async function pluginConfig(base, pid, values) {
+  return authed(base, '/api/plugins/' + encodeURIComponent(pid) + '/config', {
+    method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(values || {}),
+  });
+}
+
+// Run the plugin's connection test.
+export async function pluginTest(base, pid) {
+  return authed(base, '/api/plugins/' + encodeURIComponent(pid) + '/test', { method: 'POST' });
+}
+
+// ---------------------------------------------------------------- MCP servers
+// List configured MCP servers with live status and tool counts.
+export async function mcpList(base) {
+  return authed(base, '/api/mcp');
+}
+
+// Add or update one server, or import many: { import_json: '{"mcpServers": {...}}' }.
+export async function mcpSave(base, cfg) {
+  return authed(base, '/api/mcp', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(cfg),
+  });
+}
+
+export async function mcpDelete(base, sid) {
+  return authed(base, '/api/mcp/' + encodeURIComponent(sid), { method: 'DELETE' });
+}
+
+export async function mcpRestart(base, sid) {
+  return authed(base, '/api/mcp/' + encodeURIComponent(sid) + '/restart', { method: 'POST' });
 }
 
 // ---------------------------------------------------------------- email (IMAP) connector
 export async function emailConfigure(base, host, port, username, password, useSsl = true) {
-  const b = String(base || '').replace(/\/+$/, '');
-  const r = await fetch(b + '/api/email/imap/configure', {
+  return authed(base, '/api/email/imap/configure', {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ host, port, username, password, use_ssl: useSsl }),
   });
-  const d = await r.json().catch(() => ({}));
-  if (r.status !== 200) throw new Error(d.error || d.detail || 'Could not configure IMAP.');
-  return d;
 }
 
 export async function emailPoll(base) {
-  const b = String(base || '').replace(/\/+$/, '');
-  const r = await fetch(b + '/api/email/imap/poll', { headers: { 'Content-Type': 'application/json' } });
-  const d = await r.json().catch(() => ({}));
-  if (r.status !== 200) throw new Error(d.error || d.detail || 'Could not poll email.');
-  return d;
+  return authed(base, '/api/email/imap/poll');
 }
 
 export async function emailCreateApprovals(base) {
-  const b = String(base || '').replace(/\/+$/, '');
-  const r = await fetch(b + '/api/email/imap/create-approvals', {
-    method: 'POST', headers: { 'Content-Type': 'application/json' },
-  });
-  const d = await r.json().catch(() => ({}));
-  if (r.status !== 200) throw new Error(d.error || d.detail || 'Could not create approvals.');
-  return d;
+  return authed(base, '/api/email/imap/create-approvals', { method: 'POST' });
 }
 
 // ---------------------------------------------------------------- document upload & parsing
 export async function documentUpload(base, fileUri, fileName) {
-  const b = String(base || '').replace(/\/+$/, '');
   const form = new FormData();
   form.append('file', {
     uri: fileUri,
     name: fileName,
     type: 'application/pdf',
   });
-  const r = await fetch(b + '/api/document/upload', {
-    method: 'POST',
-    body: form,
-    headers: { 'Content-Type': 'multipart/form-data' },
-  });
-  const d = await r.json().catch(() => ({}));
-  if (r.status !== 200) throw new Error(d.error || d.detail || 'Could not upload document.');
-  return d;
+  return authed(base, '/api/document/upload', { method: 'POST', body: form });
 }
 
 // Sign in with Google: the reader app hands the verified Google ID token here
@@ -290,222 +302,130 @@ export function connectEvents({ since, onEvent, onConn, onSince }) {
 }
 
 // ---------------------------------------------------------------- browser-in-chat (agent computer use)
-export async function browserNavigate(base, url) {
-  const b = String(base || '').replace(/\/+$/, '');
-  const r = await fetch(b + '/api/browser/navigate', {
+// These drive a Bot's embedded browser through /api/browser/*; bot_id selects
+// the Bot whose tab is acted on. click takes { element } (snapshot id) or { x, y }.
+export async function browserNavigate(base, botId, url) {
+  return authed(base, '/api/browser/navigate', {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ url }),
+    body: JSON.stringify({ bot_id: botId, url }),
   });
-  const d = await r.json().catch(() => ({}));
-  if (r.status !== 200) throw new Error(d.error || d.detail || 'Browser navigate failed.');
-  return d;
 }
 
-export async function browserClick(base, selector) {
-  const b = String(base || '').replace(/\/+$/, '');
-  const r = await fetch(b + '/api/browser/click', {
+export async function browserClick(base, botId, opts = {}) {
+  return authed(base, '/api/browser/click', {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ selector }),
+    body: JSON.stringify({ bot_id: botId, ...opts }),
   });
-  const d = await r.json().catch(() => ({}));
-  if (r.status !== 200) throw new Error(d.error || d.detail || 'Browser click failed.');
-  return d;
 }
 
-export async function browserType(base, selector, text) {
-  const b = String(base || '').replace(/\/+$/, '');
-  const r = await fetch(b + '/api/browser/type', {
+export async function browserType(base, botId, text, element = null) {
+  return authed(base, '/api/browser/type', {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ selector, text }),
+    body: JSON.stringify({ bot_id: botId, text, element }),
   });
-  const d = await r.json().catch(() => ({}));
-  if (r.status !== 200) throw new Error(d.error || d.detail || 'Browser type failed.');
-  return d;
 }
 
-export async function browserScreenshot(base) {
-  const b = String(base || '').replace(/\/+$/, '');
-  const r = await fetch(b + '/api/browser/screenshot', { headers: { 'Content-Type': 'application/json' } });
-  const d = await r.json().catch(() => ({}));
-  if (r.status !== 200) throw new Error(d.error || d.detail || 'Browser screenshot failed.');
-  return d;
+export async function browserScreenshot(base, botId) {
+  return authed(base, '/api/browser/screenshot?bot_id=' + encodeURIComponent(botId || ''));
 }
 
 // ---------------------------------------------------------------- agent-initiated proactive messages
 export async function agentMessage(base, text, threadId = '') {
-  const b = String(base || '').replace(/\/+$/, '');
-  const r = await fetch(b + '/api/agent/message', {
+  return authed(base, '/api/agent/message', {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ text, thread_id: threadId }),
   });
-  const d = await r.json().catch(() => ({}));
-  if (r.status !== 200) throw new Error(d.error || d.detail || 'Agent message failed.');
-  return d;
 }
 
 export async function agentMessages(base) {
-  const b = String(base || '').replace(/\/+$/, '');
-  const r = await fetch(b + '/api/agent/messages', { headers: { 'Content-Type': 'application/json' } });
-  const d = await r.json().catch(() => ({}));
-  if (r.status !== 200) throw new Error(d.error || d.detail || 'Could not load agent messages.');
-  return d;
+  return authed(base, '/api/agent/messages');
 }
 
 // ---------------------------------------------------------------- Tier 2: Web search
 export async function webSearch(base, query) {
-  const b = String(base || '').replace(/\/+$/, '');
-  const r = await fetch(b + '/api/search', {
-    method: 'POST', headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ q: query }),
+  return authed(base, '/api/search', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ q: query }),
   });
-  const d = await r.json().catch(() => ({}));
-  if (r.status !== 200) throw new Error(d.error || d.detail || 'Search failed.');
-  return d;
 }
 
 // ---------------------------------------------------------------- Tier 2: Image understanding
 export async function imageUnderstand(base, imageData, prompt = 'Describe this image in detail.') {
-  const b = String(base || '').replace(/\/+$/, '');
-  const r = await fetch(b + '/api/image/understand', {
+  return authed(base, '/api/image/understand', {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ image_data: imageData, prompt }),
   });
-  const d = await r.json().catch(() => ({}));
-  if (r.status !== 200) throw new Error(d.error || d.detail || 'Image understanding failed.');
-  return d;
 }
 
 // ---------------------------------------------------------------- Tier 3: Image generation
 export async function imageGenerate(base, prompt) {
-  const b = String(base || '').replace(/\/+$/, '');
-  const r = await fetch(b + '/api/image/generate', {
-    method: 'POST', headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ prompt }),
+  return authed(base, '/api/image/generate', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ prompt }),
   });
-  const d = await r.json().catch(() => ({}));
-  if (r.status !== 200) throw new Error(d.error || d.detail || 'Image generation failed.');
-  return d;
 }
 
 // ---------------------------------------------------------------- Tier 3: Code execution sandbox
 export async function codeExecute(base, code) {
-  const b = String(base || '').replace(/\/+$/, '');
-  const r = await fetch(b + '/api/code/execute', {
-    method: 'POST', headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ code }),
+  return authed(base, '/api/code/execute', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ code }),
   });
-  const d = await r.json().catch(() => ({}));
-  if (r.status !== 200) throw new Error(d.error || d.detail || 'Code execution failed.');
-  return d;
 }
 
 // ---------------------------------------------------------------- Tier 3: Multi-agent collaboration
 export async function agentCollaborate(base, task) {
-  const b = String(base || '').replace(/\/+$/, '');
-  const r = await fetch(b + '/api/agent/collaborate', {
-    method: 'POST', headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ task }),
+  return authed(base, '/api/agent/collaborate', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ task }),
   });
-  const d = await r.json().catch(() => ({}));
-  if (r.status !== 200) throw new Error(d.error || d.detail || 'Agent collaboration failed.');
-  return d;
 }
 
 // ---------------------------------------------------------------- InstaBox Android Boxes
 // Bots drive Android on InstaBox machines instead of the user's phone.
-// No AccessibilityService needed on the phone.
+// No AccessibilityService needed on the phone. The server authenticates the
+// user and attaches its own InstaBox API key — the phone never holds one.
 export async function ibCreateMachine(base, name) {
-  const b = String(base || '').replace(/\/+$/, '');
-  const r = await fetch(b + '/api/instabox/machines', {
-    method: 'POST', headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ name }),
+  return authed(base, '/api/instabox/machines', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name }),
   });
-  const d = await r.json().catch(() => ({}));
-  if (r.status !== 200) throw new Error(d.error || d.detail || 'InstaBox create failed.');
-  return d;
 }
 
 export async function ibListMachines(base) {
-  const b = String(base || '').replace(/\/+$/, '');
-  const r = await fetch(b + '/api/instabox/machines', {
-    headers: { 'Content-Type': 'application/json' },
-  });
-  const d = await r.json().catch(() => ({}));
-  if (r.status !== 200) throw new Error(d.error || d.detail || 'InstaBox list failed.');
-  return d;
+  return authed(base, '/api/instabox/machines');
 }
 
 export async function ibGetMachine(base, mid) {
-  const b = String(base || '').replace(/\/+$/, '');
-  const r = await fetch(b + '/api/instabox/machines/' + encodeURIComponent(mid), {
-    headers: { 'Content-Type': 'application/json' },
-  });
-  const d = await r.json().catch(() => ({}));
-  if (r.status !== 200) throw new Error(d.error || d.detail || 'InstaBox get failed.');
-  return d;
+  return authed(base, '/api/instabox/machines/' + encodeURIComponent(mid));
 }
 
 export async function ibAdb(base, mid, cmd) {
-  const b = String(base || '').replace(/\/+$/, '');
-  const r = await fetch(b + '/api/instabox/machines/' + encodeURIComponent(mid) + '/adb', {
-    method: 'POST', headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ cmd }),
+  return authed(base, '/api/instabox/machines/' + encodeURIComponent(mid) + '/adb', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ cmd }),
   });
-  const d = await r.json().catch(() => ({}));
-  if (r.status !== 200) throw new Error(d.error || d.detail || 'InstaBox adb failed.');
-  return d;
 }
 
 export async function ibDesktopStart(base, mid, width = 1280, height = 800) {
-  const b = String(base || '').replace(/\/+$/, '');
-  const r = await fetch(b + '/api/instabox/machines/' + encodeURIComponent(mid) + '/desktop/start', {
-    method: 'POST', headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ width, height }),
+  return authed(base, '/api/instabox/machines/' + encodeURIComponent(mid) + '/desktop/start', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ width, height }),
   });
-  const d = await r.json().catch(() => ({}));
-  if (r.status !== 200) throw new Error(d.error || d.detail || 'InstaBox desktop start failed.');
-  return d;
 }
 
 export async function ibDesktopScreenshot(base, mid) {
-  const b = String(base || '').replace(/\/+$/, '');
-  const r = await fetch(b + '/api/instabox/machines/' + encodeURIComponent(mid) + '/desktop/screenshot', {
-    headers: { 'Content-Type': 'application/json' },
-  });
-  const d = await r.json().catch(() => ({}));
-  if (r.status !== 200) throw new Error(d.error || d.detail || 'InstaBox screenshot failed.');
-  return d;
+  return authed(base, '/api/instabox/machines/' + encodeURIComponent(mid) + '/desktop/screenshot');
 }
 
 export async function ibDesktopStream(base, mid, viewOnly = true, ttlSeconds = 3600) {
-  const b = String(base || '').replace(/\/+$/, '');
-  const r = await fetch(b + '/api/instabox/machines/' + encodeURIComponent(mid) + '/desktop/stream', {
+  return authed(base, '/api/instabox/machines/' + encodeURIComponent(mid) + '/desktop/stream', {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ viewOnly, ttlSeconds }),
   });
-  const d = await r.json().catch(() => ({}));
-  if (r.status !== 200) throw new Error(d.error || d.detail || 'InstaBox stream failed.');
-  return d;
 }
 
 export async function ibDesktopClick(base, mid, x, y) {
-  const b = String(base || '').replace(/\/+$/, '');
-  const r = await fetch(b + '/api/instabox/machines/' + encodeURIComponent(mid) + '/desktop/click', {
-    method: 'POST', headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ x, y }),
+  return authed(base, '/api/instabox/machines/' + encodeURIComponent(mid) + '/desktop/click', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ x, y }),
   });
-  const d = await r.json().catch(() => ({}));
-  if (r.status !== 200) throw new Error(d.error || d.detail || 'InstaBox click failed.');
-  return d;
 }
 
 export async function ibDesktopType(base, mid, text) {
-  const b = String(base || '').replace(/\/+$/, '');
-  const r = await fetch(b + '/api/instabox/machines/' + encodeURIComponent(mid) + '/desktop/type', {
-    method: 'POST', headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ text }),
+  return authed(base, '/api/instabox/machines/' + encodeURIComponent(mid) + '/desktop/type', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text }),
   });
-  const d = await r.json().catch(() => ({}));
-  if (r.status !== 200) throw new Error(d.error || d.detail || 'InstaBox type failed.');
-  return d;
 }

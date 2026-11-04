@@ -287,7 +287,7 @@ class Engine:
         specs: dict[str, ToolSpec] = {t.name: t for t in self.builtin}
         for t in self.plugins.tool_specs(granted):
             specs.setdefault(t.name, t)
-        for t in self.mcp.tool_specs(granted):
+        for t in self.mcp.tool_specs(granted, owner=str(run.bot.get("owner", "") or "")):
             specs.setdefault(t.name, t)
         return list(specs.values())
 

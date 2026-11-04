@@ -2,14 +2,14 @@
   "expo": {
     "name": "ZerotheBot",
     "slug": "zerothebot",
-    "version": "1.17.41",
+    "version": "1.17.42",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "light",
     "scheme": "zerothebot",
     "android": {
       "package": "ai.zerothebot.app",
-      "versionCode": 104,
+      "versionCode": 105,
       "adaptiveIcon": {
         "backgroundColor": "#f0f0ef",
         "foregroundImage": "./assets/android-icon-foreground.png",

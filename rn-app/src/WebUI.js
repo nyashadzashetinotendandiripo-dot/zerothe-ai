@@ -7,7 +7,7 @@ import {
   ScrollView, StyleSheet, Text, TextInput, View,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { api, conf } from './session';
+import { api, conf, pluginsList, pluginConnect, pluginDisconnect, pluginConfig, mcpList, mcpSave, mcpDelete, mcpRestart } from './session';
 import { C } from './theme';
 import Avatar from './Avatar';
 
@@ -1636,21 +1636,152 @@ export function MuseProfileView({ conn, account, onAvatar, onGoView }) {
   );
 }
 
-// ---------------------------------------------------------------- muse: connectors
+// ---------------------------------------------------------------- muse: connectors (live)
+// Wired to the real /api/plugins + /api/mcp endpoints. OAuth connectors open
+// the vendor's sign-in in the system browser; the server deep-links back to
+// zerothebot://plugins/... once the grant is done.
+const CONNECTOR_ICONS = {
+  gmail: '📧', gcal: '📅', google_calendar: '📅', calendar: '📅',
+  healthex: '💊', opentable: '🍽', facebook: '👥', instagram: '📸',
+  peloton: '🚲', plaid: '🏦', function: '🩺',
+};
+function connectorIcon(p) {
+  return CONNECTOR_ICONS[String(p.id || '').toLowerCase()] || (p.oauth ? '🔗' : '🧩');
+}
+function mcpDot(status) {
+  if (status === 'connected') return C.ok;
+  if (status === 'error') return C.bad;
+  if (status === 'disabled') return C.muted;
+  return C.warn;
+}
+
 export function ConnectorsView({ conn, account, onAvatar }) {
-  const connected = [
-    { id: 'gmail', name: 'Gmail', icon: '📧' },
-    { id: 'calendar', name: 'Google Calendar', icon: '📅' },
-    { id: 'healthex', name: 'HealthEx', icon: '💊' },
-    { id: 'opentable', name: 'OpenTable', icon: '🍽' },
-    { id: 'facebook', name: 'Facebook', icon: '👥' },
-    { id: 'instagram', name: 'Instagram', icon: '📸' },
-    { id: 'peloton', name: 'Peloton', icon: '🚲' },
-  ];
-  const available = [
-    { id: 'plaid', name: 'Finances (Plaid)', icon: '🏦' },
-    { id: 'function', name: 'Function Health', icon: '🩺' },
-  ];
+  const [plugins, setPlugins] = useState([]);
+  const [mcps, setMcps] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [err, setErr] = useState('');
+  const [busy, setBusy] = useState('');            // plugin id mid-connect/disconnect
+  const [q, setQ] = useState('');
+  const [cfg, setCfg] = useState(null);            // plugin whose fields are being edited
+  const [cfgVals, setCfgVals] = useState({});
+  const [cfgBusy, setCfgBusy] = useState(false);
+  const [mcpAdd, setMcpAdd] = useState(false);
+  const [mcpJson, setMcpJson] = useState('');
+  const [mcpBusy, setMcpBusy] = useState(false);
+
+  const refresh = useCallback(async () => {
+    try {
+      const pl = await pluginsList();
+      setPlugins((pl && pl.plugins) || []);
+      setErr('');
+    } catch (e) {
+      setErr(String(e.message || e));
+    }
+    try {
+      const mc = await mcpList();
+      setMcps(Array.isArray(mc) ? mc : []);
+    } catch (e) { /* a failed MCP list must not blank the connectors */ }
+    setLoading(false);
+  }, []);
+
+  useEffect(() => { refresh(); }, [refresh]);
+
+  // Back from the OAuth browser: the server deep-links zerothebot://plugins/go?pid=…
+  useEffect(() => {
+    const handle = (u) => { if (String(u || '').startsWith('zerothebot://plugins')) refresh(); };
+    let sub = null;
+    try { sub = Linking.addEventListener('url', handle); } catch (e) { /* older RN */ }
+    Linking.getInitialURL().then((u) => { if (u) handle(u); }).catch(() => {});
+    return () => { try { if (sub) sub.remove(); } catch (e) { /* ignore */ } };
+  }, [refresh]);
+
+  const needle = q.trim().toLowerCase();
+  const shown = needle
+    ? plugins.filter((p) => String(p.name || '').toLowerCase().includes(needle) || String(p.description || '').toLowerCase().includes(needle))
+    : plugins;
+  const connected = shown.filter((p) => p.connected);
+  const available = shown.filter((p) => !p.connected);
+
+  const openCfg = (p) => {
+    const vals = {};
+    (p.fields || []).forEach((f) => { vals[f.key] = f.value || ''; });
+    setCfgVals(vals);
+    setCfg(p);
+  };
+
+  const doConnect = async (p) => {
+    if (busy) return;
+    if (!p.oauth) { openCfg(p); return; }   // field-based connector: ask for keys first
+    setBusy(p.id);
+    try {
+      const d = await pluginConnect(undefined, p.id, true);
+      if (d && d.url) await Linking.openURL(d.url);
+      else await refresh();
+    } catch (e) {
+      Alert.alert('Could not connect', String(e.message || e));
+    } finally {
+      setBusy('');
+    }
+  };
+
+  const doDisconnect = async (p) => {
+    if (busy) return;
+    setBusy(p.id);
+    try {
+      await pluginDisconnect(undefined, p.id);
+      await refresh();
+    } catch (e) {
+      Alert.alert('Could not disconnect', String(e.message || e));
+    } finally {
+      setBusy('');
+    }
+  };
+
+  const saveCfg = async () => {
+    if (cfgBusy || !cfg) return;
+    setCfgBusy(true);
+    try {
+      await pluginConfig(undefined, cfg.id, cfgVals);
+      setCfg(null);
+      await refresh();
+    } catch (e) {
+      Alert.alert('Could not save', String(e.message || e));
+    } finally {
+      setCfgBusy(false);
+    }
+  };
+
+  const addMcp = async () => {
+    if (mcpBusy) return;
+    setMcpBusy(true);
+    try {
+      await mcpSave(undefined, { import_json: mcpJson });
+      setMcpJson('');
+      setMcpAdd(false);
+      await refresh();
+    } catch (e) {
+      Alert.alert('Could not add server', String(e.message || e));
+    } finally {
+      setMcpBusy(false);
+    }
+  };
+
+  const mcpRestartOne = async (s) => {
+    try { await mcpRestart(undefined, s.id); await refresh(); }
+    catch (e) { Alert.alert('MCP server', String(e.message || e)); }
+  };
+  const mcpDeleteOne = async (s) => {
+    try { await mcpDelete(undefined, s.id); await refresh(); }
+    catch (e) { Alert.alert('MCP server', String(e.message || e)); }
+  };
+
+  const pill = (label, color, onPress, disabled) => (
+    <Pressable disabled={disabled} onPress={onPress}
+      style={{ backgroundColor: C.panel2, borderRadius: 10, paddingHorizontal: 12, paddingVertical: 6 }}>
+      <Text style={{ color, fontWeight: '800', fontSize: 12 }}>{label}</Text>
+    </Pressable>
+  );
+
   return (
     <View style={W.screen}>
       <WebTopBar title="Connectors" showBack conn={conn} account={account} onAvatar={onAvatar} />
@@ -1661,37 +1792,132 @@ export function ConnectorsView({ conn, account, onAvatar }) {
               <View style={{ width: 36, height: 36, borderRadius: 10, backgroundColor: C.panel2, alignItems: 'center', justifyContent: 'center' }}>
                 <Text style={{ fontSize: 16 }}>🔍</Text>
               </View>
-              <TextInput style={{ flex: 1, color: C.text, fontSize: 14 }} placeholder="Search connectors" placeholderTextColor={C.muted} />
+              <TextInput style={{ flex: 1, color: C.text, fontSize: 14 }} placeholder="Search connectors"
+                placeholderTextColor={C.muted} value={q} onChangeText={setQ} />
             </View>
           </View>
-          <Text style={W.museSection}>Connected</Text>
-          {connected.map((c) => (
-            <Pressable key={c.id} style={[W.museCard, { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', padding: 12 }]}>
-              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
-                <View style={{ width: 36, height: 36, borderRadius: 10, backgroundColor: C.panel2, alignItems: 'center', justifyContent: 'center' }}>
-                  <Text style={{ fontSize: 18 }}>{c.icon}</Text>
+
+          {loading ? (
+            <ActivityIndicator style={{ marginTop: 30 }} color={C.muted} />
+          ) : (
+            <View>
+              {!!err && <Text style={{ color: C.bad, fontSize: 13, marginBottom: 10 }}>{err}</Text>}
+
+              {!!connected.length && <Text style={W.museSection}>Connected</Text>}
+              {connected.map((p) => (
+                <View key={p.id} style={[W.museCard, { padding: 12 }]}>
+                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
+                    <View style={{ width: 36, height: 36, borderRadius: 10, backgroundColor: C.panel2, alignItems: 'center', justifyContent: 'center' }}>
+                      <Text style={{ fontSize: 18 }}>{connectorIcon(p)}</Text>
+                    </View>
+                    <View style={{ flex: 1 }}>
+                      <Text style={{ color: C.text, fontWeight: '600', fontSize: 14 }} numberOfLines={1}>{p.name || p.id}</Text>
+                      {!!p.description && <Text style={{ color: C.muted, fontSize: 12, marginTop: 2 }} numberOfLines={2}>{p.description}</Text>}
+                    </View>
+                    <View style={{ flexDirection: 'row', gap: 8 }}>
+                      {!!(p.fields || []).length && pill('Configure', C.text, () => openCfg(p), false)}
+                      {pill(busy === p.id ? '…' : 'Disconnect', C.bad, () => doDisconnect(p), !!busy)}
+                    </View>
+                  </View>
                 </View>
-                <Text style={{ color: C.text, fontWeight: '600', fontSize: 14 }}>{c.name}</Text>
-              </View>
-              <Text style={{ color: C.muted, fontSize: 11 }}>…</Text>
-            </Pressable>
-          ))}
-          <Text style={W.museSection}>Available</Text>
-          {available.map((c) => (
-            <Pressable key={c.id} style={[W.museCard, { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', padding: 12 }]}>
-              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
-                <View style={{ width: 36, height: 36, borderRadius: 10, backgroundColor: C.panel2, alignItems: 'center', justifyContent: 'center' }}>
-                  <Text style={{ fontSize: 18 }}>{c.icon}</Text>
+              ))}
+
+              <Text style={W.museSection}>Available</Text>
+              {available.length ? available.map((p) => (
+                <View key={p.id} style={[W.museCard, { padding: 12 }]}>
+                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
+                    <View style={{ width: 36, height: 36, borderRadius: 10, backgroundColor: C.panel2, alignItems: 'center', justifyContent: 'center' }}>
+                      <Text style={{ fontSize: 18 }}>{connectorIcon(p)}</Text>
+                    </View>
+                    <View style={{ flex: 1 }}>
+                      <Text style={{ color: C.text, fontWeight: '600', fontSize: 14 }} numberOfLines={1}>{p.name || p.id}</Text>
+                      {!!p.description && <Text style={{ color: C.muted, fontSize: 12, marginTop: 2 }} numberOfLines={2}>{p.description}</Text>}
+                    </View>
+                    {pill(busy === p.id ? '…' : (p.oauth ? 'Sign in' : 'Connect'), C.ok, () => doConnect(p), !!busy)}
+                  </View>
                 </View>
-                <Text style={{ color: C.text, fontWeight: '600', fontSize: 14 }}>{c.name}</Text>
-              </View>
-              <Pressable style={{ backgroundColor: '#f0f0ef', borderRadius: 10, paddingHorizontal: 12, paddingVertical: 6 }}>
-                <Text style={{ color: C.ok, fontWeight: '800', fontSize: 12 }}>Connect</Text>
+              )) : (
+                <Text style={{ color: C.muted, fontSize: 13, marginHorizontal: 16 }}>No other connectors yet.</Text>
+              )}
+
+              <Text style={[W.museSection, { marginTop: 18 }]}>MCP servers</Text>
+              {mcps.map((s) => (
+                <View key={s.id} style={[W.museCard, { padding: 12 }]}>
+                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
+                    <View style={{ width: 10, height: 10, borderRadius: 5, backgroundColor: mcpDot(s.status) }} />
+                    <View style={{ flex: 1 }}>
+                      <Text style={{ color: C.text, fontWeight: '600', fontSize: 14 }} numberOfLines={1}>{s.name}</Text>
+                      <Text style={{ color: C.muted, fontSize: 12, marginTop: 2 }} numberOfLines={1}>
+                        {s.transport} · {s.status}{s.tool_count ? ' · ' + s.tool_count + ' tools' : ''}{s.error ? ' · ' + s.error : ''}
+                      </Text>
+                    </View>
+                    <View style={{ flexDirection: 'row', gap: 8 }}>
+                      {pill('Restart', C.text, () => mcpRestartOne(s), false)}
+                      {pill('Delete', C.bad, () => mcpDeleteOne(s), false)}
+                    </View>
+                  </View>
+                </View>
+              ))}
+              <Pressable onPress={() => setMcpAdd(true)} style={[W.museCard, { padding: 14, alignItems: 'center' }]}>
+                <Text style={{ color: C.text, fontWeight: '800', fontSize: 13 }}>+ Add MCP server</Text>
               </Pressable>
-            </Pressable>
-          ))}
+            </View>
+          )}
         </View>
       </ScrollView>
+
+      {/* connector fields: API keys, regions, custom OAuth clients */}
+      <Modal visible={!!cfg} transparent animationType="fade" onRequestClose={() => setCfg(null)}>
+        <View style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.35)', alignItems: 'center', justifyContent: 'center', padding: 24 }}>
+          <View style={{ backgroundColor: C.bg, borderRadius: 18, padding: 18, width: '100%' }}>
+            <Text style={{ color: C.text, fontWeight: '800', fontSize: 16 }}>{cfg ? cfg.name : ''} settings</Text>
+            {((cfg && cfg.fields) || []).map((f) => (
+              <View key={f.key} style={{ marginTop: 12 }}>
+                <Text style={{ color: C.muted, fontSize: 12, marginBottom: 4 }}>{f.label || f.key}{f.required ? ' *' : ''}</Text>
+                <TextInput
+                  style={{ borderWidth: 1, borderColor: C.line, borderRadius: 10, paddingHorizontal: 10, paddingVertical: 8, color: C.text, fontSize: 14 }}
+                  placeholder={f.placeholder || ''} placeholderTextColor={C.muted}
+                  value={cfgVals[f.key] || ''} secureTextEntry={!!f.secret}
+                  autoCapitalize="none" autoCorrect={false}
+                  onChangeText={(v) => setCfgVals((prev) => ({ ...prev, [f.key]: v }))}
+                />
+              </View>
+            ))}
+            <View style={{ flexDirection: 'row', justifyContent: 'flex-end', gap: 10, marginTop: 16 }}>
+              <Pressable onPress={() => setCfg(null)} style={{ backgroundColor: C.panel2, borderRadius: 10, paddingHorizontal: 14, paddingVertical: 8 }}>
+                <Text style={{ color: C.text, fontWeight: '700', fontSize: 13 }}>Cancel</Text>
+              </Pressable>
+              <Pressable disabled={cfgBusy} onPress={saveCfg} style={{ backgroundColor: C.solid, borderRadius: 10, paddingHorizontal: 14, paddingVertical: 8 }}>
+                <Text style={{ color: C.onSolid, fontWeight: '700', fontSize: 13 }}>{cfgBusy ? 'Saving…' : 'Save'}</Text>
+              </Pressable>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+      {/* add an MCP server by pasting the standard config JSON */}
+      <Modal visible={mcpAdd} transparent animationType="fade" onRequestClose={() => setMcpAdd(false)}>
+        <View style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.35)', alignItems: 'center', justifyContent: 'center', padding: 24 }}>
+          <View style={{ backgroundColor: C.bg, borderRadius: 18, padding: 18, width: '100%' }}>
+            <Text style={{ color: C.text, fontWeight: '800', fontSize: 16 }}>Add MCP server</Text>
+            <Text style={{ color: C.muted, fontSize: 12, marginTop: 4 }}>Paste the standard config JSON (mcpServers).</Text>
+            <TextInput
+              style={{ borderWidth: 1, borderColor: C.line, borderRadius: 10, paddingHorizontal: 10, paddingVertical: 8, color: C.text, fontSize: 13, marginTop: 12, minHeight: 110, textAlignVertical: 'top' }}
+              placeholder="mcpServers JSON" placeholderTextColor={C.muted} value={mcpJson}
+              multiline autoCapitalize="none" autoCorrect={false}
+              onChangeText={setMcpJson}
+            />
+            <View style={{ flexDirection: 'row', justifyContent: 'flex-end', gap: 10, marginTop: 16 }}>
+              <Pressable onPress={() => setMcpAdd(false)} style={{ backgroundColor: C.panel2, borderRadius: 10, paddingHorizontal: 14, paddingVertical: 8 }}>
+                <Text style={{ color: C.text, fontWeight: '700', fontSize: 13 }}>Cancel</Text>
+              </Pressable>
+              <Pressable disabled={mcpBusy || !mcpJson.trim()} onPress={addMcp} style={{ backgroundColor: C.solid, borderRadius: 10, paddingHorizontal: 14, paddingVertical: 8 }}>
+                <Text style={{ color: C.onSolid, fontWeight: '700', fontSize: 13 }}>{mcpBusy ? 'Adding…' : 'Add'}</Text>
+              </Pressable>
+            </View>
+          </View>
+        </View>
+      </Modal>
     </View>
   );
 }
