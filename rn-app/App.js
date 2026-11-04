@@ -34,7 +34,7 @@ class ErrorBoundary extends React.Component {
     if (this.state.err) {
       return (
         <View style={{ flex: 1, backgroundColor: C.bg, alignItems: 'center', justifyContent: 'center', padding: 26, gap: 10 }}>
-          <Text style={{ fontSize: 42 }}>🛠</Text>
+          <Text style={{ fontSize: 42 }}>Tools</Text>
           <Text style={{ color: C.text, fontSize: 19, fontWeight: '800' }}>That screen hit a snag</Text>
           <Text style={{ color: C.muted, fontSize: 13, textAlign: 'center', lineHeight: 18 }}>
             {String((this.state.err && this.state.err.message) || this.state.err || 'Unknown error')}
@@ -255,8 +255,7 @@ function ZbRoot() {
     if (!tid) return;
     const bot = botId ? (((bots || []).find((b) => b.id === botId)) || { id: botId, name: title || 'Bot' }) : { name: title || 'Group chat' };
     setChat({ bot, threadId: tid, threads: [] });
-    setScreenHistory([]);
-    setScreen('chat');
+    pushScreen('chat');
   };
   // Start a brand-new chat with a Bot: create the thread server-side, then
   // point the chat screen at it with a fresh threads list.
@@ -363,7 +362,7 @@ function ZbRoot() {
         onSwitch={(tid) => setChat(c => ({ ...c, threadId: tid }))}
         onNewChat={() => newChatFor(chat.bot)}
         onThreadsRefresh={refreshThreads}
-        onBack={() => { setScreenHistory([]); setScreen('bots'); }}
+        onBack={() => { popScreen(); }}
         onEvent={chatHandler}
         onMenu={() => setMenuOpen(true)}
         modalOpenRef={modalOpenRef}
@@ -440,7 +439,7 @@ function ZbRoot() {
       <Shell upd={upd} onUpd={doUpdate} updState={updState}>
         <HomeView bots={bots} busy={busy} apps={apps} onOpen={openBot} onOpenThread={openThreadBy} conn={conn}
           account={email} onAvatar={() => setMenuOpen(true)} onSearch={() => setPaletteOpen(true)}
-          onBack={() => { setScreenHistory([]); setScreen('bots'); }} />
+          onBack={() => { popScreen(); }} />
         {menuBlock}
       </Shell>
     );

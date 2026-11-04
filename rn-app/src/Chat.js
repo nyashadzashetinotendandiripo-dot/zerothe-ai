@@ -13,7 +13,7 @@ import * as Sharing from 'expo-sharing';
 
 // Chat theme: light default, dark toggle (feature 9).
 const C = {
-  light: { BG: '#ffffff', PANEL: '#f2f2f2', BUBBLE: '#e7e7e7', TEXT: '#111111', MUTED: '#666666', LINE: '#cccccc', ACCENT: '#000000' },
+  light: { BG: '#ffffff', PANEL: '#f2f2f2', BUBBLE: '#e7e7e7', TEXT: '#111111', MUTED: '#333333', LINE: '#999999', ACCENT: '#000000' },
   dark:  { BG: '#0a0a0a', PANEL: '#121212', BUBBLE: '#2b2b2b', TEXT: '#ececec', MUTED: '#8f8f8f', LINE: '#1f1f1f', ACCENT: '#ffffff' },
 };
 // Module constants must not reference the component's `theme` state from any
@@ -129,7 +129,7 @@ function ChatBackdrop() {
   );
 }
 
-const TOOL_GLYPH = { running: '•', ok: '✓', error: '✕', denied: '⛔', blocked: '⛔' };
+const TOOL_GLYPH = { running: 'running', ok: 'done', error: 'error', denied: 'denied', blocked: 'blocked' };
 
 // One assistant message can carry several rows (the text plus each tool call), and
 // they share the message id — so identity needs the type and the tool call id.
@@ -712,7 +712,7 @@ function ChatScreen({ thread, threads, botName: propsBotName, onSwitch, onBack, 
     if (!item || typeof item !== 'object') return null;
     if (item.day) return <View style={st.dayWrap}><Text style={st.dayT}>{asText(item.label)}</Text></View>;
     if (item.typing) return (
-      <View style={st.typingWrap}><Text style={st.typingT}>●  ●  ●</Text></View>
+      <View style={st.typingWrap}><Text style={st.typingT}>typing</Text></View>
     );
     if (item.type === 'user') return (
       <View style={st.rowOut}>
@@ -753,13 +753,14 @@ function ChatScreen({ thread, threads, botName: propsBotName, onSwitch, onBack, 
         } catch {}
       }
       // Keep original aiBody + markdown rendering for normal messages
-      <View style={[st.answer, { backgroundColor: BUBBLE, borderRadius: 14, borderTopLeftRadius: 14, borderTopRightRadius: 4, borderBottomLeftRadius: 14, paddingHorizontal: 12, paddingVertical: 10, maxWidth: '92%' }]}>
-        {aiBody(asText(item.text), (t) => md(plainText(t), st.answerT), (r) => { setText(r); })}
-        {(item.files || []).length ? (
-          <View style={{ marginTop: 6 }}>
-            {(item.files || []).map((f, i) => <FileRow key={i} f={f} />)}
-          </View>
-        ) : null}
+      <Pressable onLongPress={() => item.id && setPick(item)} delayLongPress={350} style={st.rowIn}>
+        <View style={[st.answer, { backgroundColor: BUBBLE, borderRadius: 14, borderTopLeftRadius: 14, borderTopRightRadius: 4, borderBottomLeftRadius: 14, paddingHorizontal: 12, paddingVertical: 10, maxWidth: '92%' }]}>
+          {aiBody(asText(item.text), (t) => md(plainText(t), st.answerT), (r) => { setText(r); })}
+          {(item.files || []).length ? (
+            <View style={{ marginTop: 6 }}>
+              {(item.files || []).map((f, i) => <FileRow key={i} f={f} />)}
+            </View>
+          ) : null}
         </View>
         <MsgFoot it={item} time={fmtT(item)} />
       </Pressable>
@@ -769,7 +770,7 @@ function ChatScreen({ thread, threads, botName: propsBotName, onSwitch, onBack, 
           <View style={{ backgroundColor: PANEL, borderRadius: 12, padding: 10, marginTop: 6, borderWidth: 1, borderColor: LINE }}>
             <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
               <Text style={{ color: TEXT, fontWeight: '600' }}>Quick actions</Text>
-              <Pressable onPress={() => setQuickActions(null)} style={st.closeBtn}><Text style={{ color: MUTED }}>✕</Text></Pressable>
+              <Pressable onPress={() => setQuickActions(null)} style={st.closeBtn}><Text style={{ color: MUTED }}>Close</Text></Pressable>
             </View>
             <View style={{ padding: 6, borderRadius: 8, backgroundColor: '#f0f5ff' }}>
               <Pressable onPress={() => {
@@ -779,13 +780,13 @@ function ChatScreen({ thread, threads, botName: propsBotName, onSwitch, onBack, 
                 Alert.alert('Copied', 'Message text copied to clipboard');
                 setQuickActions(null);
               }}>
-                <Text style={{ color: TEXT, fontSize: 13 }}>📋 Copy text</Text>
+                <Text style={{ color: TEXT, fontSize: 13 }}>Copy text</Text>
               </Pressable>
               <Pressable onPress={() => Alert.alert('Summarize', 'Summarization not yet implemented')}>
-                <Text style={{ color: TEXT, fontSize: 13 }}>📊 Summarize</Text>
+                <Text style={{ color: TEXT, fontSize: 13 }}>Summarize</Text>
               </Pressable>
               <Pressable onPress={() => Alert.alert('Regenerate', 'Regeneration not yet implemented')}>
-                <Text style={{ color: TEXT, fontSize: 13 }}>🔄 Regenerate</Text>
+                <Text style={{ color: TEXT, fontSize: 13 }}>Regenerate</Text>
               </Pressable>
             </View>
           </View>
@@ -882,19 +883,18 @@ function ChatScreen({ thread, threads, botName: propsBotName, onSwitch, onBack, 
       {offlineBanner}
       {/* WhatsApp-style top bar: menu · name/status (tap for chat history) */}
       <View style={[st.header, { paddingTop: (ins?.top || 0) + 6 }]}>
-        <Pressable onPress={onMenu} hitSlop={10} style={st.hBtn}><Text style={st.hIcon}>☰</Text></Pressable>
+        <Pressable onPress={onMenu} hitSlop={10} style={st.hBtn}><Text style={st.hIcon}>Menu</Text></Pressable>
         <Pressable onPress={() => Alert.alert('Delete conversation?', 'This permanently deletes this chat and all its messages.', [
           { text: 'Cancel', style: 'cancel' },
           { text: 'Delete', style: 'destructive', onPress: async () => {
             try { 
               await api('/api/threads/' + thread.id, { method: 'DELETE' }); 
-              // Stay on the same bot: switch to its main thread instead of going back
               const mainThread = (threads || []).find((t) => t.main);
               if (mainThread) onSwitch(mainThread.id);
               else onBack();
             } catch (e) { Alert.alert('Could not delete', String(e.message || e)); }
           } },
-        ])} hitSlop={10} style={st.hBtn}><Text style={st.hIcon}>🗑</Text></Pressable>
+        ])} hitSlop={10} style={st.hBtn}><Text style={st.hIcon}>Delete</Text></Pressable>
         <View style={st.headerCenter}>
           <Pressable style={{ flex: 1 }} onPress={() => { setHistQ(''); setHistOpen(true); }}>
             <Text style={st.htitle} numberOfLines={1}>{botName}</Text>
@@ -904,11 +904,11 @@ function ChatScreen({ thread, threads, botName: propsBotName, onSwitch, onBack, 
           </Pressable>
           {threads && threads.length > 1 && (
             <Pressable onPress={() => { setHistQ(''); setHistOpen(true); }} hitSlop={8} style={st.switchBtn}>
-              <Text style={st.switchBtnT}>▾</Text>
+              <Text style={st.switchBtnT}>v</Text>
             </Pressable>
           )}
           <Pressable onPress={() => setTheme(theme === 'light' ? 'dark' : 'light')} hitSlop={8} style={[st.themeBtn, theme === 'dark' && { backgroundColor: '#e7e7e7' }]}>
-            <Text style={st.themeBtnT}>{theme === 'light' ? '🌙' : '☀️'}</Text>
+            <Text style={st.themeBtnT}>{theme === 'light' ? 'Dark' : 'Light'}</Text>
           </Pressable>
           {notifCount > 0 && (
             <View style={st.notifBadge}>
@@ -931,12 +931,12 @@ function ChatScreen({ thread, threads, botName: propsBotName, onSwitch, onBack, 
             autoFocus
           />
           <Pressable onPress={() => { setSearchOpen(false); setChatSearch(''); }} style={st.searchClear}>
-            <Text style={st.searchClearT}>✕</Text>
+            <Text style={st.searchClearT}>Close</Text>
           </Pressable>
         </View>
       ) : (
         <Pressable onPress={() => { setSearchOpen(!searchOpen); if (searchOpen) setChatSearch(''); }} hitSlop={8} style={st.searchBtn}>
-          <Text style={st.searchBtnT}>🔍</Text>
+          <Text style={st.searchBtnT}>Search</Text>
         </Pressable>
       )}
 
@@ -948,7 +948,7 @@ function ChatScreen({ thread, threads, botName: propsBotName, onSwitch, onBack, 
 
       {!!busy && busy.status !== 'waiting_approval' && lastAct && (
         <Pressable style={st.live} onPress={openLive}>
-          <Text style={st.liveLbl} numberOfLines={1}>🖥 {lastAct.label || 'Working on the screen'}  ·  tap to watch live</Text>
+          <Text style={st.liveLbl} numberOfLines={1}>{lastAct.label || 'Working on the screen'}  ·  tap to watch live</Text>
           {!!shotUri && <Image style={st.liveImgSm} source={{ uri: shotUri }} resizeMode="contain" />}
         </Pressable>
       )}
@@ -995,11 +995,11 @@ function ChatScreen({ thread, threads, botName: propsBotName, onSwitch, onBack, 
                 <View style={st.appBtns}>
                   {!isAsk && (
                     <>
-                      <Pressable onPress={() => decide(a, true, true)} style={st.appBtn}><Text style={st.appOk}>✅ Always</Text></Pressable>
+                      <Pressable onPress={() => decide(a, true, true)} style={st.appBtn}><Text style={st.appOk}>Always</Text></Pressable>
                       <Pressable onPress={() => decide(a, true, false)} style={st.appBtn}><Text style={st.appOk}>Approve</Text></Pressable>
                       {(a.category === 'takeover' || a.category === 'login') && (
                         <Pressable onPress={() => { decide(a, true, false); startBrowserScreen(); }} style={[st.appBtn, { backgroundColor: '#005a9e', borderColor: '#007acc' }]}>
-                          <Text style={st.appOk}>🌐 Open browser</Text>
+                          <Text style={st.appOk}>Open browser</Text>
                         </Pressable>
                       )}
                     </>
@@ -1018,7 +1018,7 @@ function ChatScreen({ thread, threads, botName: propsBotName, onSwitch, onBack, 
             <Text style={st.replyWho}>{replyTo.type === 'user' ? 'You' : (asText(replyTo.name) || 'Bot')}</Text>
             <Text numberOfLines={1} style={st.replyTxt}>{asText(uiPlain(replyTo.text || '') || replyTo.text).slice(0, 80)}</Text>
           </View>
-          <Pressable onPress={() => setReplyTo(null)} hitSlop={8}><Text style={st.replyX}>✕</Text></Pressable>
+          <Pressable onPress={() => setReplyTo(null)} hitSlop={8}><Text style={st.replyX}>Close</Text></Pressable>
         </View>
       )}
 
@@ -1033,7 +1033,7 @@ function ChatScreen({ thread, threads, botName: propsBotName, onSwitch, onBack, 
                   {isImg ? (
                     <Image source={{ uri: 'data:' + a.type + ';base64,' + a.data }} style={st.attachThumb} />
                   ) : null}
-                  <Text numberOfLines={1} style={st.attachChipT}>📎 {asText(a.name).slice(0, 18)} ✕</Text>
+                  <Text numberOfLines={1} style={st.attachChipT}>Attach {asText(a.name).slice(0, 18)} Close</Text>
                 </Pressable>
               );
             })}
@@ -1042,20 +1042,20 @@ function ChatScreen({ thread, threads, botName: propsBotName, onSwitch, onBack, 
         {/* Feature 12: scheduled send chip */}
         {schedTime && (
           <View style={st.schedChip}>
-            <Text style={st.schedChipT}>⏰ Sends at {new Date(schedTime).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'})}</Text>
+            <Text style={st.schedChipT}>Sends at {new Date(schedTime).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'})}</Text>
             <Pressable onPress={() => setSchedTime(null)} style={st.schedClear}><Text style={st.schedClearT}>✕</Text></Pressable>
           </View>
         )}
         <View style={st.composer}>
           <Pressable onPress={() => setAttachOpen(true)} hitSlop={6} style={[st.uploadBtn, attachments.length > 0 && { backgroundColor: '#00a884' }]}>
-            <Text style={st.uploadT}>📎{attachments.length > 0 ? ' ' + attachments.length : ''}</Text>
+            <Text style={st.uploadT}>Attach{attachments.length > 0 ? ' ' + attachments.length : ''}</Text>
           </Pressable>
           <Pressable onPress={() => {
             const mins = prompt('Send in how many minutes? (e.g. 60)');
             const m = parseInt(mins || '0', 10);
             if (m && m > 0) setSchedTime(Date.now() + m * 60000);
           }} hitSlop={6} style={[st.uploadBtn, { backgroundColor: '#fff3cd', borderColor: '#e0a53a' }]}>
-            <Text style={st.uploadT}>⏰</Text>
+            <Text style={st.uploadT}>Later</Text>
           </Pressable>
           <TextInput
             style={st.input}
@@ -1070,7 +1070,7 @@ function ChatScreen({ thread, threads, botName: propsBotName, onSwitch, onBack, 
           />
           <Pressable onPress={send} disabled={!text.trim() && !attachments.length} hitSlop={6}
             style={[st.sendBtn, !text.trim() && !attachments.length && st.sendBtnOff]}>
-            <Text style={[st.sendT, !text.trim() && !attachments.length && { color: MUTED }]}>➤</Text>
+            <Text style={[st.sendT, !text.trim() && !attachments.length && { color: MUTED }]}>Send</Text>
           </Pressable>
         </View>
       </View>
@@ -1081,10 +1081,10 @@ function ChatScreen({ thread, threads, botName: propsBotName, onSwitch, onBack, 
             <View style={st.grabber} />
             <Text style={st.sheetT}>Add to this chat</Text>
             <Pressable onPress={() => { setAttachOpen(false); pickImage(); }} style={st.sheetBtn}>
-              <Text style={st.sheetBtnT}>🖼  Photos & videos</Text>
+              <Text style={st.sheetBtnT}>Photos & videos</Text>
             </Pressable>
             <Pressable onPress={() => { setAttachOpen(false); pickFile(); }} style={st.sheetBtn}>
-              <Text style={st.sheetBtnT}>📄  Files (PDF, docs, zip…)</Text>
+              <Text style={st.sheetBtnT}>Files (PDF, docs, zip…)</Text>
             </Pressable>
             <Pressable onPress={() => setAttachOpen(false)} style={[st.sheetBtn, { backgroundColor: 'transparent' }]}>
               <Text style={[st.sheetBtnT, { color: MUTED }]}>Cancel</Text>
@@ -1100,18 +1100,18 @@ function ChatScreen({ thread, threads, botName: propsBotName, onSwitch, onBack, 
             <Text style={st.sheetT}>{pick.type === 'user' ? 'Your message' : (asText(pick.name) || 'Bot')}</Text>
             <Text numberOfLines={3} style={st.sheetSub}>{asText(pick.text).slice(0, 140)}</Text>
             <View style={{ flexDirection: 'row', gap: 14, marginTop: 12, flexWrap: 'wrap' }}>
-              {REACTS.map((e) => (
-                <Pressable key={e} onPress={() => { react(pick.id, e); setPick(null); }} hitSlop={4}>
-                  <Text style={{ fontSize: 26 }}>{e}</Text>
+              {REACTS.map((e, i) => (
+                <Pressable key={i} onPress={() => { react(pick.id, e); setPick(null); }} hitSlop={4}>
+                  <Text style={{ fontSize: 26 }}>{e === '👍' ? 'Like' : e === '❤️' ? 'Love' : e === '🎉' ? 'Celebrate' : e === '😄' ? 'Laugh' : e === '🚀' ? 'Rocket' : 'Look'}</Text>
                 </Pressable>
               ))}
             </View>
             <View style={{ marginTop: 10 }}>
-              <Pressable onPress={() => { setReplyTo(pick); setPick(null); }} style={st.sheetBtn}><Text style={st.sheetBtnT}>↩  Reply</Text></Pressable>
+              <Pressable onPress={() => { setReplyTo(pick); setPick(null); }} style={st.sheetBtn}><Text style={st.sheetBtnT}>Reply</Text></Pressable>
               {pick.type === 'user' && (
                 <>
-                  <Pressable onPress={() => { setText(asText(pick.text)); setPick(null); }} style={st.sheetBtn}><Text style={st.sheetBtnT}>✏  Edit & resend</Text></Pressable>
-                  <Pressable onPress={() => { Clipboard.setString(asText(pick.text)); setPick(null); }} style={st.sheetBtn}><Text style={st.sheetBtnT}>📋 Copy text</Text></Pressable>
+                  <Pressable onPress={() => { setText(asText(pick.text)); setPick(null); }} style={st.sheetBtn}><Text style={st.sheetBtnT}>Edit & resend</Text></Pressable>
+                  <Pressable onPress={() => { Clipboard.setString(asText(pick.text)); setPick(null); }} style={st.sheetBtn}><Text style={st.sheetBtnT}>Copy text</Text></Pressable>
                 </>
               )}
             </View>
@@ -1131,11 +1131,11 @@ function ChatScreen({ thread, threads, botName: propsBotName, onSwitch, onBack, 
             <ScrollView style={{ maxHeight: 320 }} nestedScrollEnabled>
               {(threads || []).filter((t) => !histQ.trim() || String(t.title || '').toLowerCase().includes(histQ.trim().toLowerCase())).map((t) => (
                 <Pressable key={t.id} onPress={() => { onSwitch(t.id); setHistOpen(false); }} style={[st.histRow, t.id === thread.id && { backgroundColor: PANEL }]}>
-                  <Text style={{ fontSize: 15 }}>{t.main ? '🏠' : '💬'}</Text>
+                  <Text style={{ fontSize: 15 }}>{t.main ? 'Home' : 'Chat'}</Text>
                   <Text style={st.histT} numberOfLines={1}>{t.main ? 'Main' : (asText(t.title) || 'Chat')}</Text>
                   {!t.main && (
                     <Pressable hitSlop={8} onPress={() => startRename(t)}>
-                      <Text style={{ color: MUTED, fontSize: 14 }}>✎</Text>
+                      <Text style={{ color: MUTED, fontSize: 14 }}>Rename</Text>
                     </Pressable>
                   )}
                 </Pressable>
@@ -1151,7 +1151,7 @@ function ChatScreen({ thread, threads, botName: propsBotName, onSwitch, onBack, 
               </View>
             ) : null}
             <Pressable onPress={exportChat} disabled={expBusy} style={st.sheetBtn}>
-              <Text style={st.sheetBtnT}>{expBusy ? 'Exporting…' : '⇩ Export chat (.md)'}</Text>
+              <Text style={st.sheetBtnT}>{expBusy ? 'Exporting…' : 'Export chat (.md)'}</Text>
             </Pressable>
             <Pressable onPress={() => setHistOpen(false)} style={st.sheetBtn}><Text style={st.sheetBtnT}>Close</Text></Pressable>
           </View>
@@ -1167,15 +1167,15 @@ function ChatScreen({ thread, threads, botName: propsBotName, onSwitch, onBack, 
               <Text style={st.fullBtnT}>{zoom === 1 ? 'Fit' : Math.round(zoom * 100) + '%'}</Text>
             </Pressable>
             {!!liveInteractive ? (
-              <Pressable onPress={closeLive} hitSlop={8} style={st.fullBtn}><Text style={st.fullBtnT}>✕ End</Text></Pressable>
+              <Pressable onPress={closeLive} hitSlop={8} style={st.fullBtn}><Text style={st.fullBtnT}>End</Text></Pressable>
             ) : (
               <Pressable onPress={openInteractive} hitSlop={8} disabled={liveBusy}
                 style={[st.fullBtn, { backgroundColor: '#00a884', borderColor: '#00a884' }]}>
-                <Text style={[st.fullBtnT, { color: '#fff' }]}>{liveBusy ? '…' : 'Control'}</Text>
+                <Text style={[st.fullBtnT, { color: '#fff' }]}>{liveBusy ? 'Sending' : 'Control'}</Text>
               </Pressable>
             )}
-            <Pressable onPress={stop} hitSlop={8}><Text style={st.stop}>■ Stop</Text></Pressable>
-            <Pressable onPress={closeLive} hitSlop={8}><Text style={st.fullX}>✕</Text></Pressable>
+            <Pressable onPress={stop} hitSlop={8}><Text style={st.stop}>Stop</Text></Pressable>
+            <Pressable onPress={closeLive} hitSlop={8}><Text style={st.fullX}>Close</Text></Pressable>
           </View>
           {!!liveErr ? (
             <View style={st.fullErr}>
@@ -1246,7 +1246,7 @@ function ChatScreen({ thread, threads, botName: propsBotName, onSwitch, onBack, 
             <Pressable onPress={stopBrowserScreen} hitSlop={8} style={[st.fullBtn, { backgroundColor: '#00a884', borderColor: '#00a884' }]}>
               <Text style={[st.fullBtnT, { color: '#fff' }]}>Hand back to Bot</Text>
             </Pressable>
-            <Pressable onPress={stopBrowserScreen} hitSlop={8}><Text style={st.fullX}>✕</Text></Pressable>
+            <Pressable onPress={stopBrowserScreen} hitSlop={8}><Text style={st.fullX}>Close</Text></Pressable>
           </View>
           <View style={{ flex: 1, backgroundColor: '#000' }}>
             {!browserShot ? (
@@ -1266,7 +1266,7 @@ function ChatScreen({ thread, threads, botName: propsBotName, onSwitch, onBack, 
             )}
           </View>
           <View style={[st.typeBar, { paddingBottom: 8 + (ins?.bottom || 0) }]}>
-            <Text style={st.fullErrS}>Tap to click inside the browser · ✕ to hand back to the Bot</Text>
+            <Text style={st.fullErrS}>Tap to click inside the browser · Close to hand back to the Bot</Text>
           </View>
         </View>
       )}
@@ -1333,11 +1333,11 @@ function FilePreviewBody({ f }) {
         {pages > 1 ? (
           <View style={st.fpPager}>
             <Pressable disabled={page <= 1} onPress={() => setPage(page - 1)} style={[st.fpBtn, page <= 1 && { opacity: 0.3 }]}>
-              <Text style={st.fpBtnT}>‹</Text>
+              <Text style={st.fpBtnT}>Prev</Text>
             </Pressable>
             <Text style={st.fpPageLbl}>{page} / {pages}</Text>
             <Pressable disabled={page >= pages} onPress={() => setPage(page + 1)} style={[st.fpBtn, page >= pages && { opacity: 0.3 }]}>
-              <Text style={st.fpBtnT}>›</Text>
+              <Text style={st.fpBtnT}>Next</Text>
             </Pressable>
           </View>
         ) : null}
@@ -1361,7 +1361,7 @@ function FilePreviewBody({ f }) {
   }
   return (
     <View style={st.filePrevDoc}>
-      <Text style={{ fontSize: 24 }}>📦</Text>
+      <Text style={{ fontSize: 24 }}>File</Text>
       <Text style={st.filePrevName}>{f.name}</Text>
       <Text style={st.filePrevMime}>{f.mime}</Text>
     </View>

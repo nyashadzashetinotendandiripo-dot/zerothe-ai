@@ -262,32 +262,9 @@ export function WebTopBar({ title, showBack, onBack, conn, showSearch, onSearch,
 
 // ---------------------------------------------------------------- tab sheet
 export const TABS = [
-  ['profile', 'Muse'],
-  ['bots', 'Bots'],
   ['home', 'Home'],
+  ['bots', 'Bots'],
   ['inbox', 'Inbox'],
-  ['marketplace', 'Marketplace'],
-  ['computer', 'Computer'],
-  ['files', 'Files'],
-  ['skills', 'Skills'],
-  ['routines', 'Routines'],
-  ['plugins', 'Plugins'],
-  ['usage', 'Usage'],
-  ['actionlog', 'Action log'],
-  ['timeline', 'Timeline'],
-  ['plan', 'Plan'],
-  ['admin', 'Admin'],
-  ['approvals', 'Approvals'],
-  ['connectors', 'Connectors'],
-  ['ideas', 'Ideas'],
-  ['goals', 'Goals'],
-  ['finance', 'Spending'],
-  ['email', 'Email'],
-  ['search', 'Search'],
-  ['image', 'Images'],
-  ['code', 'Code'],
-  ['collab', 'Multi-Agent'],
-  ['android', 'Android Box'],
   ['set', 'Settings'],
 ];
 export function TabSheet({ open, tab, inboxBadge, onGo, onClose, initial, tabs }) {
@@ -308,7 +285,6 @@ export function TabSheet({ open, tab, inboxBadge, onGo, onClose, initial, tabs }
                   <Text style={[W.tabLbl, on && W.tabLblOn]}>{lbl}</Text>
                   <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
                     {k === 'inbox' && !!inboxBadge && <Text style={W.badge} collapsable={false}>{String(inboxBadge)}</Text>}
-                    {on && <Text style={W.tabTick}>✓</Text>}
                   </View>
                 </Pressable>
               );
