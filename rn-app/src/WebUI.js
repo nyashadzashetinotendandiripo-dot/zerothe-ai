@@ -495,8 +495,8 @@ export function HomeView({ bots, busy, apps, onOpen, onOpenThread, conn, account
           <Text style={W.teamJob} numberOfLines={1}>{b.job || 'No job yet'}</Text>
         </View>
         <View style={{ flexDirection: 'row', gap: 6, marginTop: 4, fontSize: 10 }}>
-          <View style={W.statChip}>{stepsDone !== undefined ? stepsDone : '—'}</Text><Text style={C.muted}>steps</Text>
-          <View style={W.statChip}>{hasRecentTurns ? '▸' : '●'}</Text><Text style={C.muted}>working</Text>
+          <View style={W.statChip}><Text>{stepsDone !== undefined ? stepsDone : '—'}</Text><Text style={C.muted}>steps</Text></View>
+          <View style={W.statChip}><Text>{hasRecentTurns ? 'active' : 'idle'}</Text><Text style={C.muted}>status</Text></View>
         </View>
         {s.chip ? <Text style={[W.chip, { color: s.chip[1], backgroundColor: s.chip[0].backgroundColor, fontSize: 10 }]}>{s.label}</Text> : null}
       </Pressable>
