@@ -796,7 +796,6 @@ function ChatScreen({ thread, threads, botName: propsBotName, onSwitch, onBack, 
         // Hide menu when selecting a different message
         setQuickActions(null)
       )}
-    </Pressable>
     );
     if (item.type === 'tool') {
       // Compact tool row so the phone chat actually shows "working" per bot: what the bot
