@@ -265,6 +265,12 @@ export const TABS = [
   ['home', 'Home'],
   ['bots', 'Bots'],
   ['inbox', 'Inbox'],
+  ['computer', 'Computer'],
+  ['skills', 'Skills'],
+  ['routines', 'Routines'],
+  ['marketplace', 'Marketplace'],
+  ['plugins', 'Plugins'],
+  ['usage', 'Usage'],
   ['set', 'Settings'],
 ];
 export function TabSheet({ open, tab, inboxBadge, onGo, onClose, initial, tabs }) {
