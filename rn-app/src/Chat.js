@@ -796,7 +796,7 @@ function ChatScreen({ thread, threads, botName: propsBotName, onSwitch, onBack, 
         // Hide menu when selecting a different message
         setQuickActions(null)
       )}
-    );
+    }
     if (item.type === 'tool') {
       // Compact tool row so the phone chat actually shows "working" per bot: what the bot
       // is doing right now, its status, and how long it took — Claude-style tool evidence.
