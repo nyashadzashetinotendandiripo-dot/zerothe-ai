@@ -56,7 +56,7 @@ class ErrorBoundary extends React.Component {
 function ZbRoot() {
   const [ready, setReady] = useState(false);
   const [signed, setSigned] = useState(false);
-  const [screen, setScreen] = useState('profile');            // profile home chat inbox marketplace computer files skills routines plugins usage actionlog set
+  const [screen, setScreen] = useState('home');            // home chat inbox marketplace computer files skills routines plugins usage actionlog set
   const [screenHistory, setScreenHistory] = useState([]);  // back-stack for hardware back button
   const [menuOpen, setMenuOpen] = useState(false);         // bottom tab sheet (web #tabs)
   const modalOpenRef = useRef(false);                      // any screen can set this when a sheet/modal is open
@@ -73,7 +73,7 @@ function ZbRoot() {
         setScreen(prev);
         return true;
       }
-      if (screen !== 'profile') { setScreenHistory([]); setScreen('profile'); return true; }
+      if (screen !== 'home') { setScreenHistory([]); setScreen('home'); return true; }
       return false;  // exit the app
     });
     return () => sub.remove();
@@ -493,12 +493,6 @@ function ZbRoot() {
           setMeInfo((prev) => prev ? { ...prev, plan: p } : null);
           refresh();
         }} />
-        {menuBlock}
-      </Shell>
-    );
-    case 'profile': return (
-      <Shell upd={upd} onUpd={doUpdate} updState={updState}>
-        <MuseProfileView conn={conn} account={email} onAvatar={() => setMenuOpen(true)} />
         {menuBlock}
       </Shell>
     );
