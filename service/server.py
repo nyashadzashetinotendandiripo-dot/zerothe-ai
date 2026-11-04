@@ -2325,6 +2325,37 @@ google.accounts.id.renderButton(document.getElementById('gbtn'),
         data, mime, name = eng.actions.export(bot_id, format)
         return Response(data, media_type=mime, headers={"Content-Disposition": f'attachment; filename="{name}"'})
 
+    # ----------------------------------------------------------- bot activity timeline
+    @app.get("/api/bots/{bot_id}/timeline", dependencies=[api])
+    def bot_timeline(request: Request, bot_id: str, limit: int = 100) -> dict:
+        """Per-bot activity timeline: turns with status, trigger, steps, duration."""
+        user = current_user(request)
+        b = eng.bots.get(bot_id, owner=user)
+        if not b:
+            raise HTTPException(404, "No such Bot.")
+        rows = eng.db.query(
+            "SELECT id, thread_id, trigger, status, started_at, ended_at, steps, error FROM turns "
+            "WHERE bot_id=? ORDER BY started_at DESC LIMIT ?",
+            (bot_id, limit),
+        )
+        out = []
+        for r in rows:
+            dur = None
+            if r.get("started_at") and r.get("ended_at"):
+                dur = round((r["ended_at"] - r["started_at"]) * 1000)
+            out.append({
+                "id": r["id"],
+                "thread_id": r["thread_id"],
+                "trigger": r.get("trigger") or "",
+                "status": r.get("status") or "",
+                "started_at": r.get("started_at") or 0,
+                "ended_at": r.get("ended_at") or 0,
+                "steps": r.get("steps") or 0,
+                "duration_ms": dur,
+                "error": r.get("error") or "",
+            })
+        return {"bot": b, "timeline": out}
+
     # --------------------------------------------------------- instabox host
     # The machine this service runs on: live CPU/RAM, console log, OOM kills,
     # ports, the desktop and the platform's own state. The phone gets one
@@ -2762,7 +2793,7 @@ google.accounts.id.renderButton(document.getElementById('gbtn'),
         f = (web / name).resolve()
         if not name or not f.is_file() or not f.is_relative_to(web.resolve()):
             raise HTTPException(404)
-        return FileResponse(f, headers={"Cache-Control": "no-cache"})
+        return FileResponse(f, headers={"Cache-Control": "public, max-age=3600, must-revalidate"})
 
     # While any Bot turn is running, renew the activity lease so a long answer
     # or a slow tool is never cut off by the platform's idle pause.

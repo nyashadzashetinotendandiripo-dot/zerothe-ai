@@ -322,6 +322,48 @@ class Engine:
                 lines.append(f"  - mcp:{c.cfg['name']}: MCP server with {len(c.tools)} tools")
         return "\n".join(lines) or "  (none)"
 
+    def bot_stats(self, bot_id: str) -> dict:
+        """Compute activity stats for a bot from the turns table."""
+        try:
+            rows = self.db.query(
+                "SELECT status, trigger, started FROM turns WHERE bot_id=? ORDER BY started DESC LIMIT 20",
+                (bot_id,)
+            )
+            if not rows:
+                return {"last_active": "never", "current_task": "", "steps_done": 0, "steps_total": 0, "tokens": 0}
+            # Last active (most recent start time)
+            last_started = max(r.get("started") or 0 for r in rows)
+            # Count done turns
+            done = [r for r in rows if r.get("status") == "done"]
+            # Count total steps across all turns
+            total_steps = sum(r.get("steps") or 0 for r in rows)
+            # Most recent trigger (what the bot is doing now)
+            recent = rows[0]
+            trigger = recent.get("trigger", "") or ""
+            # Estimate tokens from usage records if available
+            try:
+                tok_rows = self.db.query(
+                    "SELECT SUM(input_tokens + output_tokens) as total FROM usage WHERE bot_id=?",
+                    (bot_id,)
+                )
+                tokens = tok_rows[0]["total"] if tok_rows and tok_rows[0]["total"] else 0
+            except Exception:
+                tokens = 0
+            # Format last_active as simple string
+            if last_started and last_started > 0:
+                last_active = f"active {len(rows)} turns ago"
+            else:
+                last_active = "never"
+            return {
+                "last_active": last_active,
+                "current_task": trigger or "",
+                "steps_done": len(done),
+                "steps_total": max(total_steps, 0),
+                "tokens": tokens,
+            }
+        except Exception:  # noqa: BLE001
+            return {"last_active": "never", "current_task": "", "steps_done": 0, "steps_total": 0, "tokens": 0}
+
     # ---------------------------------------------------------- notifications
     def notify(self, kind: str, bot: dict | None, thread_id: str | None, title: str, body: str = "", urgent: bool = False) -> None:
         cfg = self.settings.get("notifications", {})

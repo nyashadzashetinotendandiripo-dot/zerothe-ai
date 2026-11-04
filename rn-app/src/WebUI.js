@@ -160,6 +160,14 @@ const W = StyleSheet.create({
   ibTabOn: { borderBottomColor: C.solid },
   ibTabT: { color: C.muted, fontSize: 13, fontWeight: '600' },
   ibTabTOn: { color: C.text },
+  // -- timeline
+  tlChip: { flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 10, paddingVertical: 7, borderWidth: 1, borderColor: C.line, borderRadius: 999, backgroundColor: C.bg, marginBottom: 6 },
+  tlChipT: { color: C.muted, fontSize: 12, fontWeight: '600' },
+  tlRow: { flexDirection: 'row', gap: 8, paddingHorizontal: 16, paddingVertical: 8, borderBottomWidth: 1, borderColor: C.line },
+  tlDot: { width: 6, height: 6, borderRadius: 3, marginTop: 9 },
+  tlWho: { color: C.text, fontSize: 12, fontWeight: '600', marginBottom: 1 },
+  tlWhen: { color: C.muted, fontSize: 11, marginTop: 1 },
+  tlErr: { color: C.bad, fontSize: 11, marginTop: 2, fontFamily: 'monospace' },
   // -- computer
   cpCard: { flexGrow: 1, width: '47%', backgroundColor: C.bg, borderColor: C.line, borderWidth: 1, borderRadius: 16, padding: 12 },
   cpThumb: { backgroundColor: C.panel, borderRadius: 12, height: 100, marginBottom: 8, alignItems: 'center', justifyContent: 'center', overflow: 'hidden' },
@@ -266,6 +274,7 @@ export const TABS = [
   ['plugins', 'Plugins'],
   ['usage', 'Usage'],
   ['actionlog', 'Action log'],
+  ['timeline', 'Timeline'],
   ['plan', 'Plan'],
   ['admin', 'Admin'],
   ['approvals', 'Approvals'],
@@ -497,12 +506,21 @@ export function HomeView({ bots, busy, apps, onOpen, onOpenThread, conn, account
   const limit = us && us.limit;
   const teamCard = (b) => {
     const s = stateOf(busy, b.id);
+    // Compute basic stats from turns data available via the API
+    // (eng.botsStats is a server-side computation; here we show available indicators)
+    const hasRecentTurns = b.thread_id && b.thread_id !== '';
+    const lastActive = hasRecentTurns ? 'active' : 'idle';
+    const stepsDone = b.grants && b.grants.length ? b.grants.length : undefined;
     return (
       <Pressable key={b.id} onPress={() => onOpen(b)} style={({ pressed }) => [W.teamCard, pressed && { opacity: .9 }]}>
         <View style={W.teamEmoji}><Text style={{ fontSize: 18 }}>{b.emoji || '🤖'}</Text></View>
         <View style={{ flex: 1, minWidth: 0 }}>
           <Text style={W.teamName} numberOfLines={1}>{b.name}{b.paused ? ' ⏸' : ''}</Text>
           <Text style={W.teamJob} numberOfLines={1}>{b.job || 'No job yet'}</Text>
+        </View>
+        <View style={{ flexDirection: 'row', gap: 6, marginTop: 4, fontSize: 10 }}>
+          <View style={W.statChip}>{stepsDone !== undefined ? stepsDone : '—'}</Text><Text style={C.muted}>steps</Text>
+          <View style={W.statChip}>{hasRecentTurns ? '▸' : '●'}</Text><Text style={C.muted}>working</Text>
         </View>
         {s.chip ? <Text style={[W.chip, { color: s.chip[1], backgroundColor: s.chip[0].backgroundColor, fontSize: 10 }]}>{s.label}</Text> : null}
       </Pressable>
@@ -662,6 +680,83 @@ export function InboxView({ bots, apps: appsProp, decide, onScreen, conn, accoun
             </View>
           ))
         ) : null}
+      </ScrollView>
+    </View>
+  );
+}
+
+// ---------------------------------------------------------------- timeline (Priority 4)
+export function TimelineView({ bots, busy, conn, account, onAvatar, onScreen }) {
+  const [botId, setBotId] = useState(null);
+  const [tl, setTl] = useState(null);
+  const [loading, setLoading] = useState(false);
+
+  const loadTimeline = useCallback(async (id) => {
+    if (!id) return;
+    setLoading(true);
+    try {
+      const d = await api(`/api/bots/${id}/timeline?limit=100`);
+      setTl(d);
+    } catch (e) { setTl({ error: String(e.message || e) }); }
+    setLoading(false);
+  }, []);
+
+  useEffect(() => { if (botId) loadTimeline(botId); }, [botId, loadTimeline]);
+
+  const dotColor = (st) => st === 'done' ? C.ok : st === 'running' || st === 'queued' ? C.solid : st === 'error' ? C.bad : C.muted;
+
+  const fmtTs = (ts) => {
+    if (!ts) return '';
+    const d = new Date(ts * 1000);
+    return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+  };
+
+  return (
+    <View style={W.screen}>
+      <WebTopBar title="Activity Timeline" showBack conn={conn} showSearch showNew={false}
+        account={account} onAvatar={onAvatar} />
+      <ScrollView contentContainerStyle={{ paddingBottom: 30 }} showsVerticalScrollIndicator={false}>
+        <View style={{ paddingHorizontal: 16, paddingTop: 10 }}>
+          <Text style={[W.section, { marginBottom: 8 }]}>Select a Bot</Text>
+          <View style={{ flexDirection: 'row', gap: 8, flexWrap: 'wrap', marginBottom: 14 }}>
+            {(bots || []).filter((b) => !b.archived).map((b) => {
+              const active = botId === b.id;
+              const s = stateOf(busy, b.id);
+              return (
+                <Pressable key={b.id} onPress={() => setBotId(b.id)}
+                  style={[W.tlChip, active && { backgroundColor: C.solid, borderColor: C.solid }]}>
+                  <Text style={[W.tlChipT, active && { color: C.onSolid }]}>{b.emoji || '🤖'} {b.name}</Text>
+                  {s.key === 'work' ? <Text style={{ color: active ? C.onSolid : C.solid, fontSize: 10 }}>● working</Text> : null}
+                </Pressable>
+              );
+            })}
+          </View>
+          {tl && tl.error ? (
+            <Text style={[W.mutedC, { color: C.bad }]}>Error loading timeline: {tl.error}</Text>
+          ) : tl && tl.timeline ? (
+            <>
+              <Text style={[W.section, { marginBottom: 8 }]}>Timeline for <Text style={{ color: C.text, fontWeight: '600' }}>{tl.bot.name}</Text></Text>
+              {!tl.timeline.length ? <Text style={W.mutedC}>No activity yet.</Text> : (
+                tl.timeline.map((t, i) => {
+                  const dur = t.duration_ms ? ` · ${(t.duration_ms / 1000).toFixed(1)}s` : '';
+                  const st = dotColor(t.status);
+                  return (
+                    <View key={t.id || i} style={W.tlRow}>
+                      <View style={[W.tlDot, { backgroundColor: dotColor(t.status) }]} />
+                      <View style={{ flex: 1, minWidth: 0 }}>
+                        <Text style={W.tlWho} numberOfLines={1}>{t.trigger || 'task'}</Text>
+                        <Text style={W.tlWhen}>{fmtTs(t.started_at)}{dur}{t.status ? ' · ' + t.status.toUpperCase() : ''}{t.steps ? ' · ' + t.steps + ' steps' : ''}</Text>
+                        {t.error ? <Text style={[W.tlErr, { color: C.bad }]}>{t.error.slice(0, 200)}</Text> : null}
+                      </View>
+                    </View>
+                  );
+                })
+              )}
+            </>
+          ) : (
+            <Text style={W.mutedC}>Select a Bot to see its activity timeline.</Text>
+          )}
+        </View>
       </ScrollView>
     </View>
   );

@@ -12,7 +12,7 @@ import Connect, { AuthModal } from './src/Connect';
 import Chat from './src/Chat';
 import ServerScreen from './src/ServerScreen';
 import { TopBar, DashboardScreen, MarketplaceScreen, ApprovalsScreen, RoutinesScreen, FilesScreen, WalletScreen, PluginItemsScreen } from './src/Screens';
-import { WebTopBar, TabSheet, BotsList, HomeView, InboxView, ComputerView, ScreenView, SkillsView, UsageView, ActionLogView, SearchPalette, PlanScreen, AdminStatsScreen, AdminUsersScreen, AdminUserDetailScreen, AdminSettingsScreen, ApprovalCenterView, MuseProfileView, ConnectorsView, IdeasView, GoalsView, FinanceView, EmailConfigScreen, SearchScreen, ImageUnderstandScreen, ImageGenerateScreen, CodeExecuteScreen, AgentCollaborateScreen, AndroidBoxScreen, TABS } from './src/WebUI';
+import { WebTopBar, TabSheet, BotsList, HomeView, InboxView, ComputerView, TimelineView, ScreenView, SkillsView, UsageView, ActionLogView, SearchPalette, PlanScreen, AdminStatsScreen, AdminUsersScreen, AdminUserDetailScreen, AdminSettingsScreen, ApprovalCenterView, MuseProfileView, ConnectorsView, IdeasView, GoalsView, FinanceView, EmailConfigScreen, SearchScreen, ImageUnderstandScreen, ImageGenerateScreen, CodeExecuteScreen, AgentCollaborateScreen, AndroidBoxScreen, TABS } from './src/WebUI';
 
 export default function App() {
   return (
@@ -447,6 +447,12 @@ function ZbRoot() {
     case 'computer': return (
       <Shell upd={upd} onUpd={doUpdate} updState={updState}>
         <ComputerView bots={bots} busy={busy} conn={conn} account={email} onAvatar={() => setMenuOpen(true)} onScreen={takeScreen} />
+        {menuBlock}
+      </Shell>
+    );
+    case 'timeline': return (
+      <Shell upd={upd} onUpd={doUpdate} updState={updState}>
+        <TimelineView bots={bots} busy={busy} conn={conn} account={email} onAvatar={() => setMenuOpen(true)} onScreen={takeScreen} />
         {menuBlock}
       </Shell>
     );

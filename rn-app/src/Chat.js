@@ -174,6 +174,7 @@ function ChatScreen({ thread, threads, botName: propsBotName, onSwitch, onBack, 
   const [busy, setBusy] = useState(null);            // {status, steps}
   const [replyTo, setReplyTo] = useState(null);
   const [pick, setPick] = useState(null);            // bubble long-pressed for react/reply
+  const [quickActions, setQuickActions] = useState(null);  // {item, x, y} for quick-action menu
   const [text, setText] = useState('');
   const [loading, setLoading] = useState(true);
   const [liveFull, setLiveFull] = useState(false);
@@ -721,18 +722,80 @@ function ChatScreen({ thread, threads, botName: propsBotName, onSwitch, onBack, 
         </Pressable>
       </View>
     );
-    if (item.type === 'assistant') return (
-      <Pressable onLongPress={() => item.id && setPick(item)} delayLongPress={350} style={st.rowIn}>
-        <View style={[st.answer, { backgroundColor: BUBBLE, borderRadius: 14, borderTopLeftRadius: 14, borderTopRightRadius: 4, borderBottomLeftRadius: 14, paddingHorizontal: 12, paddingVertical: 10, maxWidth: '92%' }]}>
-          {aiBody(asText(item.text), (t) => md(plainText(t), st.answerT), (r) => { setText(r); })}
-          {(item.files || []).length ? (
-            <View style={{ marginTop: 6 }}>
-              {(item.files || []).map((f, i) => <FileRow key={i} f={f} />)}
+    if (item.type === 'assistant') {
+      const text = asText(item.text);
+      // Quick format hints (no heavy parsing): show code blocks, tables, JSON
+      const isCode = text.includes('```') || text.match(/^\s*\w+\s*::/m);
+      const isTable = text.includes('|') && (text.match(/\|.+\|/g) || []).length > 2;
+      const isJSON = /^\{/.test(text.trim()) || /^\[/.test(text.trim());
+      if (isCode) {
+        return (
+          <View style={{ maxHeight: 200, overflow: 'auto' }}>
+            <Text style={st.codeT} selectable>{text}</Text>
+          </View>
+        );
+      }
+      if (isTable) {
+        return (
+          <View style={{ maxHeight: 250, overflow: 'auto' }}>
+            <Text style={C.muted} selectable>{text}</Text>
+          </View>
+        );
+      }
+      if (isJSON) {
+        try {
+          const parsed = JSON.parse(text);
+          return (
+            <View style={{ maxHeight: 300, overflow: 'auto' }}>
+              <Text style={C.subT}>{JSON.stringify(parsed, null, 2)}</Text>
             </View>
-          ) : null}
+          );
+        } catch {}
+      }
+      // Keep original aiBody + markdown rendering for normal messages
+      <View style={[st.answer, { backgroundColor: BUBBLE, borderRadius: 14, borderTopLeftRadius: 14, borderTopRightRadius: 4, borderBottomLeftRadius: 14, paddingHorizontal: 12, paddingVertical: 10, maxWidth: '92%' }]}>
+        {aiBody(asText(item.text), (t) => md(plainText(t), st.answerT), (r) => { setText(r); })}
+        {(item.files || []).length ? (
+          <View style={{ marginTop: 6 }}>
+            {(item.files || []).map((f, i) => <FileRow key={i} f={f} />)}
+          </View>
+        ) : null}
         </View>
         <MsgFoot it={item} time={fmtT(item)} />
       </Pressable>
+      // Long-press shows quick-action menu (copy, summarize, regenerate)
+      {quickActions && quickActions.item === item && (
+        <View style={st.quickActionMenu}>
+          <View style={{ backgroundColor: PANEL, borderRadius: 12, padding: 10, marginTop: 6, borderWidth: 1, borderColor: LINE }}>
+            <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
+              <Text style={{ color: TEXT, fontWeight: '600' }}>Quick actions</Text>
+              <Pressable onPress={() => setQuickActions(null)} style={st.closeBtn}><Text style={{ color: MUTED }}>✕</Text></Pressable>
+            </View>
+            <View style={{ padding: 6, borderRadius: 8, backgroundColor: '#f0f5ff' }}>
+              <Pressable onPress={() => {
+                // Copy clean text (strip thinking tags)
+                const clean = text.replace(/\[GOAL.*?\]/gis, '').replace(/\[SYSTEM.*?\]/gis, '').trim();
+                Clipboard.setString(clean);
+                Alert.alert('Copied', 'Message text copied to clipboard');
+                setQuickActions(null);
+              }}>
+                <Text style={{ color: TEXT, fontSize: 13 }}>📋 Copy text</Text>
+              </Pressable>
+              <Pressable onPress={() => Alert.alert('Summarize', 'Summarization not yet implemented')}>
+                <Text style={{ color: TEXT, fontSize: 13 }}>📊 Summarize</Text>
+              </Pressable>
+              <Pressable onPress={() => Alert.alert('Regenerate', 'Regeneration not yet implemented')}>
+                <Text style={{ color: TEXT, fontSize: 13 }}>🔄 Regenerate</Text>
+              </Pressable>
+            </View>
+          </View>
+        </View>
+      )}
+      {quickActions && quickActions.item !== item && (
+        // Hide menu when selecting a different message
+        setQuickActions(null)
+      )}
+    </Pressable>
     );
     if (item.type === 'tool') {
       // Compact tool row so the phone chat actually shows "working" per bot: what the bot
