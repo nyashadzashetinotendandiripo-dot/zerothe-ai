@@ -147,6 +147,7 @@ class TurnResult:
     final_text: str = ""
     error: str = ""
     steps: int = 0
+    verified: bool = False    # a verify-before-done pass ran for this turn
 
 
 class _StreamBuf:
@@ -358,6 +359,21 @@ class AgentRun:
             if not result.tool_calls:
                 if text:
                     final_text = text
+                # Verify-before-done: a turn that changed real things gets one
+                # extra pass to check its own work before it may claim success.
+                if (text and not res.verified and result.stop_reason != "max_tokens"
+                        and self.trigger != "proactive"
+                        and eng.settings.get("agent.verify_before_done", True)):
+                    evidence = self._work_evidence()
+                    if evidence:
+                        res.verified = True
+                        history.append({"role": "user", "content": [{"type": "text", "text":
+                            "FINAL CHECK before you finish. This turn you took real actions:\n" + evidence
+                            + "\nVerify the job is genuinely complete and correct: re-read files you wrote, "
+                            "screenshot the page if you used the browser, re-check anything you sent. "
+                            "Fix anything wrong or incomplete now. When it is truly done, reply with your final "
+                            "summary (no tool calls)."}]})
+                        continue
                 ext, self.last_seen, ext_ids = eng.threads.external_since(self.thread_id, self.bot_id, self.last_seen)
                 if ext:  # the user spoke while we were finishing: keep going
                     history.extend(ext)
@@ -386,6 +402,27 @@ class AgentRun:
         self._attach_files_to_last(msg_id)
         res.final_text = final_text
         return res
+
+    # Tools whose names suggest they changed something real. Pure browsing and
+    # reads do not trigger a verification pass.
+    _MUTATING_RE = re.compile(r"write|move|delete|send|post|create|reply|forward|upload|submit|schedule|update", re.I)
+
+    def _work_evidence(self) -> str:
+        """One-line-per-action summary of what this turn actually changed, for the verify pass."""
+        try:
+            rows = self.engine.db.query(
+                "SELECT tool, status, path, url FROM actions WHERE turn_id=? AND bot_id=? ORDER BY id DESC LIMIT 60",
+                (self.id, self.bot_id))
+        except Exception:  # noqa: BLE001
+            return ""
+        lines = []
+        for r in rows:
+            tool = str(r.get("tool") or "")
+            if not self._MUTATING_RE.search(tool):
+                continue
+            detail = r.get("path") or r.get("url") or ""
+            lines.append(f"- {tool} ({r.get('status') or '?'}) {detail}".rstrip())
+        return "\n".join(lines[:12])
 
     def _attach_files_to_last(self, msg_id: int | None) -> None:
         """Auto-surface files created during this turn on the final assistant message so they
@@ -835,6 +872,12 @@ class AgentRun:
         if self.trigger in ("routine",):
             parts.append("# Unattended run\nThis is a scheduled routine. Nobody is watching live. Work end to end, avoid questions unless truly blocked, and finish with a short report.")
         parts.append(f"# Your memory\n{mem}")
+        try:
+            goal_block = eng.goals.prompt_block(self.thread_id)
+            if goal_block:
+                parts.append("# Active goal on this thread\n" + goal_block)
+        except Exception:
+            pass
         if follow:
             parts.append("# Follow-ups you scheduled\n" + "\n".join(f"- {f['note']}" for f in follow))
         parts.append("# Shared project notes (read with project_read)\n" + eng.memory.project_headlines())

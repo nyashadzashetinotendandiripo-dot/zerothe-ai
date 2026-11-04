@@ -130,10 +130,15 @@ function shortBot(id, bots) {
 // ---------------------------------------------------------------- workspace 4: marketplace
 export function MarketplaceScreen({ onMenu, onRefresh, onHired }) {
   const [rows, setRows] = useState(null);
+  const [community, setCommunity] = useState([]);
+  const [mine, setMine] = useState([]);
   const [q, setQ] = useState('');
   const [busyId, setBusyId] = useState('');
   const [msg, setMsg] = useState('');
-  const load = () => { api('/api/templates').then((r) => setRows(r || [])).catch((e) => setRows([])); };
+  const load = () => {
+    api('/api/templates').then((r) => setRows(r || [])).catch((e) => setRows([]));
+    api('/api/templates/community').then((r) => { setCommunity((r && r.community) || []); setMine((r && r.mine) || []); }).catch(() => {});
+  };
   useEffect(() => { load(); }, []);
   const add = async (t) => {
     setBusyId(t.id); setMsg('');
@@ -146,6 +151,24 @@ export function MarketplaceScreen({ onMenu, onRefresh, onHired }) {
     } catch (e) { setMsg('Could not hire: ' + (e.message || e)); }
     setBusyId('');
   };
+  // Community templates carry the job/instructions inline; hire creates the Bot directly.
+  const addCommunity = async (t) => {
+    setBusyId(t.id); setMsg('');
+    try {
+      const b = await api('/api/bots', { method: 'POST', body: JSON.stringify({
+        name: t.name, job: t.job || '', emoji: t.emoji || '🤖', instructions: t.instructions || '',
+      }) });
+      setMsg((b && b.name ? b.name : 'Bot') + ' joined your team — opening its chat…');
+      onRefresh && onRefresh();
+      if (b && b.id && onHired) onHired(b);
+    } catch (e) { setMsg('Could not hire: ' + (e.message || e)); }
+    setBusyId('');
+  };
+  const removeMine = async (t) => {
+    setBusyId(t.id);
+    try { await api('/api/templates/community/' + t.id, { method: 'DELETE' }); load(); } catch (e) { /* ignore */ }
+    setBusyId('');
+  };
   const ql = q.trim().toLowerCase();
   const seen = {};
   const groups = [];
@@ -154,6 +177,8 @@ export function MarketplaceScreen({ onMenu, onRefresh, onHired }) {
     if (!seen[t.category]) { seen[t.category] = []; groups.push([t.category, seen[t.category]]); }
     seen[t.category].push(t);
   }
+  const commRows = (community || []).filter((t) => !ql || ((t.name || '') + ' ' + (t.job || '')).toLowerCase().includes(ql));
+  const mineRows = (mine || []).filter((t) => !ql || ((t.name || '') + ' ' + (t.job || '')).toLowerCase().includes(ql));
   return (
     <View style={s0.screen}>
       <TopBar title="Bot Marketplace" subtitle={rows && rows.length ? rows.length + ' ready-made specialists' : 'hiring hall'} onMenu={onMenu} />
@@ -181,6 +206,45 @@ export function MarketplaceScreen({ onMenu, onRefresh, onHired }) {
             ))}
           </View>
         )}
+        ListHeaderComponent={(mineRows.length || commRows.length) ? (
+          <View>
+            {!!mineRows.length && (
+              <View>
+                <Text style={s0.group}>Published by you</Text>
+                {mineRows.map((t) => (
+                  <View key={t.id} style={s0.row}>
+                    <View style={s0.rowIc}><Text style={{ fontSize: 18 }}>{t.emoji || '🤖'}</Text></View>
+                    <View style={{ flex: 1, gap: 1 }}>
+                      <Text style={s0.rowL} numberOfLines={1}>{t.name}</Text>
+                      <Text style={s0.rowS} numberOfLines={2}>{t.job || 'No job set'}</Text>
+                    </View>
+                    <Pressable onPress={() => removeMine(t)} disabled={busyId === t.id} style={({ pressed }) => [s0.btn, pressed && { opacity: .9 }]}>
+                      <Text style={s0.btnT}>{busyId === t.id ? '…' : 'Unpublish'}</Text>
+                    </Pressable>
+                  </View>
+                ))}
+              </View>
+            )}
+            {!!commRows.length && (
+              <View>
+                <Text style={s0.group}>From the community</Text>
+                {commRows.map((t) => (
+                  <View key={t.id} style={s0.row}>
+                    <View style={s0.rowIc}><Text style={{ fontSize: 18 }}>{t.emoji || '🤖'}</Text></View>
+                    <View style={{ flex: 1, gap: 1 }}>
+                      <Text style={s0.rowL} numberOfLines={1}>{t.name}</Text>
+                      <Text style={s0.rowS} numberOfLines={2}>{t.job || 'No job set'}</Text>
+                    </View>
+                    <Pressable onPress={() => addCommunity(t)} disabled={busyId === t.id} style={({ pressed }) => [s0.btn, { backgroundColor: C.solid, borderColor: C.solid }, pressed && { opacity: .9 }]}>
+                      <Text style={[s0.btnT, { color: C.onSolid }]}>{busyId === t.id ? '…' : '＋ Hire'}</Text>
+                    </Pressable>
+                  </View>
+                ))}
+              </View>
+            )}
+            <Text style={s0.group}>Built-in specialists</Text>
+          </View>
+        ) : null}
         ListFooterComponent={<Text style={s0.rowS}>{msg || (rows === null ? 'loading…' : '')}</Text>}
       />
     </View>

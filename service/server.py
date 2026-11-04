@@ -24,7 +24,7 @@ from fastapi import Body, Depends, FastAPI, HTTPException, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, StreamingResponse
 
-from core import APP_NAME, VERSION, backup as backup_mod, commands, packages, paths, secrets, skills as skills_mod
+from core import APP_NAME, VERSION, backup as backup_mod, commands, packages, paths, push, secrets, skills as skills_mod
 from core import auth as auth_mod
 from core import email_connector as email_mod
 from core import document_parser as doc_parser_mod
@@ -32,6 +32,7 @@ from core import host as host_mod
 from core.browser import BrowserError
 from core.bots import BotError
 from core.computer import ComputerError
+from core.db import jdump, new_id, now
 from core.engine import Engine
 from core.files import FileError
 from core.plugins import ConnectorError, google_client
@@ -520,6 +521,96 @@ def create_app(engine: Engine, token: str) -> FastAPI:
     @app.post("/api/bots/{bot_id}/duplicate", dependencies=[api])
     def bots_duplicate(bot_id: str, body: dict = Body(default={})) -> dict:
         return eng.bots.duplicate(bot_id, body.get("name"))
+
+    # ------------------------------------------------------------------ goals
+    @app.get("/api/goals", dependencies=[api])
+    def goals_list(request: Request) -> dict:
+        user = current_user(request)
+        return {"goals": eng.goals.list(user if not _is_admin(user) else None)}
+
+    @app.post("/api/goals", dependencies=[api])
+    def goals_create(request: Request, body: dict = Body(...)) -> dict:
+        user = current_user(request)
+        return eng.goals.create(str(body.get("bot_id") or ""), str(body.get("title") or ""),
+                                str(body.get("target") or ""), int(body.get("cadence_minutes") or 360), owner=user)
+
+    @app.put("/api/goals/{gid}", dependencies=[api])
+    def goals_update(request: Request, gid: str, body: dict = Body(...)) -> dict:
+        user = current_user(request)
+        fields = {k: body[k] for k in ("title", "target", "cadence_minutes", "status", "progress") if k in body}
+        return eng.goals.update(gid, user if not _is_admin(user) else None, **fields)
+
+    @app.delete("/api/goals/{gid}", dependencies=[api])
+    def goals_delete(request: Request, gid: str) -> dict:
+        user = current_user(request)
+        return {"ok": eng.goals.delete(gid, user if not _is_admin(user) else None)}
+
+    @app.post("/api/goals/{gid}/run", dependencies=[api])
+    def goals_run(request: Request, gid: str) -> dict:
+        user = current_user(request)
+        g = eng.goals.get(gid, user if not _is_admin(user) else None)
+        if not g:
+            raise HTTPException(404, "No such goal.")
+        eng.goals._prod(g)  # noqa: SLF001 - explicit "work on it now" from the user
+        return {"ok": True, "goal": eng.goals.get(gid)}
+
+    # ------------------------------------------------------------------ briefing
+    @app.get("/api/briefing", dependencies=[api])
+    def briefing(request: Request) -> dict:
+        user = current_user(request)
+        d = eng.digest.build("today")
+        goals = [g for g in eng.goals.list(user if not _is_admin(user) else None) if g.get("status") == "active"]
+        try:
+            unread = int(eng.db.scalar("SELECT COUNT(*) FROM notifications WHERE read=0", (), 0))
+        except Exception:  # noqa: BLE001
+            unread = 0
+        return {"headline": eng.digest.headline(d), "waiting": d.get("waiting", 0),
+                "totals": d.get("totals", {}), "bots": d.get("bots", [])[:6],
+                "goals": [{"id": g["id"], "title": g["title"], "progress": g.get("progress", ""),
+                           "bot_name": g.get("bot_name"), "emoji": g.get("bot_emoji")} for g in goals[:6]],
+                "unread": unread}
+
+    # ------------------------------------------------------------------ push tokens
+    @app.post("/api/push/register", dependencies=[api])
+    def push_register(request: Request, body: dict = Body(...)) -> dict:
+        user = current_user(request)
+        return push.register(eng.db, user, str(body.get("token") or ""), str(body.get("platform") or "android"))
+
+    @app.delete("/api/push/register", dependencies=[api])
+    def push_unregister(request: Request, body: dict = Body(...)) -> dict:
+        user = current_user(request)
+        return push.unregister(eng.db, user, str(body.get("token") or ""))
+
+    # ------------------------------------------------------------------ community templates
+    @app.get("/api/templates/community", dependencies=[api])
+    def templates_community(request: Request) -> dict:
+        user = current_user(request)
+        rows = eng.db.query("SELECT id, owner, name, emoji, job, instructions, grants, model, profile, created_at "
+                            "FROM community_templates ORDER BY created_at DESC LIMIT 100")
+        return {"community": [r for r in rows if r["owner"] != user], "mine": [r for r in rows if r["owner"] == user]}
+
+    @app.post("/api/templates/publish", dependencies=[api])
+    def templates_publish(request: Request, body: dict = Body(...)) -> dict:
+        user = current_user(request)
+        bot = eng.bots.get(str(body.get("bot_id") or ""), user)
+        if not bot:
+            raise HTTPException(404, "No such Bot.")
+        name = str(body.get("name") or bot["name"]).strip()[:60] or bot["name"]
+        row = {"id": new_id(), "owner": user, "name": name, "emoji": bot.get("emoji") or "🤖",
+               "job": (bot.get("job") or "")[:500], "instructions": (bot.get("instructions") or "")[:4000],
+               "grants": jdump(bot.get("grants") or []), "model": bot.get("model") or "",
+               "profile": bot.get("profile") or "", "created_at": now()}
+        eng.db.insert("community_templates", row)
+        return {"ok": True, "id": row["id"]}
+
+    @app.delete("/api/templates/community/{tid}", dependencies=[api])
+    def templates_delete(request: Request, tid: str) -> dict:
+        user = current_user(request)
+        row = eng.db.one("SELECT owner FROM community_templates WHERE id=?", (tid,))
+        if not row or (row["owner"] != user and not _is_admin(user)):
+            raise HTTPException(404, "No such template.")
+        eng.db.execute("DELETE FROM community_templates WHERE id=?", (tid,))
+        return {"ok": True}
 
     @app.put("/api/pricing", dependencies=[api])
     def pricing_put(body: dict = Body(...)) -> dict:
@@ -1039,8 +1130,9 @@ def create_app(engine: Engine, token: str) -> FastAPI:
 
     # ------------------------------------------------------ plugins and MCP
     @app.get("/api/plugins", dependencies=[api])
-    def plugins_list() -> dict:
-        return {"plugins": eng.plugins.list(), "catalog": eng.plugins.catalog(), "install_allowed": eng.admin.plugin_install_allowed()}
+    def plugins_list(request: Request) -> dict:
+        user = current_user(request)
+        return {"plugins": eng.plugins.list(owner=user), "catalog": eng.plugins.catalog(), "install_allowed": eng.admin.plugin_install_allowed()}
 
     @app.post("/api/plugins/install", dependencies=[api])
     def plugins_install(body: dict = Body(...)) -> dict:
@@ -1052,9 +1144,9 @@ def create_app(engine: Engine, token: str) -> FastAPI:
         return {"ok": True}
 
     @app.put("/api/plugins/{pid}/config", dependencies=[api])
-    def plugins_config(pid: str, body: dict = Body(...)) -> dict:
+    def plugins_config(pid: str, request: Request, body: dict = Body(...)) -> dict:
         eng.plugins.set_config(pid, body)
-        return eng.plugins.info(pid)
+        return eng.plugins.info(pid, owner=current_user(request))
 
     @app.post("/api/plugins/{pid}/test", dependencies=[api])
     def plugins_test(pid: str) -> dict:
@@ -1070,12 +1162,13 @@ def create_app(engine: Engine, token: str) -> FastAPI:
         # "Continue with Google"), whose only registered redirect URI is
         # /auth/google-app/cb. One callback, one console entry, no extra setup.
         path = "/auth/google-app/cb" if provider == "google" else "/oauth/callback"
-        return {"url": eng.plugins.begin_oauth(pid, _pub_origin(request) + path, mobile=bool(mobile))}
+        return {"url": eng.plugins.begin_oauth(pid, _pub_origin(request) + path, mobile=bool(mobile), owner=current_user(request))}
 
     @app.post("/api/plugins/{pid}/disconnect", dependencies=[api])
-    def plugins_disconnect(pid: str) -> dict:
-        eng.plugins.clear_secrets(pid)
-        return eng.plugins.info(pid)
+    def plugins_disconnect(pid: str, request: Request) -> dict:
+        user = current_user(request)
+        eng.plugins.clear_secrets(pid, owner=user)
+        return eng.plugins.info(pid, owner=user)
 
     @app.post("/api/plugins/rest", dependencies=[api])
     def plugins_rest(body: dict = Body(...)) -> dict:
@@ -1085,22 +1178,23 @@ def create_app(engine: Engine, token: str) -> FastAPI:
     # Phone-app CRUD for plugin data items (e.g. Gmail messages). The server holds
     # the plugin credentials, so the phone can list and delete items without going
     # through the bot agent.
-    def _gmail_headers(pid: str) -> dict:
+    def _gmail_headers(pid: str, owner: str = "") -> dict:
         cid, csec = google_client(eng.plugins, pid)
-        return {"Authorization": "Bearer " + eng.plugins.google.access_token(pid, cid, csec)}
+        return {"Authorization": "Bearer " + eng.plugins.google.access_token(pid, cid, csec, owner=owner)}
 
     @app.get("/api/plugins/{pid}/items", dependencies=[api])
     def plugins_items_list(pid: str, request: Request, query: str = "", max_results: int = 10) -> dict:
         import httpx
+        user = current_user(request)
         d = eng.plugins.defs.get(pid)
         if not d:
             raise HTTPException(404, "Unknown plugin.")
-        if not eng.plugins.configured(pid):
+        if not eng.plugins.configured(pid, owner=user):
             raise HTTPException(400, "Plugin not configured. Press Connect first.")
         if d.id != "gmail":
             raise HTTPException(400, "Item listing not supported for this plugin.")
         base = "https://gmail.googleapis.com/gmail/v1/users/me"
-        headers = _gmail_headers(pid)
+        headers = _gmail_headers(pid, owner=user)
         r = httpx.get(f"{base}/messages", headers=headers,
                       params={"q": query, "maxResults": min(max_results, 25)}, timeout=30)
         if r.status_code >= 400:
@@ -1120,17 +1214,18 @@ def create_app(engine: Engine, token: str) -> FastAPI:
         return {"items": out, "plugin": pid}
 
     @app.delete("/api/plugins/{pid}/items/{item_id}", dependencies=[api])
-    def plugins_item_delete(pid: str, item_id: str) -> dict:
+    def plugins_item_delete(pid: str, item_id: str, request: Request) -> dict:
         import httpx
+        user = current_user(request)
         d = eng.plugins.defs.get(pid)
         if not d:
             raise HTTPException(404, "Unknown plugin.")
-        if not eng.plugins.configured(pid):
+        if not eng.plugins.configured(pid, owner=user):
             raise HTTPException(400, "Plugin not configured.")
         if d.id != "gmail":
             raise HTTPException(400, "Item delete not supported for this plugin.")
         base = "https://gmail.googleapis.com/gmail/v1/users/me"
-        r = httpx.delete(f"{base}/messages/{item_id}", headers=_gmail_headers(pid), timeout=30)
+        r = httpx.delete(f"{base}/messages/{item_id}", headers=_gmail_headers(pid, owner=user), timeout=30)
         if r.status_code >= 400:
             raise HTTPException(r.status_code, r.text[:400])
         return {"ok": True, "deleted": item_id}
@@ -1733,16 +1828,25 @@ google.accounts.id.renderButton(document.getElementById('gbtn'),
         bots = eng.bots.list(owner=user)
         if len(bots) < 2:
             raise HTTPException(400, "Need at least 2 bots for collaboration.")
-        # Assign subtasks: bot 1 plans, bot 2 executes, bot 3 reviews
+        wanted = [str(b) for b in (body.get("bot_ids") or [])]
+        chosen = [b for b in bots if b["id"] in wanted] or bots[:3]
+        if len(chosen) < 2:
+            raise HTTPException(400, "Pick at least 2 Bots to collaborate.")
+        # Assign subtasks and actually start the work: each Bot gets its role in
+        # its own thread and a real turn, so the collaboration runs to completion.
         results = []
-        for i, bot in enumerate(bots[:3]):
+        for i, bot in enumerate(chosen[:3]):
             role = ["planner", "executor", "reviewer"][i]
+            brief = {"planner": "Break the task into concrete steps and hand the executor a precise work order.",
+                     "executor": "Carry out the planner's work order with your tools. Do the real work.",
+                     "reviewer": "Check the executor's result against the task. Fix small issues yourself; report anything that needs a decision."}[role]
             thread = eng.threads.create(bot_id=bot["id"], title=f"Collab: {task[:40]}", kind="dm", owner=user)
             eng.threads.add(thread["id"], "agent", "text",
-                            [{"type": "text", "text": f"Role: {role}. Task: {task}"}],
+                            [{"type": "text", "text": f"Role: {role}. Task: {task}\nYour part: {brief}"}],
                             publish=True, bot_id=bot["id"])
-            results.append({"bot": bot["name"], "role": role, "thread_id": thread["id"],
-                            "status": "assigned"})
+            eng.turns.start(bot["id"], thread["id"], trigger="user")
+            results.append({"bot": bot["name"], "bot_id": bot["id"], "role": role, "thread_id": thread["id"],
+                            "status": "running"})
         eng.events.publish("agents", change="collaborate", results=results)
         return {"ok": True, "task": task, "agents": results, "count": len(results)}
 

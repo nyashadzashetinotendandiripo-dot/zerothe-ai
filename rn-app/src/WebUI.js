@@ -479,13 +479,14 @@ function splitBots({ sorted, botRow, q }) {
 export function HomeView({ bots, busy, apps, onOpen, onOpenThread, conn, account, onAvatar, onBack, onSearch }) {
   const [us, setUs] = useState(null);
   const [acts, setActs] = useState([]);
+  const [brief, setBrief] = useState(null);
   const ins = useSafeAreaInsets();
   const load = useCallback(async () => {
     try {
       setUs(await api('/api/usage'));
     } catch (e) { /* ignore */ }
     try { const d = await api('/api/actions?limit=8'); setActs(Array.isArray(d) ? d : (d.actions || [])); } catch (e) { /* ignore */ }
-    // NOTE: no /api/digest endpoint exists — the old 15s poll just 404'd forever.
+    try { setBrief(await api('/api/briefing')); } catch (e) { /* ignore */ }
   }, []);
   // 15s polling burned battery and hammered the server; the SSE stream already
   // pushes live changes, so this is just a slow safety-net refresh.
@@ -516,11 +517,25 @@ export function HomeView({ bots, busy, apps, onOpen, onOpenThread, conn, account
         <View style={W.banner}>
           <Text style={W.bannerB}>●</Text>
           <Text style={{ color: C.text, fontSize: 14, flex: 1 }} numberOfLines={2}>
-            {(apps || []).length
+            {(brief && brief.headline) || ((apps || []).length
               ? String((apps || []).length) + ' action' + ((apps || []).length === 1 ? '' : 's') + ' waiting for your approval.'
-              : (workingBots.length ? 'Your Bots are working — ' + workingBots.length + ' task' + (workingBots.length === 1 ? '' : 's') + ' in progress.' : 'All quiet — no approvals waiting.')}
+              : (workingBots.length ? 'Your Bots are working — ' + workingBots.length + ' task' + (workingBots.length === 1 ? '' : 's') + ' in progress.' : 'All quiet — no approvals waiting.'))}
           </Text>
         </View>
+        {!!(brief && brief.goals && brief.goals.length) && (
+          <View style={{ paddingHorizontal: 14, marginBottom: 10 }}>
+            {brief.goals.map((g) => (
+              <View key={g.id} style={[W.museCard, { padding: 10, marginBottom: 6, flexDirection: 'row', gap: 8, alignItems: 'center' }]}>
+                <Text style={{ fontSize: 14 }}>{g.emoji || '🎯'}</Text>
+                <View style={{ flex: 1, minWidth: 0 }}>
+                  <Text style={{ color: C.text, fontWeight: '700', fontSize: 12.5 }} numberOfLines={1}>{g.title}</Text>
+                  {!!g.progress && <Text style={{ color: C.muted, fontSize: 11 }} numberOfLines={1}>{g.progress}</Text>}
+                </View>
+                <Text style={{ color: C.ok, fontSize: 10, fontWeight: '800' }}>GOAL</Text>
+              </View>
+            ))}
+          </View>
+        )}
         <View style={W.grid}>
           <View style={W.tile}>
             <Text style={W.tileCap}>Needs you</Text>
@@ -1973,34 +1988,130 @@ export function IdeasView({ conn, account, onAvatar }) {
   );
 }
 
-// ---------------------------------------------------------------- muse: goals (honest empty state)
-// Goal tracking is not built yet — say so instead of showing invented goals.
+// ---------------------------------------------------------------- muse: goals (real)
+// A goal is a mission a Bot works toward on a cadence: it checks the real
+// state, does the next step, posts a one-line progress note, and marks the
+// goal done when it is achieved.
 export function GoalsView({ conn, account, onAvatar }) {
+  const [goals, setGoals] = useState(null);
+  const [bots, setBots] = useState([]);
+  const [form, setForm] = useState(null);        // {bot_id, title, target, cadence}
+  const [busy, setBusy] = useState('');
+  const load = useCallback(async () => {
+    try { const d = await api('/api/goals'); setGoals(Array.isArray(d) ? d : (d.goals || [])); } catch (e) { setGoals([]); }
+    try { const d = await api('/api/bots'); setBots(Array.isArray(d) ? d : (d.bots || [])); } catch (e) { /* ignore */ }
+  }, []);
+  useEffect(() => { load(); }, [load]);
+  const act = async (gid, fn) => {
+    setBusy(gid);
+    try { await fn(); await load(); } catch (e) { Alert.alert('Could not update goal', String(e.message || e)); }
+    setBusy('');
+  };
+  const create = async () => {
+    if (!form || !form.bot_id || !String(form.title || '').trim()) return;
+    setBusy('new');
+    try {
+      await api('/api/goals', { method: 'POST', body: JSON.stringify({
+        bot_id: form.bot_id, title: form.title, target: form.target || '', cadence_minutes: form.cadence || 360,
+      }) });
+      setForm(null);
+      await load();
+    } catch (e) { Alert.alert('Could not create goal', String(e.message || e)); }
+    setBusy('');
+  };
+  const chip = (st) => st === 'active' ? ['🎯', C.ok] : st === 'paused' ? ['⏸', C.muted] : st === 'done' ? ['✅', C.ok] : ['⚠️', C.bad];
+  const CADENCES = [['60', 'Every hour'], ['360', 'Every 6 hours'], ['1440', 'Every day'], ['10080', 'Every week']];
   return (
     <View style={W.screen}>
       <WebTopBar title="Goals" showBack conn={conn} account={account} onAvatar={onAvatar} />
       <ScrollView contentContainerStyle={{ paddingBottom: 30, paddingTop: 10 }} showsVerticalScrollIndicator={false}>
         <View style={{ paddingHorizontal: 16 }}>
-          <View style={[W.museCard, { alignItems: 'center', padding: 24 }]}>
-            <Text style={{ fontSize: 30 }}>🎯</Text>
-            <Text style={{ color: C.text, fontWeight: '800', fontSize: 15, marginTop: 8 }}>Goals are coming soon</Text>
-            <Text style={[W.gSub, { textAlign: 'center', marginTop: 6 }]}>
-              Goals will let a Bot work toward an outcome over days or weeks — save for a trip, train for a race, chase an invoice — and report progress on its own.
-            </Text>
-          </View>
-          <Text style={W.museSection}>What works today</Text>
-          <View style={[W.museCard, { padding: 12 }]}>
-            <Text style={{ color: C.text, fontSize: 13, fontWeight: '600' }}>🤖 Bots with jobs</Text>
-            <Text style={W.museSub}>Create a Bot, describe the job, and it executes with approvals before sensitive actions.</Text>
-          </View>
-          <View style={[W.museCard, { padding: 12 }]}>
-            <Text style={{ color: C.text, fontSize: 13, fontWeight: '600' }}>🔁 Routines & triggers</Text>
-            <Text style={W.museSub}>Schedule recurring work from a Bot's settings — the closest thing to a goal today.</Text>
-          </View>
-          <View style={[W.museCard, { padding: 12 }]}>
-            <Text style={{ color: C.text, fontSize: 13, fontWeight: '600' }}>📥 Inbox approvals</Text>
-            <Text style={W.museSub}>Everything a Bot wants to do that touches money, email or logins waits for you here.</Text>
-          </View>
+          {!form ? (
+            <Pressable onPress={() => setForm({ bot_id: (bots[0] || {}).id || '', title: '', target: '', cadence: 360 })}
+              style={[W.museCard, { flexDirection: 'row', alignItems: 'center', gap: 10, padding: 14 }]}
+              disabled={!bots.length}>
+              <Text style={{ fontSize: 22 }}>🎯</Text>
+              <View style={{ flex: 1 }}>
+                <Text style={{ color: C.text, fontWeight: '800', fontSize: 14 }}>New goal</Text>
+                <Text style={W.museSub}>{bots.length ? 'Give a Bot an outcome to work toward on its own schedule.' : 'Create a Bot first — goals need a Bot to do the work.'}</Text>
+              </View>
+              <Text style={{ color: C.muted, fontSize: 12 }}>＋</Text>
+            </Pressable>
+          ) : (
+            <View style={[W.museCard, { padding: 14, gap: 8 }]}>
+              <Text style={{ color: C.text, fontWeight: '800', fontSize: 14 }}>New goal</Text>
+              <View style={{ flexDirection: 'row', gap: 8 }}>
+                <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ flexGrow: 0 }}>
+                  {bots.map((b) => (
+                    <Pressable key={b.id} onPress={() => setForm((f) => ({ ...f, bot_id: b.id }))}
+                      style={{ flexDirection: 'row', alignItems: 'center', gap: 4, paddingHorizontal: 10, paddingVertical: 6, borderRadius: 999, marginRight: 6, backgroundColor: form.bot_id === b.id ? C.solid : C.panel2 }}>
+                      <Text style={{ fontSize: 13 }}>{b.emoji || '🤖'}</Text>
+                      <Text style={{ color: form.bot_id === b.id ? C.onSolid : C.text, fontSize: 12, fontWeight: '700' }}>{b.name}</Text>
+                    </Pressable>
+                  ))}
+                </ScrollView>
+              </View>
+              <TextInput style={W.input} value={form.title} onChangeText={(t) => setForm((f) => ({ ...f, title: t }))}
+                placeholder="Goal, e.g. Get my passport renewed" placeholderTextColor={C.muted} />
+              <TextInput style={[W.input, { minHeight: 60, textAlignVertical: 'top' }]} value={form.target} onChangeText={(t) => setForm((f) => ({ ...f, target: t }))}
+                multiline placeholder="Done when… (optional, e.g. the appointment is booked and confirmed)" placeholderTextColor={C.muted} />
+              <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 6 }}>
+                {CADENCES.map(([v, lbl]) => (
+                  <Pressable key={v} onPress={() => setForm((f) => ({ ...f, cadence: parseInt(v, 10) }))}
+                    style={{ paddingHorizontal: 10, paddingVertical: 6, borderRadius: 999, backgroundColor: form.cadence === parseInt(v, 10) ? C.solid : C.panel2 }}>
+                    <Text style={{ color: form.cadence === parseInt(v, 10) ? C.onSolid : C.text, fontSize: 12, fontWeight: '700' }}>{lbl}</Text>
+                  </Pressable>
+                ))}
+              </View>
+              <View style={{ flexDirection: 'row', gap: 8 }}>
+                <Pressable onPress={create} disabled={busy === 'new'} style={[W.wideBlack, { flex: 1, opacity: busy === 'new' ? 0.5 : 1 }]}>
+                  <Text style={{ color: '#fff', fontWeight: '800', textAlign: 'center' }}>{busy === 'new' ? 'Starting…' : 'Start the goal'}</Text>
+                </Pressable>
+                <Pressable onPress={() => setForm(null)} style={[W.museCard, { paddingHorizontal: 16, justifyContent: 'center' }]}>
+                  <Text style={{ color: C.muted, fontWeight: '700' }}>Cancel</Text>
+                </Pressable>
+              </View>
+            </View>
+          )}
+          <Text style={W.museSection}>Your goals</Text>
+          {goals === null ? <Text style={W.museSub}>Loading…</Text> : !goals.length ? (
+            <Text style={W.museSub}>No goals yet. A goal turns a Bot into a long-running mission: it works, reports progress, and tells you when it is done.</Text>
+          ) : goals.map((g) => {
+            const [icon, col] = chip(g.status);
+            return (
+              <View key={g.id} style={[W.museCard, { padding: 12, gap: 4 }]}>
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                  <Text style={{ fontSize: 16 }}>{g.bot_emoji || '🤖'}</Text>
+                  <Text style={{ color: C.text, fontWeight: '800', fontSize: 14, flex: 1 }} numberOfLines={1}>{g.title}</Text>
+                  <Text style={{ color: col, fontSize: 11, fontWeight: '800' }}>{icon} {g.status}</Text>
+                </View>
+                <Text style={W.museSub}>{g.bot_name || 'Bot'} · checks every {g.cadence_minutes >= 1440 ? Math.round(g.cadence_minutes / 1440) + ' day(s)' : g.cadence_minutes >= 60 ? Math.round(g.cadence_minutes / 60) + ' hour(s)' : g.cadence_minutes + ' min'}</Text>
+                {!!g.progress && (
+                  <View style={{ backgroundColor: C.panel2, borderRadius: 10, padding: 8, marginTop: 2 }}>
+                    <Text style={{ color: C.text, fontSize: 12 }} numberOfLines={3}>📈 {g.progress}</Text>
+                  </View>
+                )}
+                <View style={{ flexDirection: 'row', gap: 6, marginTop: 4 }}>
+                  {g.status === 'active' && (
+                    <Pressable onPress={() => act(g.id, () => api('/api/goals/' + g.id + '/run', { method: 'POST', body: '{}' }))}
+                      disabled={busy === g.id} style={[W.pillBtn, { backgroundColor: C.panel2, paddingHorizontal: 12 }]}>
+                      <Text style={{ color: C.text, fontWeight: '700', fontSize: 12 }}>{busy === g.id ? '…' : 'Work on it now'}</Text>
+                    </Pressable>
+                  )}
+                  <Pressable onPress={() => act(g.id, () => api('/api/goals/' + g.id, { method: 'PUT', body: JSON.stringify({ status: g.status === 'paused' ? 'active' : 'paused' }) }))}
+                    disabled={busy === g.id} style={[W.pillBtn, { backgroundColor: C.panel2, paddingHorizontal: 12 }]}>
+                    <Text style={{ color: C.text, fontWeight: '700', fontSize: 12 }}>{g.status === 'paused' ? 'Resume' : 'Pause'}</Text>
+                  </Pressable>
+                  <Pressable onPress={() => Alert.alert('Delete goal?', g.title, [
+                    { text: 'Cancel', style: 'cancel' },
+                    { text: 'Delete', style: 'destructive', onPress: () => act(g.id, () => api('/api/goals/' + g.id, { method: 'DELETE' })) },
+                  ])} style={[W.pillBtn, { backgroundColor: C.panel2, paddingHorizontal: 12 }]}>
+                    <Text style={{ color: C.bad, fontWeight: '700', fontSize: 12 }}>Delete</Text>
+                  </Pressable>
+                </View>
+              </View>
+            );
+          })}
         </View>
       </ScrollView>
     </View>
@@ -2349,16 +2460,24 @@ export function CodeExecuteScreen({ conn, account, onAvatar }) {
 }
 
 // ---------------------------------------------------------------- Tier 3: Multi-agent collaboration
-export function AgentCollaborateScreen({ conn, account, onAvatar }) {
+export function AgentCollaborateScreen({ conn, account, onAvatar, onOpenThread }) {
   const [task, setTask] = useState('');
   const [results, setResults] = useState(null);
   const [loading, setLoading] = useState(false);
+  const [bots, setBots] = useState([]);
+  const [picked, setPicked] = useState([]);        // selected bot ids
+
+  useEffect(() => { (async () => {
+    try { const d = await api('/api/bots'); const rows = Array.isArray(d) ? d : (d.bots || []); setBots(rows); setPicked(rows.slice(0, 3).map((b) => b.id)); } catch (e) { /* ignore */ }
+  })(); }, []);
+
+  const toggle = (id) => setPicked((p) => (p.includes(id) ? p.filter((x) => x !== id) : [...p, id]));
 
   const doCollaborate = async () => {
     if (!task.trim() || loading) return;
     setLoading(true);
     try {
-      const d = await agentCollaborate(undefined, task);
+      const d = await agentCollaborate(undefined, task, picked);
       setResults(d);
     } catch (e) {
       Alert.alert('Collaboration failed', String(e.message || e));
@@ -2371,10 +2490,19 @@ export function AgentCollaborateScreen({ conn, account, onAvatar }) {
       <ScrollView contentContainerStyle={{ paddingBottom: 30, paddingTop: 10 }} showsVerticalScrollIndicator={false}>
         <View style={{ paddingHorizontal: 16 }}>
           <Text style={W.museSection}>Agent Collaboration</Text>
-          <Text style={W.gSub} marginBottom={12}>Multiple agents work together: Planner → Executor → Reviewer.</Text>
+          <Text style={W.gSub} marginBottom={12}>Pick two or three Bots: the first plans, the next executes, the last reviews — each in its own chat.</Text>
+          <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ flexGrow: 0, marginBottom: 10 }}>
+            {bots.map((b) => (
+              <Pressable key={b.id} onPress={() => toggle(b.id)}
+                style={{ flexDirection: 'row', alignItems: 'center', gap: 4, paddingHorizontal: 10, paddingVertical: 6, borderRadius: 999, marginRight: 6, backgroundColor: picked.includes(b.id) ? C.solid : C.panel2 }}>
+                <Text style={{ fontSize: 13 }}>{b.emoji || '🤖'}</Text>
+                <Text style={{ color: picked.includes(b.id) ? C.onSolid : C.text, fontSize: 12, fontWeight: '700' }}>{b.name}</Text>
+              </Pressable>
+            ))}
+          </ScrollView>
           <TextInput style={[W.input, { marginBottom: 10 }]} value={task} onChangeText={setTask} placeholder="Plan a product launch for ZerotheBot…" />
-          <Pressable onPress={doCollaborate} disabled={loading || !task.trim()}
-            style={[W.wideBlack, { marginBottom: 14, opacity: (loading || !task.trim()) ? 0.5 : 1 }]}>
+          <Pressable onPress={doCollaborate} disabled={loading || !task.trim() || picked.length < 2}
+            style={[W.wideBlack, { marginBottom: 14, opacity: (loading || !task.trim() || picked.length < 2) ? 0.5 : 1 }]}>
             <Text style={{ color: '#fff', fontWeight: '800', fontSize: 15 }}>
               {loading ? 'Collaborating…' : 'Start Collaboration'}
             </Text>
@@ -2384,7 +2512,8 @@ export function AgentCollaborateScreen({ conn, account, onAvatar }) {
               <Text style={{ color: C.muted, fontSize: 12, fontWeight: '600', textTransform: 'uppercase' }}>Task: {results.task}</Text>
               <View style={{ marginTop: 10 }}>
                 {results.agents.map((a, i) => (
-                  <View key={i} style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 6 }}>
+                  <Pressable key={i} onPress={() => onOpenThread && onOpenThread(a.thread_id, a.bot, a.bot_id)}
+                    style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 6 }}>
                     <View style={{ width: 32, height: 32, borderRadius: 16, backgroundColor: C.panel2, alignItems: 'center', justifyContent: 'center' }}>
                       <Text style={{ fontSize: 14 }}>🤖</Text>
                     </View>
@@ -2392,10 +2521,11 @@ export function AgentCollaborateScreen({ conn, account, onAvatar }) {
                       <Text style={{ color: C.text, fontWeight: '600', fontSize: 13 }}>{a.bot}</Text>
                       <Text style={{ color: C.muted, fontSize: 11 }}>{a.role}</Text>
                     </View>
-                    <Text style={{ color: C.ok, fontSize: 11, fontWeight: '700' }}>{a.status}</Text>
-                  </View>
+                    <Text style={{ color: C.ok, fontSize: 11, fontWeight: '700' }}>{a.status === 'running' ? 'working ▸' : a.status}</Text>
+                  </Pressable>
                 ))}
               </View>
+              <Text style={[W.museSub, { marginTop: 4 }]}>Tap an agent to watch its chat live.</Text>
             </View>
           )}
         </View>

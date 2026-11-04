@@ -11,7 +11,7 @@ import time
 from pathlib import Path
 from typing import Any
 
-from . import VERSION, backup, commands, notify as notifier, paths, quiet
+from . import VERSION, backup, commands, notify as notifier, paths, push, quiet
 from .actionlog import ActionLog
 from .agent import AgentRun, TurnManager, run_reflection
 from .approvals import ApprovalManager
@@ -21,6 +21,7 @@ from .db import Database, new_id, now
 from .digest import Digest
 from .files import Files
 from .events import EventBus
+from .goals import Goals
 from .mcp import McpManager
 from .memory import Memory
 from .messaging import Messaging
@@ -79,6 +80,7 @@ class Engine:
         self.mcp = McpManager(self.db, self.admin)
         self.plugins = PluginManager(self)
         self.messaging = Messaging(self)
+        self.goals = Goals(self)
         self.turns = TurnManager(self)
         self.routines = Routines(self)
         self.triggers = Triggers(self)
@@ -111,6 +113,7 @@ class Engine:
         s.add_job(self.messaging.proactive_tick, "interval", minutes=10, id="_proactive", replace_existing=True)
         s.add_job(self.approvals.check_escalations, "interval", minutes=30, id="_appr_escalate", replace_existing=True)
         s.add_job(self._digest_tick, "interval", minutes=1, id="_digest", replace_existing=True)
+        s.add_job(self.goals.tick, "interval", minutes=5, id="_goals", replace_existing=True)
         s.add_job(self._housekeeping, "cron", hour=3, minute=17, id="_housekeeping", replace_existing=True)
         s.add_job(self._browser_janitor, "interval", minutes=60, id="_browser_janitor", replace_existing=True)
         self.log.info("Engine started (v%s). Data dir: %s", VERSION, paths.data_dir())
@@ -291,7 +294,7 @@ class Engine:
     def tools_for(self, run: AgentRun) -> list[ToolSpec]:
         granted = set(run.bot["grants"])
         specs: dict[str, ToolSpec] = {t.name: t for t in self.builtin}
-        for t in self.plugins.tool_specs(granted):
+        for t in self.plugins.tool_specs(granted, owner=str(run.bot.get("owner", "") or "")):
             specs.setdefault(t.name, t)
         for t in self.mcp.tool_specs(granted, owner=str(run.bot.get("owner", "") or "")):
             specs.setdefault(t.name, t)
@@ -312,7 +315,7 @@ class Engine:
         for pid, d in self.plugins.defs.items():
             if f"plugin:{pid}" in bot["grants"] or not plugin_allowed(self.admin, pid):
                 continue
-            ready = "ready" if self.plugins.configured(pid) else "user must connect it first"
+            ready = "ready" if self.plugins.configured(pid, owner=str(bot.get("owner") or "")) else "user must connect it first"
             lines.append(f"  - {pid}: {d.name}, {d.description} ({ready})")
         for c in self.mcp.conns.values():
             if f"mcp:{c.cfg['name']}" not in bot["grants"] and c.status == "connected":
@@ -341,6 +344,14 @@ class Engine:
             notifier.toast(title, body)
         if cfg.get("ntfy_url") and cfg.get("ntfy_topic") and (urgent or kind in ("approval", "question", "takeover", "login", "finished", "error", "routine", "digest")):
             notifier.ntfy(cfg["ntfy_url"], cfg["ntfy_topic"], title, body, urgent)
+        # Phone push (FCM): fire-and-forget; a no-op until Firebase is configured.
+        if cfg.get("push", True):
+            try:
+                owner = (bot or {}).get("owner") or ""
+                threading.Thread(target=push.send, args=(self, owner, title, body, thread_id or "", kind),
+                                 daemon=True, name="push").start()
+            except Exception:
+                pass
 
     def on_turn_end(self, run: AgentRun) -> None:
         res = run.result
@@ -357,6 +368,11 @@ class Engine:
             self.messaging.after_bot_message(run.thread_id, bot, res.final_text)
         if res.status == "done" and run.steps >= 2 and run.trigger != "proactive":
             threading.Thread(target=run_reflection, args=(self, run), daemon=True, name="reflect").start()
+        if run.trigger == "goal":
+            try:
+                self.goals.on_turn_end(run)
+            except Exception:
+                self.log.exception("goal harvest failed")
         if res.status == "done" and self.turns.has_unseen_user_messages(run):
             self.turns.start(run.bot_id, run.thread_id, trigger="user")
         try:

@@ -6,6 +6,7 @@ import { api, connectEvents, loadKey, saveConf, tryConf, clearConf, conf, cfgGet
 import { C } from './src/theme';
 import { checkUpdate, installUpdate, applyOta, otaStatus, APP_VERSION, APP_CODE } from './src/updates';
 import { lastError, send as reportNow, resend as resendLast, hydrate, note, noteOnce, breadcrumb } from './src/diag';
+import { registerPush } from './src/pushReg';
 import { BUILD_STAMP, OTA_CREATED, OTA_ID } from './src/build';
 import Connect, { AuthModal } from './src/Connect';
 import Chat from './src/Chat';
@@ -144,7 +145,7 @@ function ZbRoot() {
     const mail = await cfgGet(K_EMAIL), pass = await cfgGet(K_PASS);
     if (saved && tok) {
       await saveConf(saved, tok);
-      try { await api('/api/bootstrap'); setSigned(true); await refresh(); }
+      try { await api('/api/bootstrap'); setSigned(true); await refresh(); registerPush(); }
       catch (e) {
         // A dead/expired session must not leave the app signed-in with no data.
         if (String(e.message || e) === 'Not authorized') await clearConf();
@@ -156,7 +157,7 @@ function ZbRoot() {
       try {
         const d = await loginEmail(saved, mail, pass);
         await saveConf(saved, d.session || '', mail, d.session ? '' : pass);
-        setSigned(true); await refresh();
+        setSigned(true); await refresh(); registerPush();
       } catch (e) { /* stale password: stay on the login screen, keep values */ }
     }
     setReady(true);
@@ -349,7 +350,7 @@ function ZbRoot() {
   if (!ready) return null;
   if (!signed) return (
     <Shell upd={upd} onUpd={doUpdate} updState={updState}>
-      <Login onDone={() => { setSigned(true); setScreenHistory([]); setScreen('bots'); refresh(); }} />
+      <Login onDone={() => { setSigned(true); setScreenHistory([]); setScreen('bots'); refresh(); registerPush(); }} />
     </Shell>
   );
 
@@ -557,7 +558,7 @@ function ZbRoot() {
     );
     case 'collab': return meInfo && meInfo.bots_count >= 2 ? (
       <Shell upd={upd} onUpd={doUpdate} updState={updState}>
-        <AgentCollaborateScreen conn={conn} account={email} onAvatar={() => setMenuOpen(true)} />
+        <AgentCollaborateScreen conn={conn} account={email} onAvatar={() => setMenuOpen(true)} onOpenThread={openThreadBy} />
         {menuBlock}
       </Shell>
     ) : (
@@ -1099,6 +1100,12 @@ function BotModal({ bot, onClose, onCloseSaved, onBotDeleted }) {
         </Pressable>
         <Pressable onPress={save} disabled={saving} style={[l.btn, { opacity: saving ? .5 : 1 }]}><Text style={l.btnT}>Save settings</Text></Pressable>
         <Text style={l.cap}>Tip: when an approval card appears, tap “Always” once to stop it asking for that kind of action.</Text>
+        <Pressable onPress={async () => {
+          try {
+            await api('/api/templates/publish', { method: 'POST', body: JSON.stringify({ bot_id: bot.id }) });
+            Alert.alert('Published', 'This Bot is now a template in the Marketplace — anyone can hire it.');
+          } catch (e) { Alert.alert('Could not publish', String(e.message || e)); }
+        }} style={[l.btn, { backgroundColor: C.panel2, borderColor: C.line }]}><Text style={[l.btnT, { color: C.text }]}>Publish as template</Text></Pressable>
         <Pressable onPress={() => { setSaving(false); onClose(); Alert.alert('Delete bot?', 'This permanently deletes the bot and all its chats.', [
           { text: 'Cancel', style: 'cancel' },
           { text: 'Delete', style: 'destructive', onPress: async () => {

@@ -120,6 +120,21 @@ CREATE TABLE IF NOT EXISTS notifications(
 );
 CREATE INDEX IF NOT EXISTS idx_notif_ts ON notifications(ts);
 CREATE TABLE IF NOT EXISTS known_logins(domain TEXT PRIMARY KEY, added_at REAL);
+CREATE TABLE IF NOT EXISTS goals(
+  id TEXT PRIMARY KEY, bot_id TEXT, thread_id TEXT DEFAULT '', owner TEXT DEFAULT '',
+  title TEXT, target TEXT DEFAULT '', status TEXT DEFAULT 'active', cadence_minutes INTEGER DEFAULT 360,
+  next_run_at REAL DEFAULT 0, progress TEXT DEFAULT '', last_report_at REAL DEFAULT 0,
+  created_at REAL, updated_at REAL
+);
+CREATE INDEX IF NOT EXISTS idx_goals_status ON goals(status, next_run_at);
+CREATE TABLE IF NOT EXISTS push_tokens(
+  token TEXT PRIMARY KEY, owner TEXT, platform TEXT DEFAULT 'android', created_at REAL, updated_at REAL
+);
+CREATE TABLE IF NOT EXISTS community_templates(
+  id TEXT PRIMARY KEY, owner TEXT, name TEXT, emoji TEXT DEFAULT '🤖', job TEXT DEFAULT '',
+  instructions TEXT DEFAULT '', grants TEXT DEFAULT '[]', model TEXT DEFAULT '', profile TEXT DEFAULT '',
+  created_at REAL
+);
 """
 
 

@@ -90,6 +90,34 @@ def R(category: str, summary: Callable[[dict], str], pattern: Callable[[dict], s
 
 
 # ----------------------------------------------------------------------------- Google OAuth
+# --------------------------------------------------------------------------- credential keys
+def _ckey(pid: str, owner: str, key: str) -> str:
+    """Credential-store key for a plugin secret.
+
+    Owner-scoped (``plugin:{pid}:{owner}:{key}``) when the acting Bot's owner is
+    known, so two users connecting the same plugin never share one OAuth identity.
+    The legacy global form (``plugin:{pid}:{key}``) remains the store for
+    server-wide pasted credentials and for everything connected before
+    owner-scoping existed.
+    """
+    if owner:
+        return f"plugin:{pid}:{owner}:{key}"
+    return f"plugin:{pid}:{key}"
+
+
+def _cget(pid: str, owner: str, key: str) -> str:
+    """Read a credential: the owner's own first, then the legacy global one."""
+    if owner:
+        v = secrets.get_secret(_ckey(pid, owner, key))
+        if v:
+            return v
+    return secrets.get_secret(f"plugin:{pid}:{key}") or ""
+
+
+def _cset(pid: str, owner: str, key: str, val: str) -> None:
+    secrets.set_secret(_ckey(pid, owner, key), val)
+
+
 class GoogleOAuth:
     AUTH = "https://accounts.google.com/o/oauth2/v2/auth"
     TOKEN = "https://oauth2.googleapis.com/token"
@@ -101,19 +129,20 @@ class GoogleOAuth:
 
     def auth_url(self, plugin_id: str, client_id: str, scopes: list[str], redirect_uri: str, *, auth_url: str = AUTH,
                  token_url: str = TOKEN, secret_style: str = "body", extra: dict | None = None,
-                 mobile: bool = False) -> str:
+                 mobile: bool = False, owner: str = "") -> str:
         state = pysecrets.token_urlsafe(24)
         verifier = pysecrets.token_urlsafe(64)
         challenge = base64.urlsafe_b64encode(hashlib.sha256(verifier.encode()).digest()).rstrip(b"=").decode()
         self.pending[state] = {"plugin": plugin_id, "verifier": verifier, "redirect": redirect_uri, "ts": time.time(),
-                               "token_url": token_url, "secret_style": secret_style, "mobile": bool(mobile)}
+                               "token_url": token_url, "secret_style": secret_style, "mobile": bool(mobile),
+                               "owner": owner or ""}
         q = {"client_id": client_id, "redirect_uri": redirect_uri, "response_type": "code", "scope": " ".join(scopes),
              "access_type": "offline", "prompt": "consent", "state": state, "code_challenge": challenge, "code_challenge_method": "S256"}
         q.update(extra or {})
         return f"{auth_url}?{urlencode(q)}"
 
     def exchange(self, state: str, code: str, client_id: str, client_secret: str, *, token_url: str | None = None,
-                 secret_style: str = "body") -> str:
+                 secret_style: str = "body", owner: str = "") -> str:
         import httpx
         p = self.pending.pop(state, None)
         if not p or time.time() - p["ts"] > 900:
@@ -133,12 +162,12 @@ class GoogleOAuth:
         if not data.get("access_token"):
             raise ConnectorError(f"Sign-in failed: {short(json.dumps(data, default=str)[:200], 200)}")
         if data.get("refresh_token"):
-            secrets.set_secret(f"plugin:{p['plugin']}:refresh_token", data["refresh_token"])
+            _cset(p["plugin"], owner, "refresh_token", data["refresh_token"])
         else:
             # Providers with long-lived access tokens (e.g. Asana) may not rotate:
             # keep the access token as the stored credential so Connect still counts.
-            secrets.set_secret(f"plugin:{p['plugin']}:refresh_token", data["access_token"])
-            secrets.set_secret(f"plugin:{p['plugin']}:token", data["access_token"])
+            _cset(p["plugin"], owner, "refresh_token", data["access_token"])
+            _cset(p["plugin"], owner, "token", data["access_token"])
         # Some vendors (Salesforce) require the original redirect_uri
         # on later refresh calls, so remember which one this sign-in used.
         try:
@@ -146,16 +175,16 @@ class GoogleOAuth:
         except Exception:  # noqa: BLE001
             pass
         with self._lock:
-            self._cache[p["plugin"]] = (data["access_token"], time.time() + int(data.get("expires_in", 3600)) - 60)
+            self._cache[(p["plugin"], owner)] = (data["access_token"], time.time() + int(data.get("expires_in", 3600)) - 60)
         return p["plugin"]
 
-    def access_token(self, plugin_id: str, client_id: str, client_secret: str) -> str:
+    def access_token(self, plugin_id: str, client_id: str, client_secret: str, owner: str = "") -> str:
         import httpx
         with self._lock:
-            tok = self._cache.get(plugin_id)
+            tok = self._cache.get((plugin_id, owner))
             if tok and tok[1] > time.time():
                 return tok[0]
-        refresh = secrets.get_secret(f"plugin:{plugin_id}:refresh_token")
+        refresh = _cget(plugin_id, owner, "refresh_token")
         if not refresh:
             raise ConnectorError("Not signed in to Google. Open Plugins and press Connect.")
         r = httpx.post(self.TOKEN, data={"client_id": client_id, "client_secret": client_secret, "refresh_token": refresh,
@@ -164,7 +193,7 @@ class GoogleOAuth:
             raise ConnectorError(f"Google sign-in expired ({short(r.text, 120)}). Open Plugins and press Connect again.")
         data = r.json()
         with self._lock:
-            self._cache[plugin_id] = (data["access_token"], time.time() + int(data.get("expires_in", 3600)) - 60)
+            self._cache[(plugin_id, owner)] = (data["access_token"], time.time() + int(data.get("expires_in", 3600)) - 60)
         return data["access_token"]
 
 
@@ -215,7 +244,8 @@ def oauth2_token(c: Conn, pid: str, token_url: str, payload: dict, headers: dict
     the new value is written back to the credential store. Raises ConnectorError on failure.
     """
     now = time.time()
-    hit = _OAUTH2_CACHE.get(pid)
+    owner = getattr(c, "owner", "") or ""
+    hit = _OAUTH2_CACHE.get((pid, owner))
     if hit and hit[1] > now:
         return hit[0]
     import httpx
@@ -231,10 +261,10 @@ def oauth2_token(c: Conn, pid: str, token_url: str, payload: dict, headers: dict
         raise ConnectorError("Sign-in returned an unexpected answer.")
     if not isinstance(data, dict) or not data.get("access_token"):
         raise ConnectorError(f"Sign-in failed: {short(json.dumps(data, default=str)[:200], 200)}")
-    _OAUTH2_CACHE[pid] = (data, now + int(data.get("expires_in", 3600) or 3600) - 60)
+    _OAUTH2_CACHE[(pid, owner)] = (data, now + int(data.get("expires_in", 3600) or 3600) - 60)
     if rotate_field and data.get(rotate_field) and data[rotate_field] != payload.get(rotate_field):
         try:
-            secrets.set_secret(f"plugin:{pid}:{rotate_field}", data[rotate_field])
+            _cset(pid, owner, rotate_field, data[rotate_field])
         except Exception:  # noqa: BLE001
             pass
     return data
@@ -244,8 +274,11 @@ def oauth2_token(c: Conn, pid: str, token_url: str, payload: dict, headers: dict
 class Conn:
     """What a plugin's tool builder uses: config, secrets, and a policy-checked HTTP client."""
 
-    def __init__(self, mgr: "PluginManager", pdef: PluginDef):
+    def __init__(self, mgr: "PluginManager", pdef: PluginDef, owner: str = ""):
         self.mgr, self.pdef = mgr, pdef
+        # The Bot owner whose credentials this connection uses. Empty means the
+        # legacy server-wide store (pasted credentials, pre-scoping connects).
+        self.owner = owner or ""
 
     def cfg(self, key: str, default: str = "") -> str:
         # Declarative OAuth first: {{secret.token}} resolves to a fresh access
@@ -254,7 +287,7 @@ class Conn:
         # token when the refresh is unavailable or fails.
         if key == "token":
             o = self.pdef.oauth or {}
-            rt = self.mgr.config_value(self.pdef.id, "refresh_token")
+            rt = self.mgr.config_value(self.pdef.id, "refresh_token", owner=self.owner)
             if o and rt:
                 try:
                     if (o.get("provider") or "") == "google":
@@ -305,7 +338,7 @@ class Conn:
         cid, csec = google_client(self.mgr, self.pdef.id)
         if not cid:
             cid, csec = self.cfg("client_id"), self.cfg("client_secret")
-        return {"Authorization": "Bearer " + self.mgr.google.access_token(self.pdef.id, cid, csec)}
+        return {"Authorization": "Bearer " + self.mgr.google.access_token(self.pdef.id, cid, csec, owner=self.owner)}
 
 
 # ----------------------------------------------------------------------------- built-in connectors
@@ -1029,6 +1062,106 @@ def _docx_render(fp: Path, title: str, text: str, a: dict) -> list[str]:
             doc.add_paragraph()
     doc.save(str(fp))
     return [f"Created DOCX {fp.name}."]
+
+def build_gdrive(c: Conn) -> list[ToolSpec]:
+    """Google Drive: search, read, upload, share and organize the user's files."""
+    DRIVE = "https://www.googleapis.com/drive/v3/files"
+    UPLOAD = "https://www.googleapis.com/upload/drive/v3/files"
+    _GOOGLE_MIME_EXPORT = {
+        "application/vnd.google-apps.document": "text/plain",
+        "application/vnd.google-apps.spreadsheet": "text/csv",
+        "application/vnd.google-apps.presentation": "text/plain",
+    }
+
+    def H() -> dict:
+        return c.google_headers()
+
+    def search(ctx, a):
+        clauses = ["trashed=false"]
+        if a.get("name"):
+            clauses.append("name contains '" + str(a["name"]).replace("'", "\\'") + "'")
+        if a.get("folder_id"):
+            clauses.append(f"'{a['folder_id']}' in parents")
+        if a.get("mime_type"):
+            clauses.append(f"mimeType='{a['mime_type']}'")
+        res = c.http(ctx, "GET", DRIVE, headers=H(),
+                     params={"q": " and ".join(clauses), "pageSize": min(int(a.get("limit") or 20), 50),
+                             "orderBy": "modifiedTime desc",
+                             "fields": "files(id,name,mimeType,size,modifiedTime,webViewLink)"})
+        out = [{"id": f["id"], "name": f["name"], "type": f["mimeType"],
+                "size": f.get("size"), "modified": f.get("modifiedTime"), "url": f.get("webViewLink")}
+               for f in res.get("files", [])]
+        return out or "No matching files found in Google Drive."
+
+    def read(ctx, a):
+        meta = c.http(ctx, "GET", f"{DRIVE}/{a['file_id']}", headers=H(),
+                      params={"fields": "name,mimeType"})
+        mime = meta.get("mimeType", "")
+        if mime in _GOOGLE_MIME_EXPORT:
+            content = c.http(ctx, "GET", f"{DRIVE}/{a['file_id']}/export", headers=H(),
+                             params={"mimeType": _GOOGLE_MIME_EXPORT[mime]})
+        else:
+            content = c.http(ctx, "GET", f"{DRIVE}/{a['file_id']}", headers=H(),
+                             params={"alt": "media"})
+        text = content if isinstance(content, str) else json.dumps(content, ensure_ascii=False)
+        if len(text) > 20000:
+            text = text[:20000] + f"\n[... truncated {len(text) - 20000} chars ...]"
+        return {"name": meta.get("name"), "type": mime, "content": text or "(empty file)"}
+
+    def upload(ctx, a):
+        meta = c.http(ctx, "POST", UPLOAD, headers=H(),
+                      params={"uploadType": "media", "fields": "id,name,webViewLink"},
+                      data=str(a.get("content") or ""))
+        # media upload names the file "Untitled"; rename via metadata patch
+        name = str(a.get("name") or "uploaded.txt").strip()[:100]
+        res = c.http(ctx, "PATCH", f"{DRIVE}/{meta['id']}", headers=H(),
+                     json_body={"name": name}, params={"fields": "id,name,webViewLink"})
+        return {"file_id": res["id"], "name": res["name"], "url": res.get("webViewLink")}
+
+    def create_folder(ctx, a):
+        res = c.http(ctx, "POST", DRIVE, headers=H(),
+                     json_body={"name": str(a["name"]).strip()[:100],
+                                "mimeType": "application/vnd.google-apps.folder"},
+                     params={"fields": "id,name,webViewLink"})
+        return {"folder_id": res["id"], "name": res["name"], "url": res.get("webViewLink")}
+
+    def share(ctx, a):
+        role = a.get("role") if a.get("role") in ("reader", "writer") else "reader"
+        body: dict = {"role": role, "type": "anyone"} if not a.get("email") else \
+            {"role": role, "type": "user", "emailAddress": str(a["email"])}
+        c.http(ctx, "POST", f"{DRIVE}/{a['file_id']}/permissions", headers=H(), json_body=body)
+        return f"Shared '{a['file_id']}' with {'anyone with the link' if not a.get('email') else a['email']} ({role})."
+
+    def trash(ctx, a):
+        c.http(ctx, "PATCH", f"{DRIVE}/{a['file_id']}", headers=H(), json_body={"trashed": True})
+        return f"Moved file {a['file_id']} to the Drive trash (recoverable)."
+
+    return [
+        T("drive_search", "Search the user's Google Drive for files by name, folder or type.",
+          {"name": s("File name fragment to search for"), "folder_id": s("Optional parent folder id"),
+           "mime_type": s("Optional exact MIME type filter"), "limit": s("Max results (default 20)")},
+          [], search, read=True,
+          label=lambda a: "Drive search: " + short(a.get("name") or "all files", 40)),
+        T("drive_read", "Read the text content of a Google Drive file (Google Docs are exported as text).",
+          {"file_id": s("The Drive file id")}, ["file_id"], read, read=True,
+          label=lambda a: "Drive read: " + short(a.get("file_id"), 30)),
+        T("drive_upload", "Create a new text file (txt/csv/md/json/code) in Google Drive.",
+          {"name": s("File name, e.g. report.csv"), "content": s("File content as text")},
+          ["name", "content"], upload,
+          label=lambda a: "Drive upload: " + short(a.get("name"), 40)),
+        T("drive_create_folder", "Create a folder in Google Drive.",
+          {"name": s("Folder name")}, ["name"], create_folder,
+          label=lambda a: "Drive create folder: " + short(a.get("name"), 40)),
+        T("drive_share", "Share a Drive file (with a specific person or anyone with the link).",
+          {"file_id": s("The Drive file id"), "email": s("Email to share with (omit for link sharing)"),
+           "role": s("reader or writer (default reader)")},
+          ["file_id"], share,
+          label=lambda a: "Drive share: " + short(a.get("file_id"), 30)),
+        T("drive_delete", "Move a Drive file to the trash (recoverable, not a hard delete).",
+          {"file_id": s("The Drive file id")}, ["file_id"], trash,
+          label=lambda a: "Drive trash: " + short(a.get("file_id"), 30)),
+    ]
+
 
 def build_documents(c: Conn) -> list[ToolSpec]:
     """Read and create PDF and DOCX files in the workspace. Documents render with real
@@ -2073,6 +2206,11 @@ def builtin_defs() -> list[PluginDef]:
                                                            "https://www.googleapis.com/auth/drive.file"]},
                   build=build_gdocs, check=_google_check("https://www.googleapis.com/drive/v3/files?pageSize=1&fields=files(id)"),
                   help="Uses the same Google OAuth client as Gmail if you leave the fields blank. Enable the Google Docs, Sheets, Slides and Drive APIs."),
+        PluginDef("gdrive", "Google Drive", "Search, read, upload, share and organize files in the user's Google Drive.",
+                  fields=GOOGLE_FIELDS,
+                  oauth={"provider": "google", "scopes": ["https://www.googleapis.com/auth/drive"]},
+                  build=build_gdrive, check=_google_check("https://www.googleapis.com/drive/v3/about?fields=user"),
+                  help="Uses the same Google OAuth client as Gmail if you leave the fields blank. Enable the Google Drive API."),
         PluginDef("documents", "Documents (PDF & Word)", "Read text from PDF and Word files, and create new PDF/DOCX files in the workspace.",
                   build=build_documents, help="Works out of the box — no setup needed. Files are saved in the Bot workspace and show up in the Files screen."),
         PluginDef("shell", "Host Shell (admin)", "Run commands on the server that runs ZerotheBot — the machine with the app code. For engineer Bots that fix, build and deploy things.",
@@ -2363,11 +2501,14 @@ class PluginManager:
                          setup_url=m.get("setup_url", "") or "", setup_label=m.get("setup_label", "") or "")
 
     # -- config ----------------------------------------------------------------
-    def config_value(self, pid: str, key: str) -> str:
+    def config_value(self, pid: str, key: str, owner: str = "") -> str:
         d = self.defs.get(pid)
         field_ = next((f for f in (d.fields if d else []) if f["key"] == key), None)
         if (field_ and field_.get("secret")) or key == "refresh_token":
-            return secrets.get_secret(f"plugin:{pid}:{key}") or ""
+            # Secret credentials are owner-scoped when the acting Bot's owner is
+            # known (their own Connect sign-in), with the legacy server-wide
+            # value as fallback so older connects keep working.
+            return _cget(pid, owner, key)
         return str((self.settings.get(f"plugin_cfg.{pid}", {}) or {}).get(key, "") or (field_ or {}).get("default", ""))
 
     def set_config(self, pid: str, values: dict[str, str]) -> None:
@@ -2387,18 +2528,18 @@ class PluginManager:
                 cfg[k] = v
         self.settings.set(f"plugin_cfg.{pid}", cfg)
 
-    def clear_secrets(self, pid: str) -> None:
+    def clear_secrets(self, pid: str, owner: str = "") -> None:
         d = self.defs.get(pid)
         for f in (d.fields if d else []):
             if f.get("secret"):
-                secrets.delete_secret(f"plugin:{pid}:{f['key']}")
-        secrets.delete_secret(f"plugin:{pid}:refresh_token")
+                secrets.delete_secret(_ckey(pid, owner, f["key"]))
+        secrets.delete_secret(_ckey(pid, owner, "refresh_token"))
 
-    def configured(self, pid: str) -> bool:
+    def configured(self, pid: str, owner: str = "") -> bool:
         d = self.defs.get(pid)
         if not d:
             return False
-        rt = secrets.get_secret(f"plugin:{pid}:refresh_token")
+        rt = _cget(pid, owner, "refresh_token")
         tok = self.config_value(pid, "token")
         for f in d.fields:
             if f.get("required") and not self.config_value(pid, f["key"]):
@@ -2425,7 +2566,7 @@ class PluginManager:
                 return False
         return True
 
-    def info(self, pid: str) -> dict:
+    def info(self, pid: str, owner: str = "") -> dict:
         d = self.defs[pid]
         specs = []
         try:
@@ -2449,24 +2590,24 @@ class PluginManager:
                          "client ID or secret to paste. Use the Google account that owns the Gmail/Calendar/Drive data.")
         return {"id": d.id, "name": d.name, "description": d.description, "kind": d.kind, "version": d.version, "help": help_text,
                 "fields": [{**f, "set": bool(self.config_value(d.id, f["key"])), "value": ("" if f.get("secret") else self.config_value(d.id, f["key"]))} for f in fields],
-                "oauth": bool(d.oauth), "connected": bool(not d.oauth or secrets.get_secret(f"plugin:{d.id}:refresh_token")),
+                "oauth": bool(d.oauth), "connected": bool(not d.oauth or _cget(d.id, owner, "refresh_token")),
                 "managed": managed_google,
                 "setup_url": setup_url, "setup_label": setup_label,
-                "configured": self.configured(d.id), "allowed": plugin_allowed(self.admin, d.id), "installed": d.kind != "builtin" and d.kind != "rest",
+                "configured": self.configured(d.id, owner), "allowed": plugin_allowed(self.admin, d.id), "installed": d.kind != "builtin" and d.kind != "rest",
                 "source": d.source, "tools": [{"name": t.name, "description": t.description, "read_only": t.read_only or t.risk is None} for t in specs],
                 "removable": d.kind in ("declarative", "python", "rest")}
 
-    def list(self) -> list[dict]:
-        return [self.info(pid) for pid in self.defs]
+    def list(self, owner: str = "") -> list[dict]:
+        return [self.info(pid, owner=owner) for pid in self.defs]
 
     # -- tools for a Bot ---------------------------------------------------------
-    def tool_specs(self, granted: set[str]) -> list[ToolSpec]:
+    def tool_specs(self, granted: set[str], owner: str = "") -> list[ToolSpec]:
         out: list[ToolSpec] = []
         for pid, d in self.defs.items():
-            if f"plugin:{pid}" not in granted or not plugin_allowed(self.admin, pid) or not d.build or not self.configured(pid):
+            if f"plugin:{pid}" not in granted or not plugin_allowed(self.admin, pid) or not d.build or not self.configured(pid, owner):
                 continue
             try:
-                for t in d.build(Conn(self, d)):
+                for t in d.build(Conn(self, d, owner=owner)):
                     t.group = f"plugin:{pid}"
                     out.append(t)
             except Exception as e:  # noqa: BLE001
@@ -2489,7 +2630,7 @@ class PluginManager:
         """In-flight sign-in requests (state -> request), used by the callbacks."""
         return self.google.pending
 
-    def begin_oauth(self, pid: str, redirect_uri: str, mobile: bool = False) -> str:
+    def begin_oauth(self, pid: str, redirect_uri: str, mobile: bool = False, owner: str = "") -> str:
         d = self.defs.get(pid)
         if not d or not d.oauth:
             raise ValueError("This plugin does not use sign-in.")
@@ -2516,7 +2657,7 @@ class PluginManager:
         token_url = c.cfg("token_url") or token_url
         return self.google.auth_url(pid, cid, o["scopes"], redirect_uri, auth_url=auth_url, token_url=token_url,
                                     secret_style=o.get("secret_style", "body"), extra=o.get("extra_auth"),
-                                    mobile=mobile)
+                                    mobile=mobile, owner=owner)
 
     def finish_oauth(self, state: str, code: str) -> str:
         p = self.google.pending.get(state)
@@ -2527,7 +2668,8 @@ class PluginManager:
         cid, csec = google_client(self, p["plugin"])
         if not cid:
             cid, csec = c.cfg("client_id"), c.cfg("client_secret")
-        return self.google.exchange(state, code, cid, csec, token_url=p.get("token_url"), secret_style=p.get("secret_style", "body"))
+        return self.google.exchange(state, code, cid, csec, token_url=p.get("token_url"), secret_style=p.get("secret_style", "body"),
+                                    owner=str(p.get("owner") or ""))
 
     # -- install / uninstall -----------------------------------------------------------
     def catalog(self) -> list[dict]:
@@ -2612,6 +2754,12 @@ class PluginManager:
             shutil.rmtree(d.path, ignore_errors=True)
             self.db.execute("DELETE FROM plugins WHERE id=?", (pid,))
         self.clear_secrets(pid)
+        # Owner-scoped credentials too: every owner who connected this plugin.
+        try:
+            for r in self.engine.db.query("SELECT DISTINCT owner FROM bots WHERE owner!=''"):
+                self.clear_secrets(pid, owner=str(r["owner"]))
+        except Exception:  # noqa: BLE001
+            pass
         self.reload()
         self.engine.events.publish("plugins", change="removed", plugin_id=pid)
 

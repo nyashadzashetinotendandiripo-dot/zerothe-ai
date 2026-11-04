@@ -385,9 +385,18 @@ export async function codeExecute(base, code) {
 }
 
 // ---------------------------------------------------------------- Tier 3: Multi-agent collaboration
-export async function agentCollaborate(base, task) {
+export async function agentCollaborate(base, task, botIds) {
   return authed(base, '/api/agent/collaborate', {
-    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ task }),
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ task, bot_ids: botIds || [] }),
+  });
+}
+
+// Register/unregister this device for push notifications (FCM).
+export async function pushRegister(base, token, platform = 'android') {
+  return authed(base, '/api/push/register', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ token, platform }),
   });
 }
 
