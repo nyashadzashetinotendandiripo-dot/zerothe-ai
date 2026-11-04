@@ -526,7 +526,7 @@ def create_app(engine: Engine, token: str) -> FastAPI:
     @app.get("/api/goals", dependencies=[api])
     def goals_list(request: Request) -> dict:
         user = current_user(request)
-        return {"goals": eng.goals.list(user if not _is_admin(user) else None)}
+        return {"goals": eng.goals.list(user if not auth_mod.is_admin(user) else None)}
 
     @app.post("/api/goals", dependencies=[api])
     def goals_create(request: Request, body: dict = Body(...)) -> dict:
@@ -538,17 +538,17 @@ def create_app(engine: Engine, token: str) -> FastAPI:
     def goals_update(request: Request, gid: str, body: dict = Body(...)) -> dict:
         user = current_user(request)
         fields = {k: body[k] for k in ("title", "target", "cadence_minutes", "status", "progress") if k in body}
-        return eng.goals.update(gid, user if not _is_admin(user) else None, **fields)
+        return eng.goals.update(gid, user if not auth_mod.is_admin(user) else None, **fields)
 
     @app.delete("/api/goals/{gid}", dependencies=[api])
     def goals_delete(request: Request, gid: str) -> dict:
         user = current_user(request)
-        return {"ok": eng.goals.delete(gid, user if not _is_admin(user) else None)}
+        return {"ok": eng.goals.delete(gid, user if not auth_mod.is_admin(user) else None)}
 
     @app.post("/api/goals/{gid}/run", dependencies=[api])
     def goals_run(request: Request, gid: str) -> dict:
         user = current_user(request)
-        g = eng.goals.get(gid, user if not _is_admin(user) else None)
+        g = eng.goals.get(gid, user if not auth_mod.is_admin(user) else None)
         if not g:
             raise HTTPException(404, "No such goal.")
         eng.goals._prod(g)  # noqa: SLF001 - explicit "work on it now" from the user
@@ -559,7 +559,7 @@ def create_app(engine: Engine, token: str) -> FastAPI:
     def briefing(request: Request) -> dict:
         user = current_user(request)
         d = eng.digest.build("today")
-        goals = [g for g in eng.goals.list(user if not _is_admin(user) else None) if g.get("status") == "active"]
+        goals = [g for g in eng.goals.list(user if not auth_mod.is_admin(user) else None) if g.get("status") == "active"]
         try:
             unread = int(eng.db.scalar("SELECT COUNT(*) FROM notifications WHERE read=0", (), 0))
         except Exception:  # noqa: BLE001
@@ -607,7 +607,7 @@ def create_app(engine: Engine, token: str) -> FastAPI:
     def templates_delete(request: Request, tid: str) -> dict:
         user = current_user(request)
         row = eng.db.one("SELECT owner FROM community_templates WHERE id=?", (tid,))
-        if not row or (row["owner"] != user and not _is_admin(user)):
+        if not row or (row["owner"] != user and not auth_mod.is_admin(user)):
             raise HTTPException(404, "No such template.")
         eng.db.execute("DELETE FROM community_templates WHERE id=?", (tid,))
         return {"ok": True}
