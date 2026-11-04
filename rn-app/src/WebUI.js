@@ -372,10 +372,10 @@ export function BotsList({ bots, groups, templates, busy, onOpen, onOpenGroup, o
       </View>
     </Pressable>
   ));
-  const BotRow = ({ b }) => {
+  const botRow = (b) => {
     const s = stateOf(busy, b.id);
     return (
-      <Pressable onPress={() => onOpen(b)} onLongPress={() => onBotLong(b)} delayLongPress={400}
+      <Pressable key={b.id} onPress={() => onOpen(b)} onLongPress={() => onBotLong(b)} delayLongPress={400}
         style={({ pressed }) => [W.grow, pressed && { backgroundColor: C.panel }]}>
         <Avatar bot={b} size={44} badge={s.key === 'work' || s.key === 'wait'} />
         <View style={{ flex: 1, minWidth: 0 }}>
@@ -423,7 +423,7 @@ export function BotsList({ bots, groups, templates, busy, onOpen, onOpenGroup, o
           <View>
             {!ql && favs.length > 0 ? favRow : null}
             {empty}
-            {splitBots({ sorted, favs, favRow, BotRow, q })}
+            {splitBots({ sorted, favs, favRow, botRow, q })}
             {!!visible.length ? <View style={{ height: 12 }} /> : null}
             {(!!groupList.length || !!hidden.length || !templates) ? null : null}
             {groupList.length > 0 ? (
@@ -468,25 +468,28 @@ export function BotsList({ bots, groups, templates, busy, onOpen, onOpenGroup, o
   );
 }
 // splitter keeps row & section order: pinned/grouped/segments of Bots list
-function splitBots({ sorted, BotRow, q }) {
+function splitBots({ sorted, botRow, q }) {
   if (!sorted.length) return null;
-  return sorted.map((b) => <BotRow key={b.id} b={b} />);
+  // botRow is a plain function returning elements (key on the root) — using it
+  // as a component type would remount every row on each busy-state tick.
+  return sorted.map((b) => botRow(b));
 }
 
 // ---------------------------------------------------------------- home
 export function HomeView({ bots, busy, apps, onOpen, onOpenThread, conn, account, onAvatar, onBack, onSearch }) {
   const [us, setUs] = useState(null);
   const [acts, setActs] = useState([]);
-  const [headline, setHeadline] = useState('');
   const ins = useSafeAreaInsets();
   const load = useCallback(async () => {
     try {
       setUs(await api('/api/usage'));
     } catch (e) { /* ignore */ }
     try { const d = await api('/api/actions?limit=8'); setActs(Array.isArray(d) ? d : (d.actions || [])); } catch (e) { /* ignore */ }
-    try { const dg = await api('/api/digest?spec=today'); setHeadline((dg && dg.headline) || ''); } catch (e) { /* ignore */ }
+    // NOTE: no /api/digest endpoint exists — the old 15s poll just 404'd forever.
   }, []);
-  useEffect(() => { load(); const t = setInterval(load, 15000); return () => clearInterval(t); }, [load]);
+  // 15s polling burned battery and hammered the server; the SSE stream already
+  // pushes live changes, so this is just a slow safety-net refresh.
+  useEffect(() => { load(); const t = setInterval(load, 60000); return () => clearInterval(t); }, [load]);
   const workingIds = Object.keys(busy || {});
   const workingBots = (bots || []).filter((b) => workingIds.includes(b.id));
   const tok = us && (us.total_tokens || us.total);
@@ -512,7 +515,11 @@ export function HomeView({ bots, busy, apps, onOpen, onOpenThread, conn, account
         <Text style={W.section}>Today</Text>
         <View style={W.banner}>
           <Text style={W.bannerB}>●</Text>
-          <Text style={{ color: C.text, fontSize: 14, flex: 1 }} numberOfLines={2}>{headline || 'All quiet — no approvals waiting.'}</Text>
+          <Text style={{ color: C.text, fontSize: 14, flex: 1 }} numberOfLines={2}>
+            {(apps || []).length
+              ? String((apps || []).length) + ' action' + ((apps || []).length === 1 ? '' : 's') + ' waiting for your approval.'
+              : (workingBots.length ? 'Your Bots are working — ' + workingBots.length + ' task' + (workingBots.length === 1 ? '' : 's') + ' in progress.' : 'All quiet — no approvals waiting.')}
+          </Text>
         </View>
         <View style={W.grid}>
           <View style={W.tile}>
@@ -1922,23 +1929,34 @@ export function ConnectorsView({ conn, account, onAvatar }) {
   );
 }
 
-// ---------------------------------------------------------------- muse: ideas
+// ---------------------------------------------------------------- muse: ideas (real, state-driven)
+// Suggestions computed from the account's actual state — no invented emails,
+// purchases or health data. Each idea is an action the app can really do.
 export function IdeasView({ conn, account, onAvatar }) {
-  const ideas = [
-    { icon: '✈️', title: 'I can follow up on your airline refund', sub: 'I found an email from the airline confirming your cancelled flight on October 14, but no refund has been posted. Want me to draft a follow-up and track it until it lands?' },
-    { icon: '🛒', title: 'I can find a bigger stroller for Luca', sub: 'Based on Luca’s age he’ll outgrow his stroller in the next month. I’m watching Marketplace for a bigger option under $300.' },
-    { icon: '🏃', title: 'Build a daily training plan for your half marathon', sub: "Your VO2 max is up 4% and your average pace dropped to 8:12. I'm building a 10-week plan synced to your calendar that adjusts based on your health connector data." },
-    { icon: '🍽', title: 'I can book your anniversary dinner', sub: 'You saved a restaurant on Instagram last month and there’s an opening Saturday at 8 PM. Want me to reserve a table for two?' },
-    { icon: '😴', title: 'I can help dial in your sleep based on the data', sub: 'Your sleep connector shows inconsistent bedtimes. Want me to set a wind-down routine and block late-night notifications?' },
-  ];
+  const [plugins, setPlugins] = useState([]);
+  const [bots, setBots] = useState([]);
+  const [mcps, setMcps] = useState([]);
+  useEffect(() => { (async () => {
+    try { const d = await pluginsList(); setPlugins((d && d.plugins) || []); } catch (e) { /* ignore */ }
+    try { const d = await api('/api/bots'); setBots(Array.isArray(d) ? d : (d.bots || [])); } catch (e) { /* ignore */ }
+    try { setMcps(await mcpList()); } catch (e) { /* ignore */ }
+  })(); }, []);
+  const ideas = [];
+  const gmail = plugins.find((p) => p.id === 'gmail');
+  if (gmail && !gmail.connected) ideas.push({ icon: '📧', title: 'Connect Gmail', sub: 'Link your inbox so Bots can draft follow-ups, summarize threads and turn emails into approvals.' });
+  if (!(bots || []).length) ideas.push({ icon: '🤖', title: 'Create your first Bot', sub: 'Give it a job in plain language — it will ask for the tools it needs and check in before acting.' });
+  if (!(mcps || []).length) ideas.push({ icon: '🔌', title: 'Add an MCP server', sub: 'MCP servers hand your Bots extra tools. Paste a config in Connectors and the tools appear for every Bot you grant.' });
+  const unconnected = plugins.filter((p) => !p.connected && p.id !== 'gmail').slice(0, 3);
+  for (const p of unconnected) ideas.push({ icon: connectorIcon(p), title: 'Connect ' + (p.name || p.id), sub: String(p.description || 'Available in Connectors.') });
+  if (!ideas.length) ideas.push({ icon: '✅', title: 'You are all set up', sub: 'Connectors, Bots and tools look good. New ideas appear here as your account grows.' });
   return (
     <View style={W.screen}>
       <WebTopBar title="Ideas" showBack conn={conn} account={account} onAvatar={onAvatar} />
       <ScrollView contentContainerStyle={{ paddingBottom: 30, paddingTop: 10 }} showsVerticalScrollIndicator={false}>
         <View style={{ paddingHorizontal: 16 }}>
-          <Text style={W.museSection}>Ideas</Text>
+          <Text style={W.museSection}>Setup ideas</Text>
           {ideas.map((idea, i) => (
-            <Pressable key={i} style={[W.museCard, { flexDirection: 'row', gap: 10, padding: 12 }]}>
+            <Pressable key={i} onPress={onAvatar} style={[W.museCard, { flexDirection: 'row', gap: 10, padding: 12 }]}>
               <View style={{ width: 40, height: 40, borderRadius: 10, backgroundColor: C.panel2, alignItems: 'center', justifyContent: 'center' }}>
                 <Text style={{ fontSize: 18 }}>{idea.icon}</Text>
               </View>
@@ -1955,67 +1973,33 @@ export function IdeasView({ conn, account, onAvatar }) {
   );
 }
 
-// ---------------------------------------------------------------- muse: goals
+// ---------------------------------------------------------------- muse: goals (honest empty state)
+// Goal tracking is not built yet — say so instead of showing invented goals.
 export function GoalsView({ conn, account, onAvatar }) {
-  const goals = [
-    { id: 'dining', title: 'Dinner reservations', sub: 'Sushi restaurants downtown', on: false },
-    { id: 'marathon', title: 'Marathon prep', sub: 'Build endurance, hit your pace goals, and cross that finish line strong.', on: true },
-    { id: 'car', title: 'Save for new car', sub: 'On track to hit your goals if you save $210 each month towards your new car fund.', on: false },
-  ];
   return (
     <View style={W.screen}>
       <WebTopBar title="Goals" showBack conn={conn} account={account} onAvatar={onAvatar} />
       <ScrollView contentContainerStyle={{ paddingBottom: 30, paddingTop: 10 }} showsVerticalScrollIndicator={false}>
         <View style={{ paddingHorizontal: 16 }}>
-          <Text style={W.museSection}>Goals</Text>
-          {goals.map((g) => (
-            <Pressable key={g.id} style={[W.museCard, { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', padding: 12 }]}>
-              <View style={{ flex: 1, minWidth: 0 }}>
-                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 4 }}>
-                  <Pressable style={[W.museGoalToggle, g.on && W.museGoalToggleOn]}>
-                    <Text style={{ fontSize: 10 }}>{g.on ? '✓' : ''}</Text>
-                  </Pressable>
-                  <Text style={{ color: C.text, fontWeight: '700', fontSize: 14 }}>{g.title}</Text>
-                  {g.on ? <Text style={{ color: C.ok, fontSize: 11, fontWeight: '700' }}>Tracking</Text> : null}
-                </View>
-                <Text style={W.museSub}>{g.sub}</Text>
-              </View>
-              <Text style={{ color: C.muted, fontSize: 11 }}>▸</Text>
-            </Pressable>
-          ))}
-          <View style={{ marginTop: 10 }}>
-            <Pressable style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
-              <Text style={{ color: C.ok, fontWeight: '800', fontSize: 12 }}>Show 2 more</Text>
-            </Pressable>
+          <View style={[W.museCard, { alignItems: 'center', padding: 24 }]}>
+            <Text style={{ fontSize: 30 }}>🎯</Text>
+            <Text style={{ color: C.text, fontWeight: '800', fontSize: 15, marginTop: 8 }}>Goals are coming soon</Text>
+            <Text style={[W.gSub, { textAlign: 'center', marginTop: 6 }]}>
+              Goals will let a Bot work toward an outcome over days or weeks — save for a trip, train for a race, chase an invoice — and report progress on its own.
+            </Text>
           </View>
-          <View style={{ marginTop: 18, borderTopWidth: 1, borderColor: C.line, paddingTop: 10 }}>
-            <Text style={W.museSection}>Create a goal</Text>
-            <Pressable style={[W.museCard, { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', padding: 12 }]}>
-              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
-                <View style={{ width: 36, height: 36, borderRadius: 10, backgroundColor: C.panel2, alignItems: 'center', justifyContent: 'center' }}>
-                  <Text style={{ fontSize: 18 }}>❤️</Text>
-                </View>
-                <View style={{ flex: 1, minWidth: 0 }}>
-                  <Text style={{ color: C.text, fontWeight: '600', fontSize: 14 }}>Health</Text>
-                </View>
-              </View>
-              <Pressable style={{ backgroundColor: C.panel2, borderRadius: 10, paddingHorizontal: 12, paddingVertical: 6 }}>
-                <Text style={{ color: C.ok, fontWeight: '800', fontSize: 12 }}>+</Text>
-              </Pressable>
-            </Pressable>
-            <Pressable style={[W.museCard, { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', padding: 12, marginTop: 8 }]}>
-              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
-                <View style={{ width: 36, height: 36, borderRadius: 10, backgroundColor: C.panel2, alignItems: 'center', justifyContent: 'center' }}>
-                  <Text style={{ fontSize: 18 }}>🤝</Text>
-                </View>
-                <View style={{ flex: 1, minWidth: 0 }}>
-                  <Text style={{ color: C.text, fontWeight: '600', fontSize: 14 }}>Relationships</Text>
-                </View>
-              </View>
-              <Pressable style={{ backgroundColor: C.panel2, borderRadius: 10, paddingHorizontal: 12, paddingVertical: 6 }}>
-                <Text style={{ color: C.ok, fontWeight: '800', fontSize: 12 }}>+</Text>
-              </Pressable>
-            </Pressable>
+          <Text style={W.museSection}>What works today</Text>
+          <View style={[W.museCard, { padding: 12 }]}>
+            <Text style={{ color: C.text, fontSize: 13, fontWeight: '600' }}>🤖 Bots with jobs</Text>
+            <Text style={W.museSub}>Create a Bot, describe the job, and it executes with approvals before sensitive actions.</Text>
+          </View>
+          <View style={[W.museCard, { padding: 12 }]}>
+            <Text style={{ color: C.text, fontSize: 13, fontWeight: '600' }}>🔁 Routines & triggers</Text>
+            <Text style={W.museSub}>Schedule recurring work from a Bot's settings — the closest thing to a goal today.</Text>
+          </View>
+          <View style={[W.museCard, { padding: 12 }]}>
+            <Text style={{ color: C.text, fontSize: 13, fontWeight: '600' }}>📥 Inbox approvals</Text>
+            <Text style={W.museSub}>Everything a Bot wants to do that touches money, email or logins waits for you here.</Text>
           </View>
         </View>
       </ScrollView>
@@ -2023,8 +2007,22 @@ export function GoalsView({ conn, account, onAvatar }) {
   );
 }
 
-// ---------------------------------------------------------------- muse: finance tracker
+// ---------------------------------------------------------------- muse: spending (real data)
+// Shows the account's actual plan + token spend. No fabricated bank data —
+// real card tracking needs a finance connector (Plaid) that isn't set up yet.
 export function FinanceView({ conn, account, onAvatar }) {
+  const [meInfo, setMeInfo] = useState(null);
+  const [us, setUs] = useState(null);
+  useEffect(() => { (async () => {
+    try { setMeInfo(await api('/api/me')); } catch (e) { /* ignore */ }
+    try { setUs(await api('/api/usage')); } catch (e) { /* ignore */ }
+  })(); }, []);
+  const plan = (meInfo && meInfo.plan_label) || 'Free';
+  const price = meInfo && meInfo.plan_price != null ? '$' + Number(meInfo.plan_price).toFixed(0) + '/mo' : '$0/mo';
+  const cost = us && us.total_cost != null ? '$' + Number(us.total_cost).toFixed(2) : null;
+  const tokens = us && (us.total_tokens || us.total) ? Number(us.total_tokens || us.total).toLocaleString() : null;
+  const week = meInfo && meInfo.week_tokens != null ? Number(meInfo.week_tokens).toLocaleString() : null;
+  const cap = meInfo && meInfo.weekly_tokens ? Number(meInfo.weekly_tokens).toLocaleString() : null;
   return (
     <View style={W.screen}>
       <WebTopBar title="Spending" showBack conn={conn} account={account} onAvatar={onAvatar} />
@@ -2032,44 +2030,29 @@ export function FinanceView({ conn, account, onAvatar }) {
         <View style={{ paddingHorizontal: 16 }}>
           <View style={[W.financeCard, { flexDirection: 'row', gap: 12 }]}>
             <View style={{ flex: 1 }}>
-              <Text style={W.financeCardCap}>Spending (last 3 months)</Text>
-              <Text style={W.financeCardVal}>$4,320/mo</Text>
-              <Text style={W.financeCardSub}>Down 35% to $410/mo. You're averaging $430/day.</Text>
+              <Text style={W.financeCardCap}>Your plan</Text>
+              <Text style={W.financeCardVal}>{plan} · {price}</Text>
+              <Text style={W.financeCardSub}>{week != null ? Number(week).toLocaleString() : '0'} tokens this week{cap ? ' of ' + cap : ' (no cap)'}.</Text>
             </View>
             <View style={{ width: 64, height: 64, borderRadius: 16, backgroundColor: 'rgba(255,255,255,.15)', alignItems: 'center', justifyContent: 'center' }}>
-              <Text style={{ fontSize: 24 }}>📉</Text>
+              <Text style={{ fontSize: 24 }}>📊</Text>
             </View>
           </View>
           <View style={{ marginTop: 16 }}>
-            <Text style={{ color: C.text, fontWeight: '700', fontSize: 14 }}>Things standing out:</Text>
-            <View style={[W.museCard, { padding: 12, marginTop: 8 }]}>
-              <View style={{ flexDirection: 'row', gap: 8, alignItems: 'flex-start' }}>
-                <Text style={{ color: C.muted, fontSize: 12, marginTop: 2 }}>•</Text>
-                <View style={{ flex: 1, minWidth: 0 }}>
-                  <Text style={{ color: C.text, fontSize: 13, fontWeight: '600' }}>Dining is up 35% to $410/mo, and you have three subscriptions you haven't opened in 90 days.</Text>
-                  <Text style={{ color: C.muted, fontSize: 11, marginTop: 4 }}>$47/mo you won't miss. Want me to cancel them?</Text>
-                </View>
-              </View>
+            <Text style={{ color: C.text, fontWeight: '700', fontSize: 14 }}>AI spend</Text>
+            <View style={[W.museCard, { padding: 12, marginTop: 8, flexDirection: 'row', justifyContent: 'space-between' }]}>
+              <Text style={{ color: C.text, fontSize: 13, fontWeight: '600' }}>Model usage cost</Text>
+              <Text style={{ color: C.text, fontSize: 13, fontWeight: '800' }}>{cost != null ? cost : (tokens ? tokens + ' tok' : '–')}</Text>
             </View>
+            <Text style={[W.gSub, { marginTop: 6 }]}>Every Bot turn is metered here — this is what your plan's weekly token budget covers.</Text>
           </View>
           <View style={{ marginTop: 18 }}>
-            <Text style={{ color: C.text, fontWeight: '700', fontSize: 14 }}>Finance tracker</Text>
-            <Text style={W.gSub} marginTop={2}>Spending, savings, subscriptions, and more.</Text>
-            <View style={W.financeCard}>
-              <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginTop: 12 }}>
-                <View>
-                  <Text style={W.financeCardCap}>Felix Card ····0589</Text>
-                  <Text style={W.financeCardVal}>$4,850</Text>
-                </View>
-                <View>
-                  <Text style={W.financeCardCap}>Peloton Card</Text>
-                  <Text style={W.financeCardVal}>$4,320</Text>
-                </View>
-                <View>
-                  <Text style={W.financeCardCap}>Quicksilver</Text>
-                  <Text style={W.financeCardVal}>$530</Text>
-                </View>
-              </View>
+            <Text style={{ color: C.text, fontWeight: '700', fontSize: 14 }}>Bank & card tracking</Text>
+            <Text style={W.gSub} marginTop={2}>Connect a finance connector and your Bots can watch subscriptions and flag waste.</Text>
+            <View style={[W.museCard, { padding: 14, alignItems: 'center' }]}>
+              <Text style={{ fontSize: 22 }}>🏦</Text>
+              <Text style={{ color: C.text, fontWeight: '700', fontSize: 13, marginTop: 6 }}>No finance connector yet</Text>
+              <Text style={{ color: C.muted, fontSize: 12, marginTop: 2, textAlign: 'center' }}>Open Connectors to link one. Until then this screen shows your real ZerotheBot spend only.</Text>
             </View>
           </View>
         </View>
@@ -2428,6 +2411,7 @@ export function AndroidBoxScreen({ conn, account, onAvatar }) {
   const [machines, setMachines] = useState([]);
   const [selectedMid, setSelectedMid] = useState(null);
   const [streamUrl, setStreamUrl] = useState(null);
+  const [shot, setShot] = useState(null);
   const [loading, setLoading] = useState(false);
   const [adbCmd, setAdbCmd] = useState('');
   const [adbResult, setAdbResult] = useState(null);
@@ -2472,8 +2456,11 @@ export function AndroidBoxScreen({ conn, account, onAvatar }) {
     setLoading(true);
     try {
       const d = await ibDesktopScreenshot(undefined, selectedMid);
-      // screenshot returns binary; we'd need to display it as base64 data URI
-      Alert.alert('Screenshot', 'Screenshot captured (binary response). Check server logs.');
+      if (d && d.screenshot) {
+        setShot('data:' + (d.content_type || 'image/png') + ';base64,' + d.screenshot);
+      } else {
+        Alert.alert('Screenshot', 'The box did not return an image yet. Start the desktop first.');
+      }
     } catch (e) { Alert.alert('Screenshot failed', String(e.message || e)); }
     finally { setLoading(false); }
   };
@@ -2553,6 +2540,11 @@ export function AndroidBoxScreen({ conn, account, onAvatar }) {
                     <Text style={{ color: C.text, fontWeight: '700', fontSize: 12 }}>Screenshot</Text>
                   </Pressable>
                 </View>
+                {!!shot && (
+                  <View style={{ alignItems: 'center', marginTop: 10 }}>
+                    <Image source={{ uri: shot }} style={{ width: 260, height: 460, borderRadius: 16, backgroundColor: '#000' }} resizeMode="contain" />
+                  </View>
+                )}
               </View>
             </>
           )}

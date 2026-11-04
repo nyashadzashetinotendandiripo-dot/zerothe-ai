@@ -336,8 +336,9 @@ function ChatScreen({ thread, threads, botName: propsBotName, onSwitch, onBack, 
 
   // Safety net: the phone's SSE can be blocked by a proxy or killed by the OS, and
   // then the answer never appeared while the screen kept saying "working". Poll the
-  // thread as well — every 1.5 s while a turn runs, every 3 s otherwise, so an
-  // answer shows up on its own even if the live stream is dead.
+  // thread as well — every 1.5 s while a turn runs (or just after you send), then
+  // back off to 15 s when idle: SSE already pushes live updates, so a fast idle
+  // poll only burned battery and server time.
   useEffect(() => {
     let alive = true;
     let t = null;
@@ -345,9 +346,9 @@ function ChatScreen({ thread, threads, botName: propsBotName, onSwitch, onBack, 
       await loadWithConn(true);
       if (!alive) return;
       const fast = busyRef.current || Date.now() < fastRef.current;
-      t = setTimeout(tick, fast ? 1500 : 3000);
+      t = setTimeout(tick, fast ? 1500 : 15000);
     };
-    t = setTimeout(tick, ((busyRef.current || Date.now() < fastRef.current) ? 1500 : 3000));
+    t = setTimeout(tick, ((busyRef.current || Date.now() < fastRef.current) ? 1500 : 15000));
     return () => { alive = false; if (t) clearTimeout(t); };
   }, [load]);
 

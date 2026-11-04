@@ -99,6 +99,12 @@ class Engine:
         self.recover()
         self.mcp.start_all()
         self.routines.start()
+        # One-time owner backfill on legacy usage rows: cheap at startup, but
+        # it must not run inside /api/me on every request (full-table scan).
+        try:
+            self.usage.backfill_owners()
+        except Exception:
+            pass
         s = self.routines.sched
         s.add_job(self.messaging.run_due_followups, "interval", minutes=1, id="_followups", replace_existing=True)
         s.add_job(self.messaging.nudge_stalled, "interval", minutes=15, id="_nudge", replace_existing=True)

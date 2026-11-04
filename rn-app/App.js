@@ -188,6 +188,14 @@ function ZbRoot() {
     } catch (e) { noteOnce('bootstrap', 'net', e, 'bootstrap'); }
   }, []);
 
+  // Debounced refresh: a busy bot fires many events in a burst, and each one
+  // used to trigger a full /api/bootstrap round-trip. Coalesce them.
+  const refreshTimer = useRef(null);
+  const refreshSoon = useCallback(() => {
+    if (refreshTimer.current) return;
+    refreshTimer.current = setTimeout(() => { refreshTimer.current = null; refresh(); }, 400);
+  }, [refresh]);
+
   const onEvent = useCallback((ev) => {
     // Socket callbacks are outside React: a throw here is uncaught and closes
     // the app, so keep the whole handler contained.
@@ -202,13 +210,12 @@ function ZbRoot() {
           return o;
         });
       }
-      if (ev.type === 'bots' || ev.type === 'groups' || ev.type === 'approval') refresh();
+      if (ev.type === 'bots' || ev.type === 'groups' || ev.type === 'approval' || ev.type === 'notification') refreshSoon();
       if (['message', 'delta', 'delta_reset', 'turn', 'approval'].includes(ev.type)) chatHandler.current && chatHandler.current(ev);
-      if (ev.type === 'notification') refresh();
     } catch (e) {
       note('event', e, 'app event ' + String(ev && ev.type));
     }
-  }, [refresh, chatHandler]);
+  }, [refreshSoon, chatHandler]);
 
   // one live connection for the whole app
   useEffect(() => {

@@ -230,7 +230,6 @@ def create_app(engine: Engine, token: str) -> FastAPI:
         acc = auth_mod._read_account(user)
         pl = auth_mod.plan_for(user)
         limits = auth_mod.plan_limits(pl)
-        eng.usage.backfill_owners()
         us = eng.usage.user_summary(user)
         return {
             "email": user,
@@ -260,7 +259,9 @@ def create_app(engine: Engine, token: str) -> FastAPI:
             raise HTTPException(400, str(e))
         login_fails.pop(ip, None)
         issue_session(response, addr)
-        return {"ok": True, "email": addr}
+        # The mobile app saves this token immediately after creating the
+        # account — without it every later call 401s and sign-up "refuses".
+        return {"ok": True, "email": addr, "session": session_string(addr)}
 
     @app.post("/api/google")
     def google_login(request: Request, response: Response, body: dict = Body(...)) -> dict:
