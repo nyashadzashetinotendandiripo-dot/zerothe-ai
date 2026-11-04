@@ -341,6 +341,20 @@ export async function agentMessages(base) {
   return authed(base, '/api/agent/messages');
 }
 
+// Raw markdown export of a chat thread. The endpoint answers text/markdown,
+// not JSON, so it cannot go through api()/authed() which parse JSON.
+export async function threadExportText(base, tid) {
+  const b = String(base || API_BASE || '').replace(/\/+$/, '');
+  const url = b + '/api/threads/' + tid + '/export';
+  const sep = url.includes('?') ? '&' : '?';
+  const r = await fetch(url + sep + '_token=' + encodeURIComponent(TOKEN), {
+    headers: { 'Authorization': 'Bearer ' + TOKEN },
+  });
+  if (r.status === 401) throw new Error('Not authorized');
+  if (!r.ok) throw new Error('HTTP ' + r.status);
+  return await r.text();
+}
+
 // ---------------------------------------------------------------- Tier 2: Web search
 export async function webSearch(base, query) {
   return authed(base, '/api/search', {

@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { View, Text, TextInput, Pressable, FlatList, StyleSheet, KeyboardAvoidingView, Platform, Image, ActivityIndicator, ScrollView, Clipboard, Alert, Linking, Animated, Easing } from 'react-native';
 import { WebView } from 'react-native-webview';
-import { api, API_BASE, conf, agentMessages } from './session';
+import { api, API_BASE, conf, agentMessages, threadExportText } from './session';
 import md from './md';
 import { aiBody, uiPlain, uiStreamText } from './widgets';
 import { breadcrumb, note, noteOnce } from './diag';
@@ -166,7 +166,7 @@ class ChatBoundary extends React.Component {
   }
 }
 
-function ChatScreen({ thread, threads, botName: propsBotName, onSwitch, onBack, onEvent, onMenu, modalOpenRef }) {
+function ChatScreen({ thread, threads, botName: propsBotName, onSwitch, onBack, onEvent, onMenu, modalOpenRef, onNewChat, onThreadsRefresh }) {
   const ins = useSafeAreaInsets();
   const [items, setItems] = useState([]);
   const [apps, setApps] = useState([]);              // pending approvals on this thread
@@ -199,6 +199,9 @@ function ChatScreen({ thread, threads, botName: propsBotName, onSwitch, onBack, 
   const [filePrev, setFilePrev] = useState(null);                   // {name, path, mime, url} for side preview
   const [histOpen, setHistOpen] = useState(false);
   const [histQ, setHistQ] = useState('');
+  const [renId, setRenId] = useState(null);          // thread being renamed in the drawer
+  const [renVal, setRenVal] = useState('');
+  const [expBusy, setExpBusy] = useState(false);     // export/share in flight
   const [err, setErr] = useState('');
   const [attachments, setAttachments] = useState([]);
   const listRef = useRef(null);
@@ -550,6 +553,38 @@ function ChatScreen({ thread, threads, botName: propsBotName, onSwitch, onBack, 
     try { await api('/api/threads/' + thread.id + '/stop', { method: 'POST', body: '{}' }); } catch (e) { /* already done */ }
     setTimeout(() => loadWithConn(), 600);
   };
+
+  // ---- history drawer: rename + export + new chat -------------------------
+  const startRename = (t) => { setRenId(t.id); setRenVal(asText(t.title) || ''); };
+  const saveRename = async () => {
+    const title = renVal.trim();
+    if (renId && title) {
+      try {
+        await api('/api/threads/' + renId, { method: 'PUT', body: JSON.stringify({ title }) });
+        if (onThreadsRefresh) await onThreadsRefresh();
+      } catch (e) { Alert.alert('Could not rename', String(e.message || e)); }
+    }
+    setRenId(null); setRenVal('');
+  };
+  // Export the whole conversation as a markdown file and hand it to the
+  // Android share sheet (save to Drive, mail it, and so on).
+  const exportChat = async () => {
+    if (expBusy) return;
+    setExpBusy(true);
+    try {
+      const mdText = await threadExportText(undefined, thread.id);
+      const safe = (asText(thread.title) || 'chat').replace(/[^\w\-]+/g, '_').replace(/^_+|_+$/g, '').slice(0, 40) || 'chat';
+      const file = (FileSystem.cacheDirectory || '') + safe + '.md';
+      await FileSystem.writeAsStringAsync(file, mdText, { encoding: FileSystem.EncodingType.UTF8 });
+      if (await Sharing.isAvailableAsync()) {
+        await Sharing.shareAsync(file, { mimeType: 'text/markdown', dialogTitle: 'Share chat export' });
+      } else {
+        Alert.alert('Exported', 'Saved as ' + safe + '.md in the app cache.');
+      }
+    } catch (e) { Alert.alert('Could not export', String(e.message || e)); }
+    setExpBusy(false);
+  };
+
   // A real live view of the machine's desktop (Instabox VNC link in a WebView).
   // `control` opens it with keyboard/mouse control so the user can log in, solve
   // a CAPTCHA or finish a step themselves.
@@ -1026,16 +1061,35 @@ function ChatScreen({ thread, threads, botName: propsBotName, onSwitch, onBack, 
         <View style={st.scrimM}>
           <View style={[st.sheet, { paddingBottom: 16 + (ins?.bottom || 0) }]}>
             <View style={st.grabber} />
+            <Pressable onPress={() => { setHistOpen(false); if (onNewChat) onNewChat(); }} style={st.sheetBtn}>
+              <Text style={st.sheetBtnT}>＋ New chat</Text>
+            </Pressable>
             <TextInput style={st.histIn} value={histQ} onChangeText={setHistQ} placeholder="Search chats" placeholderTextColor={MUTED} autoCorrect={false} />
             <ScrollView style={{ maxHeight: 320 }} nestedScrollEnabled>
               {(threads || []).filter((t) => !histQ.trim() || String(t.title || '').toLowerCase().includes(histQ.trim().toLowerCase())).map((t) => (
                 <Pressable key={t.id} onPress={() => { onSwitch(t.id); setHistOpen(false); }} style={[st.histRow, t.id === thread.id && { backgroundColor: PANEL }]}>
                   <Text style={{ fontSize: 15 }}>{t.main ? '🏠' : '💬'}</Text>
                   <Text style={st.histT} numberOfLines={1}>{t.main ? 'Main' : (asText(t.title) || 'Chat')}</Text>
+                  {!t.main && (
+                    <Pressable hitSlop={8} onPress={() => startRename(t)}>
+                      <Text style={{ color: MUTED, fontSize: 14 }}>✎</Text>
+                    </Pressable>
+                  )}
                 </Pressable>
               ))}
               {!(threads || []).length && <Text style={st.noteT}>No other chats yet.</Text>}
             </ScrollView>
+            {renId ? (
+              <View style={{ flexDirection: 'row', gap: 8, marginTop: 8 }}>
+                <TextInput style={[st.histIn, { flex: 1 }]} value={renVal} onChangeText={setRenVal} placeholder="Chat name"
+                  placeholderTextColor={MUTED} autoFocus onSubmitEditing={saveRename} />
+                <Pressable onPress={saveRename} style={st.sheetBtn}><Text style={st.sheetBtnT}>Save</Text></Pressable>
+                <Pressable onPress={() => { setRenId(null); setRenVal(''); }} style={st.sheetBtn}><Text style={st.sheetBtnT}>✕</Text></Pressable>
+              </View>
+            ) : null}
+            <Pressable onPress={exportChat} disabled={expBusy} style={st.sheetBtn}>
+              <Text style={st.sheetBtnT}>{expBusy ? 'Exporting…' : '⇩ Export chat (.md)'}</Text>
+            </Pressable>
             <Pressable onPress={() => setHistOpen(false)} style={st.sheetBtn}><Text style={st.sheetBtnT}>Close</Text></Pressable>
           </View>
         </View>

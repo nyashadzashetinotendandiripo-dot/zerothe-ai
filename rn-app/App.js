@@ -10,7 +10,7 @@ import { BUILD_STAMP, OTA_CREATED, OTA_ID } from './src/build';
 import Connect, { AuthModal } from './src/Connect';
 import Chat from './src/Chat';
 import ServerScreen from './src/ServerScreen';
-import { TopBar, DashboardScreen, MarketplaceScreen, ApprovalsScreen, McpScreen, RoutinesScreen, FilesScreen, WalletScreen, PluginItemsScreen } from './src/Screens';
+import { TopBar, DashboardScreen, MarketplaceScreen, ApprovalsScreen, RoutinesScreen, FilesScreen, WalletScreen, PluginItemsScreen } from './src/Screens';
 import { WebTopBar, TabSheet, BotsList, HomeView, InboxView, ComputerView, ScreenView, SkillsView, UsageView, ActionLogView, SearchPalette, PlanScreen, AdminStatsScreen, AdminUsersScreen, AdminUserDetailScreen, AdminSettingsScreen, ApprovalCenterView, MuseProfileView, ConnectorsView, IdeasView, GoalsView, FinanceView, EmailConfigScreen, SearchScreen, ImageUnderstandScreen, ImageGenerateScreen, CodeExecuteScreen, AgentCollaborateScreen, AndroidBoxScreen, TABS } from './src/WebUI';
 
 export default function App() {
@@ -257,6 +257,28 @@ function ZbRoot() {
     setScreenHistory([]);
     setScreen('chat');
   };
+  // Start a brand-new chat with a Bot: create the thread server-side, then
+  // point the chat screen at it with a fresh threads list.
+  const newChatFor = useCallback(async (bot) => {
+    if (!bot || !bot.id) return;
+    try {
+      const d = await api('/api/bots/' + bot.id + '/threads', { method: 'POST', body: JSON.stringify({}) });
+      const tid = d.id || d.thread_id || d.tid || '';
+      if (!tid) throw new Error('The server did not return the new chat.');
+      const rows = await api('/api/bots/' + bot.id + '/threads').catch(() => []);
+      setChat((c) => ({ bot: (c && c.bot) || bot, threadId: tid, threads: rows }));
+    } catch (e) { Alert.alert('Could not start a new chat', String(e.message || e)); }
+  }, []);
+
+  // Re-fetch this Bot's threads after a rename so the drawer shows the new title.
+  const refreshThreads = useCallback(async () => {
+    if (!chat || !chat.bot || !chat.bot.id) return;
+    try {
+      const rows = await api('/api/bots/' + chat.bot.id + '/threads');
+      setChat((c) => (c ? { ...c, threads: rows } : c));
+    } catch (e) { /* the drawer still shows the old titles until it reopens */ }
+  }, [chat]);
+
   // Undo overlay back: return to whatever screen was under it.
   const popScreen = () => {
     const prev = screenHistory[screenHistory.length - 1] || 'bots';
@@ -338,6 +360,8 @@ function ZbRoot() {
         threads={chat.threads}
         botName={chat.bot.name}
         onSwitch={(tid) => setChat(c => ({ ...c, threadId: tid }))}
+        onNewChat={() => newChatFor(chat.bot)}
+        onThreadsRefresh={refreshThreads}
         onBack={() => { setScreenHistory([]); setScreen('bots'); }}
         onEvent={chatHandler}
         onMenu={() => setMenuOpen(true)}
@@ -372,12 +396,6 @@ function ZbRoot() {
     case 'gmail': return (
       <Shell upd={upd} onUpd={doUpdate} updState={updState}>
         <PluginItemsScreen onMenu={() => setMenuOpen(true)} pluginId="gmail" title="Gmail" />
-        {menuBlock}
-      </Shell>
-    );
-    case 'mcp': return (
-      <Shell upd={upd} onUpd={doUpdate} updState={updState}>
-        <McpScreen onMenu={() => setMenuOpen(true)} />
         {menuBlock}
       </Shell>
     );
@@ -863,6 +881,13 @@ function NewBotModal({ onDone, onHire, templates }) {
 // ----------------------------------------------------------------- bot settings
 function BotModal({ bot, onClose, onCloseSaved, onBotDeleted }) {
   const [em, setEm] = useState(bot.emoji || '🤖');
+  const [nm, setNm] = useState(bot.name || '');
+  const [job, setJob] = useState(bot.job || '');
+  const [instr, setInstr] = useState(bot.instructions || '');
+  const [prof, setProf] = useState(bot.profile || '');
+  const [mdl, setMdl] = useState(bot.model || '');
+  const [paused, setPaused] = useState(!!bot.paused);
+  const [profs, setProfs] = useState([]);              // provider rows for the model picker
   const [mems, setMems] = useState(null);
   const [memAdd, setMemAdd] = useState('');
   const [saving, setSaving] = useState(false);
@@ -879,12 +904,22 @@ function BotModal({ bot, onClose, onCloseSaved, onBotDeleted }) {
   // desktop has this switch, the phone used to skip it, so connected apps looked dead.
   const loadTools = useCallback(async () => {
     try {
-      const [b, pl, mc] = await Promise.all([
+      const [b, pl, mc, pv] = await Promise.all([
         api('/api/bots/' + bot.id),
         api('/api/plugins').catch(() => ({ plugins: [] })),
         api('/api/mcp').catch(() => []),
+        api('/api/providers').catch(() => []),
       ]);
       setGrants(b.grants || []);
+      // Sync the identity fields from the fresh record: the bots list this
+      // modal was opened from can be a moment behind a recent rename.
+      setNm(String(b.name || ''));
+      setJob(String(b.job || ''));
+      setInstr(String(b.instructions || ''));
+      setProf(String(b.profile || ''));
+      setMdl(String(b.model || ''));
+      setPaused(!!b.paused);
+      setProfs(Array.isArray(pv) ? pv : (pv.profiles || pv.providers || []));
       const rows = [];
       for (const p of (pl.plugins || [])) {
         if (p.allowed === false) continue;
@@ -914,7 +949,11 @@ function BotModal({ bot, onClose, onCloseSaved, onBotDeleted }) {
     const n = parseInt(stepLimit, 10);
     const steps = isFinite(n) && n > 0 ? Math.min(n, 100000) : 0;   // 0 = unlimited
     try {
-      await api('/api/bots/' + bot.id, { method: 'PUT', body: JSON.stringify({ emoji: em, step_limit: steps, approval_mode: approvalMode }) });
+      await api('/api/bots/' + bot.id, { method: 'PUT', body: JSON.stringify({
+        name: nm.trim(), job: job.trim(), instructions: instr.trim(),
+        profile: prof, model: mdl.trim(), paused: paused ? 1 : 0,
+        emoji: em, step_limit: steps, approval_mode: approvalMode,
+      }) });
       onCloseSaved();
     }
     catch (e) { Alert.alert('Could not save', String(e.message || e)); }
@@ -937,17 +976,23 @@ function BotModal({ bot, onClose, onCloseSaved, onBotDeleted }) {
       <ScrollView style={m.modal} contentContainerStyle={{ gap: 8 }} showsVerticalScrollIndicator={false}>
         <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
           <View style={[n.av, { width: 40, height: 40, borderRadius: 20 }]}><Text style={{ fontSize: 19 }}>{em}</Text></View>
-          <Text style={l.h2} numberOfLines={1}>{bot.name}</Text>
+          <Text style={l.h2} numberOfLines={1}>{nm.trim() || bot.name}</Text>
           <View style={st3.gap} />
           <Pressable onPress={onClose} hitSlop={8}><Text style={l.cap}>✕</Text></Pressable>
         </View>
-        <Text style={[l.lbl, { marginTop: 4 }]}>Avatar</Text>
+        <Text style={[l.lbl, { marginTop: 4 }]}>Name</Text>
+        <TextInput style={l.inl} value={nm} onChangeText={setNm} placeholder="Bot name" placeholderTextColor={C.muted} maxLength={40} />
+        <Text style={[l.lbl, { marginTop: 6 }]}>Job — what this Bot does</Text>
+        <TextInput style={l.inl} value={job} onChangeText={setJob} placeholder="e.g. Watch my inbox and draft replies" placeholderTextColor={C.muted} maxLength={200} />
+        <Text style={[l.lbl, { marginTop: 6 }]}>Instructions — how it should behave</Text>
+        <TextInput style={[l.inl, { minHeight: 72, textAlignVertical: 'top' }]} value={instr} onChangeText={setInstr} multiline
+          placeholder="Optional rules: tone, what never to do, formats to follow…" placeholderTextColor={C.muted} />
+        <Text style={[l.lbl, { marginTop: 6 }]}>Avatar</Text>
         <View style={m.emojiRow}>
           {EMOJIS.map((e) => (
             <Pressable key={e} onPress={() => setEm(e)} style={[m.emojiB, e === em && m.emojiOn]}><Text style={{ fontSize: 20 }}>{e}</Text></Pressable>
           ))}
         </View>
-        <Pressable onPress={save} disabled={saving} style={[l.btn, { opacity: saving ? .5 : 1 }]}><Text style={l.btnT}>Save avatar</Text></Pressable>
         <Text style={[l.lbl, { marginTop: 6 }]}>Apps &amp; tools this Bot can use</Text>
         <Text style={l.cap}>Connect an app in the Plugins Hub, then switch it on here — without this the Bot cannot use it.</Text>
         <View style={m.memList}>
@@ -995,6 +1040,36 @@ function BotModal({ bot, onClose, onCloseSaved, onBotDeleted }) {
         <Text style={l.cap}>{(!stepLimit || parseInt(stepLimit, 10) <= 0)
           ? 'Unlimited — the Bot keeps taking actions until the job is finished.'
           : 'The Bot pauses after this many actions and asks you to continue.'}</Text>
+        <Text style={[l.lbl, { marginTop: 6 }]}>Brain — which AI it runs on</Text>
+        <Text style={l.cap}>Pick a provider. “Automatic” uses the server's default.</Text>
+        <View style={{ gap: 6 }}>
+          <Pressable onPress={() => { setProf(''); setMdl(''); }} style={[m.toolRow, !prof && m.toolOn]}>
+            <View style={{ flex: 1 }}>
+              <Text style={[l.cap, { marginBottom: 0, color: C.text }]}>Automatic</Text>
+              <Text style={[l.cap, { marginBottom: 0, fontSize: 11 }]}>Server default provider and model</Text>
+            </View>
+            <Text style={{ color: !prof ? C.ok : C.muted, fontWeight: '800', fontSize: 12.5 }}>{!prof ? 'ON' : ''}</Text>
+          </Pressable>
+          {profs.map((p) => (
+            <Pressable key={p.id} onPress={() => { setProf(p.id); setMdl(''); }} style={[m.toolRow, prof === p.id && m.toolOn]}>
+              <View style={{ flex: 1 }}>
+                <Text style={[l.cap, { marginBottom: 0, color: C.text }]} numberOfLines={1}>{p.label || p.id}</Text>
+                <Text style={[l.cap, { marginBottom: 0, fontSize: 11 }]} numberOfLines={1}>
+                  {p.key_set ? (p.model || 'provider default model') : 'no API key yet — add it in Settings'}
+                </Text>
+              </View>
+              <Text style={{ color: prof === p.id ? C.ok : C.muted, fontWeight: '800', fontSize: 12.5 }}>{prof === p.id ? 'ON' : ''}</Text>
+            </Pressable>
+          ))}
+        </View>
+        {!!prof && (
+          <>
+            <Text style={[l.cap, { marginTop: 6 }]}>Custom model name (optional — leave empty for the provider's default):</Text>
+            <TextInput style={l.inl} value={mdl} onChangeText={setMdl}
+              placeholder={String((profs.find((x) => x.id === prof) || {}).model || 'provider default')} placeholderTextColor={C.muted}
+              autoCapitalize="none" autoCorrect={false} />
+          </>
+        )}
         <Text style={[l.lbl, { marginTop: 6 }]}>Approvals</Text>
         <Text style={l.cap}>Choose how often this Bot has to ask you before it acts.</Text>
         <View style={{ gap: 6 }}>
@@ -1014,6 +1089,14 @@ function BotModal({ bot, onClose, onCloseSaved, onBotDeleted }) {
             </Pressable>
           ))}
         </View>
+        <Text style={[l.lbl, { marginTop: 6 }]}>Paused</Text>
+        <Pressable onPress={() => setPaused(!paused)} style={[m.toolRow, paused && m.toolOn]}>
+          <View style={{ flex: 1 }}>
+            <Text style={[l.cap, { marginBottom: 0, color: C.text }]}>{paused ? 'Paused — standing by' : 'Active'}</Text>
+            <Text style={[l.cap, { marginBottom: 0, fontSize: 11 }]}>Paused Bots keep their chats and memory but stop taking tasks.</Text>
+          </View>
+          <Text style={{ color: paused ? C.ok : C.muted, fontWeight: '800', fontSize: 12.5 }}>{paused ? 'ON' : ''}</Text>
+        </Pressable>
         <Pressable onPress={save} disabled={saving} style={[l.btn, { opacity: saving ? .5 : 1 }]}><Text style={l.btnT}>Save settings</Text></Pressable>
         <Text style={l.cap}>Tip: when an approval card appears, tap “Always” once to stop it asking for that kind of action.</Text>
         <Pressable onPress={() => { setSaving(false); onClose(); Alert.alert('Delete bot?', 'This permanently deletes the bot and all its chats.', [
