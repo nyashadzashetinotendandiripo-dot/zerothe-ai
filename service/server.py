@@ -2129,16 +2129,23 @@ google.accounts.id.renderButton(document.getElementById('gbtn'),
         if not app:
             raise HTTPException(400, "app required")
         if "." in app:
-            _ib_adb_raw(mid, f"adb shell monkey -p {app} -c android.intent.category.LAUNCHER 1")
-            return {"ok": True, "package": app}
-        out = _ib_text(_ib_adb_raw(mid, "adb shell pm list packages"))
-        pkgs = _re.findall(r"package:(\S+)", out)
-        q = app.lower().replace(" ", "")
-        match = next((p for p in pkgs if q in p.lower()), None)
-        if not match:
-            return {"ok": False, "error": f"no installed package matches {app!r}", "installed": pkgs[:40]}
-        _ib_adb_raw(mid, f"adb shell monkey -p {match} -c android.intent.category.LAUNCHER 1")
-        return {"ok": True, "package": match}
+            target = app
+        else:
+            out = _ib_text(_ib_adb_raw(mid, "adb shell pm list packages"))
+            pkgs = _re.findall(r"package:(\S+)", out)
+            q = app.lower().replace(" ", "")
+            target = next((p for p in pkgs if q in p.lower()), None)
+            if not target:
+                return {"ok": False, "error": f"no installed package matches {app!r}", "installed": pkgs[:40]}
+        # Resolve the launchable activity and start it (monkey is unreliable on some boxes)
+        res = _ib_text(_ib_adb_raw(mid, f"adb shell cmd package resolve-activity --brief {target}"))
+        lines = [l.strip() for l in res.splitlines() if l.strip()]
+        activity = lines[-1] if lines and "/" in lines[-1] else ""
+        if activity and not activity.startswith("priority="):
+            _ib_adb_raw(mid, f"adb shell am start -n {activity}")
+            return {"ok": True, "package": target, "activity": activity}
+        _ib_adb_raw(mid, f"adb shell monkey -p {target} -c android.intent.category.LAUNCHER 1")
+        return {"ok": True, "package": target, "activity": "(monkey)"}
 
     @app.post("/api/android/{mid}/wait-stable", dependencies=[api])
     def android_wait_stable(request: Request, mid: str, body: dict = Body(default={})) -> dict:
