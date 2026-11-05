@@ -12,7 +12,8 @@ import Connect, { AuthModal } from './src/Connect';
 import Chat from './src/Chat';
 import ServerScreen from './src/ServerScreen';
 import { TopBar, DashboardScreen, MarketplaceScreen, ApprovalsScreen, RoutinesScreen, FilesScreen, WalletScreen, PluginItemsScreen } from './src/Screens';
-import { WebTopBar, TabSheet, BotsList, HomeView, InboxView, ComputerView, TimelineView, ScreenView, SkillsView, UsageView, ActionLogView, SearchPalette, PlanScreen, AdminStatsScreen, AdminUsersScreen, AdminUserDetailScreen, AdminSettingsScreen, ApprovalCenterView, MuseProfileView, ConnectorsView, IdeasView, GoalsView, FinanceView, EmailConfigScreen, SearchScreen, ImageUnderstandScreen, ImageGenerateScreen, CodeExecuteScreen, AgentCollaborateScreen, AndroidBoxScreen, TABS, SwarmView, WorkflowView, AnalyticsView, WebhookView, MemoryView, AuditLogView, ApiKeysView } from './src/WebUI';
+import { WebTopBar, TabSheet, BotsList, HomeView, InboxView, ComputerView, TimelineView, ScreenView, SkillsView, UsageView, ActionLogView, SearchPalette, PlanScreen, AdminStatsScreen, AdminUsersScreen, AdminUserDetailScreen, AdminSettingsScreen, ApprovalCenterView, MuseProfileView, ConnectorsView, IdeasView, GoalsView, FinanceView, EmailConfigScreen, SearchScreen, ImageUnderstandScreen, ImageGenerateScreen, CodeExecuteScreen, AgentCollaborateScreen, AndroidBoxScreen, TABS, SwarmView, WorkflowView, AnalyticsView, WebhookView, MemoryView, AuditLogView, ApiKeysView, SmartControlView } from './src/WebUI';
+import androidControl, { markReady } from './src/androidControl';
 
 export default function App() {
   return (
@@ -54,6 +55,9 @@ class ErrorBoundary extends React.Component {
 }
 
 function ZbRoot() {
+  // Signal to androidControl that the JS side is ready to receive calls
+  markReady();
+
   const [ready, setReady] = useState(false);
   const [signed, setSigned] = useState(false);
   const [screen, setScreen] = useState('home');            // home chat inbox marketplace computer files skills routines plugins usage actionlog set
@@ -446,6 +450,12 @@ function ZbRoot() {
     case 'computer': return (
       <Shell upd={upd} onUpd={doUpdate} updState={updState}>
         <ComputerView bots={bots} busy={busy} conn={conn} account={email} onAvatar={() => setMenuOpen(true)} onScreen={takeScreen} />
+        {menuBlock}
+      </Shell>
+    );
+    case 'control': return (
+      <Shell upd={upd} onUpd={doUpdate} updState={updState}>
+        <SmartControlView conn={conn} account={email} onAvatar={() => setMenuOpen(true)} />
         {menuBlock}
       </Shell>
     );

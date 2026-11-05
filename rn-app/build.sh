@@ -39,6 +39,125 @@ npx expo prebuild -p android --no-install --clean
 # The android-bridge/ directory and ZbDeviceService.kt are kept for reference
 # but are no longer injected into the build.
 export ZB_API_BASE="${ZB_API_BASE:-https://8765-agquljzsz7k42vgoenj7qr6fim.instabox.tech}"
+
+# 4a. Inject Smart Android Control native code into the Expo-generated android/.
+#     expo prebuild --clean wipes android/, so we re-inject our native files here.
+log "injecting Smart Android Control native modules"
+NATIVE_DIR="native-android"
+ANDROID_MAIN="android/app/src/main"
+mkdir -p "$ANDROID_MAIN/java/ai/zerothebot/app/accessibility"
+cp "$NATIVE_DIR"/*.kt "$ANDROID_MAIN/java/ai/zerothebot/app/accessibility/" 2>/dev/null || true
+
+# Patch AndroidManifest.xml: add permissions, AccessibilityService, FloatingBubbleActivity
+MANIFEST="$ANDROID_MAIN/AndroidManifest.xml"
+python3 - <<'PYEOF'
+import re
+p = 'android/app/src/main/AndroidManifest.xml'
+s = open(p, encoding='utf-8').read()
+
+# Add uses-permissions if not present
+for perm in [
+    'android.permission.BIND_ACCESSIBILITY_SERVICE',
+    'android.permission.SYSTEM_ALERT_WINDOW',
+    'android.permission.FOREGROUND_SERVICE',
+    'android.permission.POST_NOTIFICATIONS',
+    'android.permission.INTERNET',
+]:
+    if perm not in s:
+        s = s.replace('</manifest>',
+                      f'    <uses-permission android:name="{perm}" />\n</manifest>', 1)
+
+# Add AccessibilityService + FloatingBubbleActivity before </application>
+inject = '''
+    <service
+        android:name="ai.zerothebot.app.accessibility.ZerotheBotAccessibilityService"
+        android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE"
+        android:exported="false">
+        <intent-filter>
+            <action android:name="android.accessibilityservice.AccessibilityService" />
+        </intent-filter>
+        <meta-data
+            android:name="android.accessibilityservice"
+            android:resource="@xml/accessibility_service_config" />
+    </service>
+    <activity
+        android:name="ai.zerothebot.app.accessibility.FloatingBubbleActivity"
+        android:theme="@android:style/Theme.Translucent.NoTitleBar"
+        android:excludeFromRecents="true"
+        android:launchMode="singleInstance" />
+'''
+if 'ZerotheBotAccessibilityService' not in s:
+    s = s.replace('</application>', inject + '\n  </application>', 1)
+
+open(p, 'w', encoding='utf-8').write(s)
+print('manifest patched')
+PYEOF
+
+# Create accessibility_service_config.xml
+cat > "$ANDROID_MAIN/res/xml/accessibility_service_config.xml" <<'XMLEOF'
+<?xml version="1.0" encoding="utf-8"?>
+<accessibility-service xmlns:android="http://schemas.android.com/apk/res/android"
+    android:description="@string/app_name"
+    android:canRetrieveWindowContent="true"
+    android:flags="flagRequestTouchExplorationMode|flagReportViewIds|flagRetrieveInteractiveWindows"
+    android:accessibilityEventTypes="typeWindowStateChanged|typeViewFocused|typeViewClicked|typeViewTextChanged|typeWindowContentChanged"
+    android:notificationTimeout="100"
+    android:settingsActivity="ai.zerothebot.app.accessibility.FloatingBubbleActivity"
+/>
+XMLEOF
+
+# Register the React Native native module in MainApplication if it exists
+if [ -f "$ANDROID_MAIN/java/ai/zerothebot/app/MainApplication.java" ]; then
+  log "patching MainApplication.java"
+  python3 - <<'PYEOF'
+p = 'android/app/src/main/java/ai/zerothebot/app/MainApplication.java'
+try:
+    s = open(p, encoding='utf-8').read()
+except FileNotFoundError:
+    s = ''
+
+# Add import if not present
+if 'ZerotheBotAccessibility' not in s:
+    s = s.replace(
+        'import com.facebook.react.PackageList;',
+        'import com.facebook.react.PackageList;\nimport ai.zerothebot.app.accessibility.AccessibilityModule;'
+    )
+
+# Add module to packages list if not present
+if 'new AccessibilityModule' not in s:
+    old = 'return Arrays.asList(\n            MainReactPackage.get(),'
+    new = 'return Arrays.asList(\n            MainReactPackage.get(),\n            new AccessibilityModule(reactApplicationContext),'
+    if old in s:
+        s = s.replace(old, new, 1)
+
+open(p, 'w', encoding='utf-8').write(s)
+print('MainApplication patched')
+PYEOF
+elif [ -f "$ANDROID_MAIN/java/ai/zerothebot/app/MainApplication.kt" ]; then
+  log "patching MainApplication.kt"
+  # Kotlin variant - similar injection
+  python3 - <<'PYEOF'
+p = 'android/app/src/main/java/ai/zerothebot/app/MainApplication.kt'
+try:
+    s = open(p, encoding='utf-8').read()
+except FileNotFoundError:
+    s = ''
+if 'AccessibilityModule' not in s:
+    s = s.replace(
+        'import com.facebook.react.PackageList',
+        'import com.facebook.react.PackageList\nimport ai.zerothebot.app.accessibility.AccessibilityModule'
+    )
+if 'AccessibilityModule(reactApplicationContext)' not in s:
+    old = 'mainReactPackage = MainReactPackage()'
+    if old in s:
+        s = s.replace(old, old + '\n        packages.add(AccessibilityModule(reactApplicationContext))')
+open(p, 'w', encoding='utf-8').write(s)
+print('MainApplication.kt patched')
+PYEOF
+else
+  log "WARNING: no MainApplication found - native module may not load"
+fi
+
 # OOM guard part 2: prebuild regenerates gradle.properties, so re-disable the
 # heavy release tasks every run and cap the bundler's JS heap.
 cat >> android/gradle.properties <<'GEOF'
@@ -48,11 +167,6 @@ android.enableNativeBuild=false
 GEOF
 
 # 4. Signing.
-#    Default (no ZB_KS_FILE): sign with the GLOBAL ~/.android/debug.keystore — the
-#    same key the first shell APK used, so sideload installs keep upgrading.
-#    Play mode (ZB_KS_FILE + ZB_KS_PASS env set): inject a real
-#    signingConfigs.release from those env vars and let the template's release
-#    buildType use the upload key. Never commit the keystore or its password.
 if [ -n "${ZB_KS_FILE:-}" ] && [ -n "${ZB_KS_PASS:-}" ]; then
   log "release signing: ZB_KS_FILE present -> release buildType uses the upload key"
   python3 - <<'PY'

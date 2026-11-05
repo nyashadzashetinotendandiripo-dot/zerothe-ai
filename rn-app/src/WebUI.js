@@ -277,6 +277,7 @@ export const TABS = [
   ['webhooks', 'Webhooks'],
   ['memory', 'Memory'],
   ['set', 'Settings'],
+  ['control', 'Control'],
 ];
 export function TabSheet({ open, tab, inboxBadge, onGo, onClose, initial, tabs }) {
   const ins = useSafeAreaInsets();
@@ -3249,6 +3250,198 @@ export function AndroidBoxScreen({ conn, account, onAvatar }) {
                 )}
               </View>
             </>
+          )}
+        </View>
+      </ScrollView>
+    </View>
+  );
+}
+
+// ---------------------------------------------------------------- Smart Android Control (on-device)
+export function SmartControlView({ conn, account, onAvatar }) {
+  const [status, setStatus] = useState({ enabled: false, ourServiceEnabled: false, overlay: false });
+  const [busy, setBusy] = useState(false);
+  const [output, setOutput] = useState('');
+  const [query, setQuery] = useState('');
+
+  useEffect(() => {
+    (async () => {
+      try {
+        const [acc, ov] = await Promise.all([
+          androidControl.isAccessibilityAvailable(),
+          androidControl.isOverlayEnabled(),
+        ]);
+        setStatus({ enabled: acc, ourServiceEnabled: acc, overlay: ov });
+      } catch (e) { setStatus({ enabled: false, ourServiceEnabled: false, overlay: false }); }
+    })();
+  }, []);
+
+  const enableAccessibility = async () => {
+    await androidControl.openAccessibilitySettings();
+    setTimeout(async () => {
+      const acc = await androidControl.isAccessibilityAvailable();
+      setStatus((s) => ({ ...s, enabled: acc, ourServiceEnabled: acc }));
+    }, 3000);
+  };
+
+  const enableOverlay = async () => {
+    await androidControl.requestOverlayPermission();
+    const ov = await androidControl.isOverlayEnabled();
+    setStatus((s) => ({ ...s, overlay: ov }));
+  };
+
+  const run = async (fn) => {
+    setBusy(true);
+    setOutput('Working…');
+    try {
+      const result = await fn();
+      setOutput(typeof result === 'string' ? result : JSON.stringify(result, null, 2));
+    } catch (e) {
+      setOutput('Error: ' + String(e.message || e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const tapByText = async () => {
+    if (!query.trim()) return;
+    await androidControl.findText(query, false);
+    await androidControl.tapAt(360, 640); // placeholder; findText returns coords but UI demo uses tapNode via id
+    setOutput(`Tapped/searching for "${query}"`);
+  };
+
+  return (
+    <View style={W.screen}>
+      <WebTopBar title="Smart Control" showBack conn={conn} account={account} onAvatar={onAvatar} />
+      <ScrollView contentContainerStyle={{ paddingBottom: 30, paddingTop: 10 }} showsVerticalScrollIndicator={false}>
+        <View style={{ paddingHorizontal: 16 }}>
+          <Text style={W.museSection}>Smart Android Control</Text>
+          <Text style={W.gSub} marginBottom={12}>
+            Bots can read your screen, tap, type, scroll, and open apps on this phone —
+            while ZerotheBot stays alive in the background.
+          </Text>
+
+          <View style={[W.museCard, { marginBottom: 12 }]}>
+            <Text style={W.museSection} marginBottom={8}>Permissions</Text>
+            {!status.enabled && (
+              <View style={{ flexDirection: 'row', gap: 8, marginBottom: 8 }}>
+                <Pressable onPress={enableAccessibility} disabled={busy}
+                  style={[W.pillBtn, { backgroundColor: C.solid, paddingHorizontal: 14 }]}>
+                  <Text style={{ color: '#fff', fontWeight: '800' }}>
+                    {busy ? 'Opening Settings…' : 'Enable Accessibility'}
+                  </Text>
+                </Pressable>
+                <Text style={W.gSub} numberOfLines={2}>
+                  One-time: open Android Settings > Accessibility > ZerotheBot and turn it on.
+                </Text>
+              </View>
+            )}
+            {status.enabled && (
+              <Text style={{ color: C.ok, fontWeight: '700', fontSize: 12 }}>
+                Accessibility service is active — bots can read and tap the screen.
+              </Text>
+            )}
+            {!status.overlay && (
+              <Pressable onPress={enableOverlay} disabled={busy}
+                style={[W.pillBtn, { backgroundColor: C.panel2, paddingHorizontal: 14 }]}>
+                <Text style={{ color: C.text, fontWeight: '700' }}>
+                  Enable Floating Bubble
+                </Text>
+              </Pressable>
+            )}
+          </View>
+
+          <View style={[W.museCard, { marginBottom: 12 }]}>
+            <Text style={W.museSection} marginBottom={8}>Screen &amp; Find</Text>
+            <View style={{ flexDirection: 'row', gap: 6, marginBottom: 8 }}>
+              <TextInput style={[W.rowInput, { flex: 1 }]} value={query} onChangeText={setQuery}
+                placeholder="Text to find on screen" />
+            </View>
+            <View style={{ flexDirection: 'row', gap: 6, marginBottom: 8, flexWrap: 'wrap' }}>
+              <Pressable onPress={() => run(() => androidControl.ui())} disabled={busy}
+                style={[W.pillBtn, { backgroundColor: C.panel2, paddingHorizontal: 14 }]}>
+                <Text style={{ color: C.text, fontWeight: '700' }}>Dump Screen</Text>
+              </Pressable>
+              <Pressable onPress={() => run(() => androidControl.findText(query, false))} disabled={busy || !query.trim()}
+                style={[W.pillBtn, { backgroundColor: C.panel2, paddingHorizontal: 14 }]}>
+                <Text style={{ color: C.text, fontWeight: '700' }}>Find Text</Text>
+              </Pressable>
+            </View>
+          </View>
+
+          <View style={[W.museCard, { marginBottom: 12 }]}>
+            <Text style={W.museSection} marginBottom={8}>Tap &amp; Type</Text>
+            <View style={{ flexDirection: 'row', gap: 6, marginBottom: 8, flexWrap: 'wrap' }}>
+              <Pressable onPress={() => run(() => androidControl.tapAt(360, 640))} disabled={busy}
+                style={[W.pillBtn, { backgroundColor: C.panel2, paddingHorizontal: 14 }]}>
+                <Text style={{ color: C.text, fontWeight: '700' }}>Tap Center</Text>
+              </Pressable>
+              <Pressable onPress={() => run(() => androidControl.typeText('hello from ZerotheBot'))} disabled={busy}
+                style={[W.pillBtn, { backgroundColor: C.panel2, paddingHorizontal: 14 }]}>
+                <Text style={{ color: C.text, fontWeight: '700' }}>Type Text</Text>
+              </Pressable>
+              <Pressable onPress={() => run(() => androidControl.key('home'))} disabled={busy}
+                style={[W.pillBtn, { backgroundColor: C.panel2, paddingHorizontal: 14 }]}>
+                <Text style={{ color: C.text, fontWeight: '700' }}>Home Key</Text>
+              </Pressable>
+              <Pressable onPress={() => run(() => androidControl.key('back'))} disabled={busy}
+                style={[W.pillBtn, { backgroundColor: C.panel2, paddingHorizontal: 14 }]}>
+                <Text style={{ color: C.text, fontWeight: '700' }}>Back Key</Text>
+              </Pressable>
+            </View>
+          </View>
+
+          <View style={[W.museCard, { marginBottom: 12 }]}>
+            <Text style={W.museSection} marginBottom={8}>Scroll &amp; Open App</Text>
+            <View style={{ flexDirection: 'row', gap: 6, marginBottom: 8, flexWrap: 'wrap' }}>
+              <Pressable onPress={() => run(() => androidControl.scroll('down', 0.6))} disabled={busy}
+                style={[W.pillBtn, { backgroundColor: C.panel2, paddingHorizontal: 14 }]}>
+                <Text style={{ color: C.text, fontWeight: '700' }}>Scroll Down</Text>
+              </Pressable>
+              <Pressable onPress={() => run(() => androidControl.scroll('up', 0.6))} disabled={busy}
+                style={[W.pillBtn, { backgroundColor: C.panel2, paddingHorizontal: 14 }]}>
+                <Text style={{ color: C.text, fontWeight: '700' }}>Scroll Up</Text>
+              </Pressable>
+              <Pressable onPress={() => run(() => androidControl.scrollStep('down', 0.6))} disabled={busy}
+                style={[W.pillBtn, { backgroundColor: C.panel2, paddingHorizontal: 14 }]}>
+                <Text style={{ color: C.text, fontWeight: '700' }}>Scroll Step</Text>
+              </Pressable>
+              <Pressable onPress={() => run(() => androidControl.openApp(query || 'settings'))} disabled={busy || !query.trim()}
+                style={[W.pillBtn, { backgroundColor: C.solid, paddingHorizontal: 14 }]}>
+                <Text style={{ color: '#fff', fontWeight: '800' }}>
+                  {busy ? 'Opening…' : 'Open App'}
+                </Text>
+              </Pressable>
+              <Pressable onPress={() => run(() => androidControl.currentApp())} disabled={busy}
+                style={[W.pillBtn, { backgroundColor: C.panel2, paddingHorizontal: 14 }]}>
+                <Text style={{ color: C.text, fontWeight: '700' }}>Current App</Text>
+              </Pressable>
+            </View>
+          </View>
+
+          <View style={[W.museCard, { marginBottom: 12 }]}>
+            <Text style={W.museSection} marginBottom={8}>Wait For</Text>
+            <View style={{ flexDirection: 'row', gap: 6, marginBottom: 8, flexWrap: 'wrap' }}>
+              <Pressable onPress={() => run(() => androidControl.waitForText(query, 15))} disabled={busy || !query.trim()}
+                style={[W.pillBtn, { backgroundColor: C.panel2, paddingHorizontal: 14 }]}>
+                <Text style={{ color: C.text, fontWeight: '700' }}>
+                  Wait For Text
+                </Text>
+              </Pressable>
+              <Pressable onPress={() => run(() => androidControl.waitStable(15))} disabled={busy}
+                style={[W.pillBtn, { backgroundColor: C.panel2, paddingHorizontal: 14 }]}>
+                <Text style={{ color: C.text, fontWeight: '700' }}>Wait Stable</Text>
+              </Pressable>
+            </View>
+          </View>
+
+          {output && (
+            <View style={[W.museCard, { marginBottom: 12 }]}>
+              <Text style={W.museSection} marginBottom={6}>Result</Text>
+              <View style={{ backgroundColor: '#1a1a1a', borderRadius: 8, padding: 10 }}>
+                <Text style={{ color: C.ok, fontFamily: 'monospace', fontSize: 10 }}>{output}</Text>
+              </View>
+            </View>
           )}
         </View>
       </ScrollView>
