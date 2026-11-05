@@ -135,6 +135,84 @@ CREATE TABLE IF NOT EXISTS community_templates(
   instructions TEXT DEFAULT '', grants TEXT DEFAULT '[]', model TEXT DEFAULT '', profile TEXT DEFAULT '',
   created_at REAL
 );
+CREATE TABLE IF NOT EXISTS swarms(
+  id TEXT PRIMARY KEY, owner TEXT DEFAULT '', name TEXT DEFAULT '', description TEXT DEFAULT '',
+  bot_ids TEXT DEFAULT '[]', strategy TEXT DEFAULT 'parallel', status TEXT DEFAULT 'active',
+  created_at REAL, tasks TEXT DEFAULT '[]', results TEXT DEFAULT '[]'
+);
+CREATE TABLE IF NOT EXISTS swarm_tasks(
+  id TEXT PRIMARY KEY, swarm_id TEXT DEFAULT '', trigger TEXT DEFAULT '', strategy TEXT DEFAULT 'parallel',
+  status TEXT DEFAULT 'running', created_at REAL, results TEXT DEFAULT '[]'
+);
+CREATE INDEX IF NOT EXISTS idx_swarm_tasks_swarm ON swarm_tasks(swarm_id);
+CREATE TABLE IF NOT EXISTS swarm_votes(
+  id TEXT PRIMARY KEY, swarm_id TEXT DEFAULT '', voter TEXT DEFAULT '', option TEXT DEFAULT '', created_at REAL
+);
+CREATE TABLE IF NOT EXISTS workflows(
+  id TEXT PRIMARY KEY, owner TEXT DEFAULT '', name TEXT DEFAULT '', description TEXT DEFAULT '',
+  nodes TEXT DEFAULT '[]', edges TEXT DEFAULT '[]', trigger TEXT DEFAULT 'manual', status TEXT DEFAULT 'active',
+  created_at REAL, runs INTEGER DEFAULT 0
+);
+CREATE TABLE IF NOT EXISTS workflow_runs(
+  id TEXT PRIMARY KEY, workflow_id TEXT DEFAULT '', status TEXT DEFAULT 'running', started_at REAL,
+  result TEXT DEFAULT '', trigger_type TEXT DEFAULT 'manual'
+);
+CREATE TABLE IF NOT EXISTS webhooks(
+  id TEXT PRIMARY KEY, owner TEXT DEFAULT '', name TEXT DEFAULT '', url TEXT DEFAULT '', events TEXT DEFAULT '[]',
+  secret TEXT DEFAULT '', active INTEGER DEFAULT 1, created_at REAL, deliveries INTEGER DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_webhooks_owner ON webhooks(owner);
+CREATE TABLE IF NOT EXISTS email_templates(
+  id TEXT PRIMARY KEY, owner TEXT DEFAULT '', name TEXT DEFAULT '', subject TEXT DEFAULT '',
+  body TEXT DEFAULT '', created_at REAL
+);
+CREATE TABLE IF NOT EXISTS scheduled_jobs(
+  id TEXT PRIMARY KEY, owner TEXT DEFAULT '', bot_id TEXT DEFAULT '', cron TEXT DEFAULT '',
+  command TEXT DEFAULT '', enabled INTEGER DEFAULT 1, created_at REAL, last_run REAL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_scheduled_jobs_bot ON scheduled_jobs(bot_id);
+CREATE TABLE IF NOT EXISTS files(
+  id TEXT PRIMARY KEY, owner TEXT DEFAULT '', name TEXT DEFAULT '', path TEXT DEFAULT '',
+  size INTEGER DEFAULT 0, mime TEXT DEFAULT '', created_at REAL
+);
+CREATE TABLE IF NOT EXISTS project_tasks(
+  id TEXT PRIMARY KEY, project_id TEXT DEFAULT '', owner TEXT DEFAULT '', title TEXT DEFAULT '',
+  status TEXT DEFAULT 'todo', assignee TEXT DEFAULT '', created_at REAL
+);
+CREATE TABLE IF NOT EXISTS contacts(
+  id TEXT PRIMARY KEY, owner TEXT DEFAULT '', name TEXT DEFAULT '', email TEXT DEFAULT '',
+  phone TEXT DEFAULT '', company TEXT DEFAULT '', created_at REAL
+);
+CREATE TABLE IF NOT EXISTS invoices(
+  id TEXT PRIMARY KEY, owner TEXT DEFAULT '', client TEXT DEFAULT '', amount REAL DEFAULT 0,
+  status TEXT DEFAULT 'draft', created_at REAL
+);
+CREATE TABLE IF NOT EXISTS expenses(
+  id TEXT PRIMARY KEY, owner TEXT DEFAULT '', category TEXT DEFAULT '', amount REAL DEFAULT 0,
+  description TEXT DEFAULT '', created_at REAL
+);
+CREATE TABLE IF NOT EXISTS time_entries(
+  id TEXT PRIMARY KEY, owner TEXT DEFAULT '', project_id TEXT DEFAULT '', hours REAL DEFAULT 0,
+  description TEXT DEFAULT '', created_at REAL
+);
+CREATE TABLE IF NOT EXISTS approval_workflows(
+  id TEXT PRIMARY KEY, owner TEXT DEFAULT '', name TEXT DEFAULT '', steps TEXT DEFAULT '[]',
+  status TEXT DEFAULT 'active', created_at REAL
+);
+CREATE TABLE IF NOT EXISTS audit_logs(
+  id TEXT PRIMARY KEY, owner TEXT DEFAULT '', action TEXT DEFAULT '', target TEXT DEFAULT '',
+  details TEXT DEFAULT '', ip TEXT DEFAULT '', created_at REAL
+);
+CREATE TABLE IF NOT EXISTS api_keys(
+  id TEXT PRIMARY KEY, owner TEXT DEFAULT '', name TEXT DEFAULT '', secret TEXT DEFAULT '',
+  active INTEGER DEFAULT 1, created_at REAL, last_used REAL DEFAULT 0
+);
+CREATE TABLE IF NOT EXISTS exports(
+  id TEXT PRIMARY KEY, owner TEXT DEFAULT '', data TEXT DEFAULT '', created_at REAL
+);
+CREATE TABLE IF NOT EXISTS backups(
+  id TEXT PRIMARY KEY, owner TEXT DEFAULT '', status TEXT DEFAULT 'completed', created_at REAL
+);
 """
 
 
@@ -152,7 +230,11 @@ MIGRATIONS = [("bots", "daily_token_limit", "INTEGER DEFAULT 0"),
               ("routines", "ceiling_items", "INTEGER DEFAULT 0"),
               ("routines", "anomaly_pct", "INTEGER DEFAULT 0"),
               ("routines", "kill_condition", "TEXT DEFAULT ''"),
-              ("approvals", "escalated", "INTEGER DEFAULT 0")]
+              ("approvals", "escalated", "INTEGER DEFAULT 0"),
+              ("projects", "owner", "TEXT DEFAULT ''"),
+              ("projects", "description", "TEXT DEFAULT ''"),
+              ("projects", "status", "TEXT DEFAULT 'active'"),
+              ("projects", "created_at", "REAL DEFAULT 0")]
 
 
 def new_id(n: int = 12) -> str:
