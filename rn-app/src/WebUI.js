@@ -923,7 +923,9 @@ export function WorkflowView({ bots, conn, account, onAvatar }) {
                 <Text style={{ color: selWf?.id === w.id ? C.onSolid : C.muted, fontSize: 10 }}>{w.status}</Text>
               </Pressable>
             ))
-          )) : <Text style={W.mutedC}>No workflows yet.</Text>}
+          ) : (
+            <Text style={W.mutedC}>No workflows yet.</Text>
+          ))}
           {selWf && (
             <>
               <View style={{ flexDirection: 'row', gap: 8, marginBottom: 14, alignItems: 'center' }}>
