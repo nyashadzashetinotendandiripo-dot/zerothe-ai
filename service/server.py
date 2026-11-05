@@ -1926,6 +1926,237 @@ google.accounts.id.renderButton(document.getElementById('gbtn'),
         except httpx.HTTPError as e:
             raise HTTPException(502, f"InstaBox error: {e}")
 
+    # ---------------------------------------------------------------- Smart Android Control
+    # High-level phone helpers over adb, in the style of phone-harness: agents
+    # say WHAT they want ("tap the text Settings", "wait for Inbox") instead of
+    # raw pixels. Text comes from the accessibility tree (uiautomator), so it
+    # is exact and needs no OCR.
+
+    def _ib_adb_raw(mid: str, cmd: str, timeout: int = 60) -> dict:
+        """One adb exec on an InstaBox machine; returns the raw JSON."""
+        key = _ib_key()
+        if not key:
+            raise HTTPException(400, "INSTABOX_API_KEY not configured on the server.")
+        try:
+            r = httpx.post(f"{INSTABOX_API_BASE}/v1/machines/{mid}/exec",
+                           headers={"Authorization": "Bearer " + key},
+                           json={"cmd": cmd, "timeoutSeconds": timeout}, timeout=timeout + 30)
+            if r.status_code >= 400:
+                raise HTTPException(r.status_code, f"InstaBox exec failed: {r.text[:200]}")
+            return r.json()
+        except httpx.HTTPError as e:
+            raise HTTPException(502, f"InstaBox error: {e}")
+
+    def _ib_text(d: dict) -> str:
+        """Best-effort stdout text from an exec response."""
+        if not isinstance(d, dict):
+            return str(d)
+        for f in ("output", "stdout", "result", "data", "text"):
+            v = d.get(f)
+            if isinstance(v, str) and v:
+                return v
+        if isinstance(d.get("result"), dict):
+            for f in ("output", "stdout", "text"):
+                v = d["result"].get(f)
+                if isinstance(v, str) and v:
+                    return v
+        return ""
+
+    def _ui_nodes(mid: str) -> list:
+        """Accessibility tree as flat nodes with tap-ready centers."""
+        import re as _re
+        import xml.etree.ElementTree as _ET
+        d = _ib_adb_raw(mid, "adb shell uiautomator dump /sdcard/zh_ui.xml && adb shell cat /sdcard/zh_ui.xml && adb shell rm /sdcard/zh_ui.xml", 90)
+        raw = _ib_text(d)
+        m = _re.search(r"<\?xml.*</hierarchy>", raw, _re.S)
+        if not m:
+            return []
+        try:
+            root = _ET.fromstring(m.group(0))
+        except Exception:
+            return []
+        nodes = []
+
+        def walk(el):
+            b = el.get("bounds", "")
+            mb = _re.match(r"\[(-?\d+),(-?\d+)\]\[(-?\d+),(-?\d+)\]", b)
+            if mb:
+                x1, y1, x2, y2 = (int(g) for g in mb.groups())
+                t = (el.get("text") or "").strip()
+                desc = (el.get("content-desc") or "").strip()
+                rid = (el.get("resource-id") or "").strip()
+                if t or desc or rid or el.get("clickable") == "true":
+                    nodes.append({
+                        "text": t, "desc": desc, "id": rid,
+                        "clickable": el.get("clickable") == "true",
+                        "x": (x1 + x2) // 2, "y": (y1 + y2) // 2,
+                        "w": x2 - x1, "h": y2 - y1,
+                    })
+            for ch in el:
+                walk(ch)
+        walk(root)
+        return nodes
+
+    def _find_nodes(nodes: list, query: str, exact: bool = False, clickable_only: bool = False) -> list:
+        q = query.lower()
+        hits = []
+        for n in nodes:
+            if clickable_only and not n["clickable"]:
+                continue
+            fields = [f for f in (n["text"], n["desc"], n["id"]) if f]
+            if any((f.lower() == q if exact else q in f.lower()) for f in fields):
+                hits.append(n)
+        return hits
+
+    @app.post("/api/android/{mid}/ui", dependencies=[api])
+    def android_ui(request: Request, mid: str) -> dict:
+        """Accessibility tree of the Android box: exact text with tap-ready centers."""
+        nodes = _ui_nodes(mid)
+        return {"nodes": nodes, "count": len(nodes)}
+
+    @app.post("/api/android/{mid}/find", dependencies=[api])
+    def android_find(request: Request, mid: str, body: dict = Body(...)) -> dict:
+        """Find elements matching a query. On no match, returns what IS visible."""
+        nodes = _ui_nodes(mid)
+        hits = _find_nodes(nodes, str(body.get("query", "")),
+                           exact=bool(body.get("exact")),
+                           clickable_only=bool(body.get("clickable_only")))
+        if not hits:
+            visible = [n["text"] or n["desc"] or n["id"] for n in nodes
+                       if n["text"] or n["desc"] or n["id"]][:30]
+            return {"found": False, "visible": visible}
+        return {"found": True, "matches": hits[:20]}
+
+    @app.post("/api/android/{mid}/tap-text", dependencies=[api])
+    def android_tap_text(request: Request, mid: str, body: dict = Body(...)) -> dict:
+        """Find text on screen and tap its center. Fails with what IS visible."""
+        nodes = _ui_nodes(mid)
+        hits = _find_nodes(nodes, str(body.get("query", "")),
+                           exact=bool(body.get("exact")),
+                           clickable_only=bool(body.get("clickable_only")))
+        if not hits:
+            visible = [n["text"] or n["desc"] or n["id"] for n in nodes
+                       if n["text"] or n["desc"] or n["id"]][:30]
+            raise HTTPException(404, f"no element matches; visible: {visible}")
+        idx = max(0, int(body.get("index", 0)))
+        if idx >= len(hits):
+            idx = 0
+        hit = hits[idx]
+        _ib_adb_raw(mid, f"adb shell input tap {hit['x']} {hit['y']}")
+        return {"ok": True, "tapped": hit}
+
+    @app.post("/api/android/{mid}/tap", dependencies=[api])
+    def android_tap(request: Request, mid: str, body: dict = Body(...)) -> dict:
+        """Raw tap at screen coordinates."""
+        _ib_adb_raw(mid, f"adb shell input tap {int(body.get('x', 0))} {int(body.get('y', 0))}")
+        return {"ok": True}
+
+    @app.post("/api/android/{mid}/type", dependencies=[api])
+    def android_type(request: Request, mid: str, body: dict = Body(...)) -> dict:
+        """Type text into the focused field (tap the field first)."""
+        import re as _re
+        text = str(body.get("text", ""))
+        segments = text.split("\n")
+        for i, seg in enumerate(segments):
+            if seg:
+                safe = _re.sub(r"[^A-Za-z0-9 @#%&*+=().,;:!?'/_-]", "", seg).replace(" ", "%s")
+                if safe:
+                    _ib_adb_raw(mid, f"adb shell input text '{safe}'")
+            if i < len(segments) - 1:
+                _ib_adb_raw(mid, "adb shell input keyevent 66")
+        return {"ok": True, "typed": text}
+
+    @app.post("/api/android/{mid}/key", dependencies=[api])
+    def android_key(request: Request, mid: str, body: dict = Body(...)) -> dict:
+        """Press a key by name: back, home, enter, tab, up, down, left, right, recents."""
+        keys = {"back": 4, "home": 3, "enter": 66, "tab": 61, "up": 19, "down": 20,
+                "left": 21, "right": 22, "volume_up": 24, "volume_down": 25,
+                "power": 26, "recents": 187, "escape": 4}
+        name = str(body.get("key", "back")).lower()
+        if name not in keys:
+            raise HTTPException(400, f"unknown key {name!r}; use one of {sorted(keys)}")
+        _ib_adb_raw(mid, f"adb shell input keyevent {keys[name]}")
+        return {"ok": True, "key": name}
+
+    @app.post("/api/android/{mid}/swipe", dependencies=[api])
+    def android_swipe(request: Request, mid: str, body: dict = Body(...)) -> dict:
+        """Momentum swipe. direction is FINGER motion: up shows the next item below."""
+        direction = str(body.get("direction", "up")).lower()
+        if direction not in ("up", "down", "left", "right"):
+            raise HTTPException(400, "direction must be up, down, left or right")
+        dist = min(1.0, max(0.05, float(body.get("distance", 0.4))))
+        size = _ib_text(_ib_adb_raw(mid, "adb shell wm size")).strip()
+        import re as _re
+        m = _re.search(r"(\d+)x(\d+)", size)
+        w, h = (int(m.group(1)), int(m.group(2))) if m else (720, 1280)
+        cx, cy = int(body.get("x", w / 2)), int(body.get("y", h / 2))
+        dx = {"left": -1, "right": 1}.get(direction, 0) * w * dist
+        dy = {"up": -1, "down": 1}.get(direction, 0) * h * dist
+        _ib_adb_raw(mid, f"adb shell input swipe {int(cx - dx / 2)} {int(cy - dy / 2)} {int(cx + dx / 2)} {int(cy + dy / 2)} 120")
+        return {"ok": True, "direction": direction, "screen": [w, h]}
+
+    @app.post("/api/android/{mid}/scroll", dependencies=[api])
+    def android_scroll(request: Request, mid: str, body: dict = Body(...)) -> dict:
+        """Scroll. direction is what you want to SEE: down reveals content below."""
+        inverse = {"down": "up", "up": "down", "left": "right", "right": "left"}
+        d = str(body.get("direction", "down")).lower()
+        if d not in inverse:
+            raise HTTPException(400, "direction must be down, up, left or right")
+        body = dict(body)
+        body["direction"] = inverse[d]
+        return android_swipe(request, mid, body)
+
+    @app.post("/api/android/{mid}/wait-for-text", dependencies=[api])
+    def android_wait_for_text(request: Request, mid: str, body: dict = Body(...)) -> dict:
+        """Poll until the text is visible; the verify step after every action."""
+        query = str(body.get("query", ""))
+        deadline = time.time() + min(60.0, max(1.0, float(body.get("timeout", 10))))
+        last_visible = []
+        while time.time() < deadline:
+            nodes = _ui_nodes(mid)
+            hits = _find_nodes(nodes, query)
+            if hits:
+                return {"found": True, "match": hits[0]}
+            last_visible = [n["text"] or n["desc"] for n in nodes if n["text"] or n["desc"]][:30]
+            time.sleep(1.5)
+        return {"found": False, "visible": last_visible}
+
+    @app.post("/api/android/{mid}/open-app", dependencies=[api])
+    def android_open_app(request: Request, mid: str, body: dict = Body(...)) -> dict:
+        """Launch an app by package name (com.x.y) or a fuzzy name ('settings')."""
+        import re as _re
+        app = str(body.get("app", "")).strip()
+        if not app:
+            raise HTTPException(400, "app required")
+        if "." in app:
+            _ib_adb_raw(mid, f"adb shell monkey -p {app} -c android.intent.category.LAUNCHER 1")
+            return {"ok": True, "package": app}
+        out = _ib_text(_ib_adb_raw(mid, "adb shell pm list packages -3"))
+        pkgs = _re.findall(r"package:(\S+)", out)
+        q = app.lower().replace(" ", "")
+        match = next((p for p in pkgs if q in p.lower()), None)
+        if not match:
+            return {"ok": False, "error": f"no installed package matches {app!r}", "installed": pkgs[:40]}
+        _ib_adb_raw(mid, f"adb shell monkey -p {match} -c android.intent.category.LAUNCHER 1")
+        return {"ok": True, "package": match}
+
+    @app.post("/api/android/{mid}/wait-stable", dependencies=[api])
+    def android_wait_stable(request: Request, mid: str, body: dict = Body(default={})) -> dict:
+        """Wait until consecutive screen hashes match — animations are done."""
+        import hashlib as _hl
+        deadline = time.time() + min(30.0, max(1.0, float(body.get("timeout", 6))))
+        prev, same = None, 0
+        while time.time() < deadline:
+            _ib_adb_raw(mid, "adb shell screencap -p /sdcard/zh_s.png && adb shell md5sum /sdcard/zh_s.png && adb shell rm /sdcard/zh_s.png")
+            out = _ib_text(_ib_adb_raw(mid, "adb shell md5sum /sdcard/zh_s.png 2>/dev/null || true"))
+            digest = out.split()[0] if out.split() else ""
+            same = same + 1 if digest and digest == prev else 0
+            if same >= 1:
+                return {"stable": True}
+            prev = digest
+            time.sleep(0.6)
+        return {"stable": False}
+
     @app.post("/api/instabox/machines/{mid}/desktop/start", dependencies=[api])
     def ib_desktop_start(request: Request, mid: str, body: dict = Body(default={})) -> dict:
         """Start the desktop on an InstaBox machine."""

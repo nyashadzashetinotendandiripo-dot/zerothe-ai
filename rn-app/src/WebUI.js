@@ -3025,6 +3025,9 @@ export function AndroidBoxScreen({ conn, account, onAvatar }) {
   const [loading, setLoading] = useState(false);
   const [adbCmd, setAdbCmd] = useState('');
   const [adbResult, setAdbResult] = useState(null);
+  const [smartQ, setSmartQ] = useState('');
+  const [smartOut, setSmartOut] = useState(null);
+  const [smartBusy, setSmartBusy] = useState(false);
 
   useEffect(() => { (async () => {
     try { const d = await ibListMachines(); setMachines(d.machines || []); } catch (e) { setMachines([]); }
@@ -3073,6 +3076,19 @@ export function AndroidBoxScreen({ conn, account, onAvatar }) {
       }
     } catch (e) { Alert.alert('Screenshot failed', String(e.message || e)); }
     finally { setLoading(false); }
+  };
+
+  const smart = async (path, body) => {
+    if (!selectedMid) return;
+    setSmartBusy(true);
+    setSmartOut(null);
+    try {
+      const d = await api('/api/android/' + selectedMid + '/' + path, { method: 'POST', body: JSON.stringify(body || {}) });
+      setSmartOut(JSON.stringify(d, null, 2));
+    } catch (e) {
+      setSmartOut('Error: ' + String(e.message || e));
+    }
+    setSmartBusy(false);
   };
 
   return (
@@ -3153,6 +3169,53 @@ export function AndroidBoxScreen({ conn, account, onAvatar }) {
                 {!!shot && (
                   <View style={{ alignItems: 'center', marginTop: 10 }}>
                     <Image source={{ uri: shot }} style={{ width: 260, height: 460, borderRadius: 16, backgroundColor: '#000' }} resizeMode="contain" />
+                  </View>
+                )}
+              </View>
+
+              <View style={[W.museCard, { marginBottom: 12 }]}>
+                <Text style={W.museSection} marginBottom={8}>Smart Control</Text>
+                <Text style={W.gSub} marginBottom={8}>High-level commands: the bot finds text on screen by itself, like phone-harness. No coordinates needed.</Text>
+                <View style={{ flexDirection: 'row', gap: 6, marginBottom: 8 }}>
+                  <TextInput style={[W.rowInput, { flex: 1 }]} value={smartQ} onChangeText={setSmartQ} placeholder="Text to find, e.g. Settings" />
+                </View>
+                <View style={{ flexDirection: 'row', gap: 6, marginBottom: 8, flexWrap: 'wrap' }}>
+                  <Pressable onPress={() => smart('tap-text', { query: smartQ })} disabled={smartBusy || !smartQ.trim()}
+                    style={[W.pillBtn, { backgroundColor: C.solid, paddingHorizontal: 14 }]}>
+                    <Text style={{ color: '#fff', fontWeight: '800' }}>{smartBusy ? 'Working' : 'Tap Text'}</Text>
+                  </Pressable>
+                  <Pressable onPress={() => smart('find', { query: smartQ })} disabled={smartBusy || !smartQ.trim()}
+                    style={[W.pillBtn, { backgroundColor: C.panel2, paddingHorizontal: 14 }]}>
+                    <Text style={{ color: C.text, fontWeight: '700' }}>Find</Text>
+                  </Pressable>
+                  <Pressable onPress={() => smart('wait-for-text', { query: smartQ, timeout: 15 })} disabled={smartBusy || !smartQ.trim()}
+                    style={[W.pillBtn, { backgroundColor: C.panel2, paddingHorizontal: 14 }]}>
+                    <Text style={{ color: C.text, fontWeight: '700' }}>Wait For</Text>
+                  </Pressable>
+                  <Pressable onPress={() => smart('open-app', { app: smartQ })} disabled={smartBusy || !smartQ.trim()}
+                    style={[W.pillBtn, { backgroundColor: C.panel2, paddingHorizontal: 14 }]}>
+                    <Text style={{ color: C.text, fontWeight: '700' }}>Open App</Text>
+                  </Pressable>
+                </View>
+                <View style={{ flexDirection: 'row', gap: 6, marginBottom: 8, flexWrap: 'wrap' }}>
+                  {['up', 'down', 'left', 'right'].map((dir) => (
+                    <Pressable key={dir} onPress={() => smart('scroll', { direction: dir })}
+                      style={[W.pillBtn, { backgroundColor: C.panel2, paddingHorizontal: 14 }]}>
+                      <Text style={{ color: C.text, fontWeight: '700' }}>Scroll {dir.charAt(0).toUpperCase() + dir.slice(1)}</Text>
+                    </Pressable>
+                  ))}
+                  <Pressable onPress={() => smart('key', { key: 'back' })} disabled={smartBusy}
+                    style={[W.pillBtn, { backgroundColor: C.panel2, paddingHorizontal: 14 }]}>
+                    <Text style={{ color: C.text, fontWeight: '700' }}>Back</Text>
+                  </Pressable>
+                  <Pressable onPress={() => smart('key', { key: 'home' })} disabled={smartBusy}
+                    style={[W.pillBtn, { backgroundColor: C.panel2, paddingHorizontal: 14 }]}>
+                    <Text style={{ color: C.text, fontWeight: '700' }}>Home</Text>
+                  </Pressable>
+                </View>
+                {smartOut && (
+                  <View style={{ backgroundColor: C.panel2, borderRadius: 10, padding: 10 }}>
+                    <Text style={{ color: C.text, fontFamily: 'monospace', fontSize: 11 }}>{smartOut}</Text>
                   </View>
                 )}
               </View>
