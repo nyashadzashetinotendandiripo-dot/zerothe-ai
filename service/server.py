@@ -3757,6 +3757,16 @@ google.accounts.id.renderButton(document.getElementById('gbtn'),
         return Response(row.get("data", "{}").encode("utf-8"), media_type="application/json",
                        headers={"Content-Disposition": f'attachment; filename="export_{eid}.json"'})
 
+    @app.get("/api/apk", dependencies=[api])
+    def apk_download(request: Request) -> Response:
+        """Serve the built ZerotheBot APK for installation on the Android VM."""
+        user = current_user(request)
+        apk_path = "/data/home/ZerotheBot.apk"
+        if not os.path.exists(apk_path):
+            raise HTTPException(404, "APK not built yet.")
+        return FileResponse(apk_path, media_type="application/vnd.android.package-archive",
+                           filename="ZerotheBot.apk")
+
     @app.post("/api/import/all", dependencies=[api])
     def import_all(request: Request, body: dict = Body(...)) -> dict:
         """Import data from exported JSON."""
