@@ -1173,6 +1173,7 @@ export function MemoryView({ bots, conn, account, onAvatar }) {
     </View>
   );
 }
+export function ComputerView({ bots, busy, conn, account, onAvatar, onScreen }) {
   const [st, setSt] = useState(null);
   const [cmd, setCmd] = useState('');
   const [busyT, setBusyT] = useState(false);
