@@ -2131,7 +2131,7 @@ google.accounts.id.renderButton(document.getElementById('gbtn'),
         if "." in app:
             _ib_adb_raw(mid, f"adb shell monkey -p {app} -c android.intent.category.LAUNCHER 1")
             return {"ok": True, "package": app}
-        out = _ib_text(_ib_adb_raw(mid, "adb shell pm list packages -3"))
+        out = _ib_text(_ib_adb_raw(mid, "adb shell pm list packages"))
         pkgs = _re.findall(r"package:(\S+)", out)
         q = app.lower().replace(" ", "")
         match = next((p for p in pkgs if q in p.lower()), None)
