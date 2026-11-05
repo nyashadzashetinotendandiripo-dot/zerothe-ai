@@ -2147,9 +2147,10 @@ google.accounts.id.renderButton(document.getElementById('gbtn'),
         amount = min(1.0, max(0.05, float(body.get("amount", 0.6))))
         w, h = _screen_size(mid)
         cx, cy = int(body.get("x", w / 2)), int(body.get("y", h / 2))
-        # content direction -> finger travel is the opposite sign
+        # content direction -> finger travel is the opposite sign:
+        # revealing content BELOW means the finger drags UP the screen.
         dx = {"left": 1, "right": -1}.get(direction, 0) * w * amount
-        dy = {"down": 1, "up": -1}.get(direction, 0) * h * amount
+        dy = {"down": -1, "up": 1}.get(direction, 0) * h * amount
         keep = lambda v, size: int(min(max(v, size * 0.06), size * 0.94))
         x1, y1 = keep(cx - dx / 2, w), keep(cy - dy / 2, h)
         x2, y2 = keep(cx + dx / 2, w), keep(cy + dy / 2, h)
