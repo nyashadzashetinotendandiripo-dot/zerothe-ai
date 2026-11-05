@@ -2154,9 +2154,12 @@ google.accounts.id.renderButton(document.getElementById('gbtn'),
         deadline = time.time() + min(30.0, max(1.0, float(body.get("timeout", 6))))
         prev, same = None, 0
         while time.time() < deadline:
-            _ib_adb_raw(mid, "adb shell screencap -p /sdcard/zh_s.png && adb shell md5sum /sdcard/zh_s.png && adb shell rm /sdcard/zh_s.png")
-            out = _ib_text(_ib_adb_raw(mid, "adb shell md5sum /sdcard/zh_s.png 2>/dev/null || true"))
-            digest = out.split()[0] if out.split() else ""
+            out = _ib_text(_ib_adb_raw(mid, "adb shell screencap -p /sdcard/zh_s.png && adb shell md5sum /sdcard/zh_s.png && adb shell rm /sdcard/zh_s.png"))
+            digest = ""
+            for tok in out.split():
+                if len(tok) == 32 and all(c in "0123456789abcdefABCDEF" for c in tok):
+                    digest = tok.lower()
+                    break
             same = same + 1 if digest and digest == prev else 0
             if same >= 1:
                 return {"stable": True}
