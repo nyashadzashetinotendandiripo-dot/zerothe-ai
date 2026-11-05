@@ -1963,18 +1963,36 @@ google.accounts.id.renderButton(document.getElementById('gbtn'),
         return ""
 
     def _ui_nodes(mid: str) -> list:
-        """Accessibility tree as flat nodes with tap-ready centers."""
+        """Accessibility tree as flat nodes with tap-ready centers.
+
+        uiautomator dump straight to stdout (no temp file), retried briefly:
+        a screen mid-transition can yield a truncated or empty tree. A screen
+        that never goes idle refuses with 'could not get idle state' — surface
+        that as a clear error instead of empty nodes."""
         import re as _re
+        import time as _time
         import xml.etree.ElementTree as _ET
-        d = _ib_adb_raw(mid, "adb shell uiautomator dump /sdcard/zh_ui.xml && adb shell cat /sdcard/zh_ui.xml && adb shell rm /sdcard/zh_ui.xml", 90)
-        raw = _ib_text(d)
-        m = _re.search(r"<\?xml.*</hierarchy>", raw, _re.S)
-        if not m:
-            return []
-        try:
-            root = _ET.fromstring(m.group(0))
-        except Exception:
-            return []
+        last = ""
+        for i in range(3):
+            d = _ib_adb_raw(mid, "adb exec-out uiautomator dump /dev/tty", 90)
+            raw = _ib_text(d)
+            start = raw.find("<?xml")
+            if start >= 0:
+                xml = raw[start:raw.rfind(">") + 1]
+                try:
+                    root = _ET.fromstring(xml)
+                    break
+                except Exception:
+                    last = "unparseable tree"
+            else:
+                last = raw.strip()[:200] or "empty dump"
+                if "idle" in last.lower():
+                    raise HTTPException(409, "This screen never goes idle, so its "
+                                             "accessibility tree is unavailable. Use a "
+                                             "screenshot instead.")
+            _time.sleep(0.5 * (i + 1))
+        else:
+            raise HTTPException(502, f"uiautomator dump failed: {last}")
         nodes = []
 
         def walk(el):
@@ -1988,6 +2006,7 @@ google.accounts.id.renderButton(document.getElementById('gbtn'),
                 if t or desc or rid or el.get("clickable") == "true":
                     nodes.append({
                         "text": t, "desc": desc, "id": rid,
+                        "class": el.get("class") or "",
                         "clickable": el.get("clickable") == "true",
                         "x": (x1 + x2) // 2, "y": (y1 + y2) // 2,
                         "w": x2 - x1, "h": y2 - y1,
@@ -2007,6 +2026,18 @@ google.accounts.id.renderButton(document.getElementById('gbtn'),
             if any((f.lower() == q if exact else q in f.lower()) for f in fields):
                 hits.append(n)
         return hits
+
+    def _screen_size(mid: str) -> tuple:
+        """Current display pixels, rotation-aware: WindowManager's current
+        dimensions match the input coordinate space; wm size is unrotated."""
+        import re as _re
+        out = _ib_text(_ib_adb_raw(mid, "adb shell dumpsys window displays", 30))
+        m = _re.search(r"Display: mDisplayId=0\b[^\n]*\n[^\n]*\bcur=(\d+)x(\d+)", out)
+        if not m:
+            out = _ib_text(_ib_adb_raw(mid, "adb shell wm size", 30))
+            m = (_re.search(r"Override size:\s*(\d+)x(\d+)", out)
+                 or _re.search(r"Physical size:\s*(\d+)x(\d+)", out))
+        return (int(m.group(1)), int(m.group(2))) if m else (720, 1280)
 
     @app.post("/api/android/{mid}/ui", dependencies=[api])
     def android_ui(request: Request, mid: str) -> dict:
@@ -2051,19 +2082,28 @@ google.accounts.id.renderButton(document.getElementById('gbtn'),
         _ib_adb_raw(mid, f"adb shell input tap {int(body.get('x', 0))} {int(body.get('y', 0))}")
         return {"ok": True}
 
+    @app.post("/api/android/{mid}/long-press", dependencies=[api])
+    def android_long_press(request: Request, mid: str, body: dict = Body(...)) -> dict:
+        """Press and hold: a swipe that starts and ends on the same point."""
+        x, y = int(body.get("x", 0)), int(body.get("y", 0))
+        dur = min(5.0, max(0.3, float(body.get("duration", 0.8))))
+        _ib_adb_raw(mid, f"adb shell input swipe {x} {y} {x} {y} {int(dur * 1000)}")
+        return {"ok": True}
+
     @app.post("/api/android/{mid}/type", dependencies=[api])
     def android_type(request: Request, mid: str, body: dict = Body(...)) -> dict:
-        """Type text into the focused field (tap the field first)."""
-        import re as _re
+        """Type text into the focused field (tap the field first).
+
+        `input text` takes one ASCII token: spaces become %s, newlines become
+        KEYCODE_ENTER, and the rest is shell-quoted. adb cannot type emoji or
+        accented letters."""
+        import shlex as _shlex
         text = str(body.get("text", ""))
-        segments = text.split("\n")
-        for i, seg in enumerate(segments):
-            if seg:
-                safe = _re.sub(r"[^A-Za-z0-9 @#%&*+=().,;:!?'/_-]", "", seg).replace(" ", "%s")
-                if safe:
-                    _ib_adb_raw(mid, f"adb shell input text '{safe}'")
-            if i < len(segments) - 1:
-                _ib_adb_raw(mid, "adb shell input keyevent 66")
+        for i, line in enumerate(text.split("\n")):
+            if i:
+                _ib_adb_raw(mid, "adb shell input keyevent KEYCODE_ENTER")
+            if line:
+                _ib_adb_raw(mid, "adb shell input text " + _shlex.quote(line.replace(" ", "%s")))
         return {"ok": True, "typed": text}
 
     @app.post("/api/android/{mid}/key", dependencies=[api])
@@ -2080,15 +2120,13 @@ google.accounts.id.renderButton(document.getElementById('gbtn'),
 
     @app.post("/api/android/{mid}/swipe", dependencies=[api])
     def android_swipe(request: Request, mid: str, body: dict = Body(...)) -> dict:
-        """Momentum swipe. direction is FINGER motion: up shows the next item below."""
+        """Momentum flick. direction is FINGER motion: up shows the next item below.
+        A fast short drag coasts past content — right for 'next', wrong for reading."""
         direction = str(body.get("direction", "up")).lower()
         if direction not in ("up", "down", "left", "right"):
             raise HTTPException(400, "direction must be up, down, left or right")
         dist = min(1.0, max(0.05, float(body.get("distance", 0.4))))
-        size = _ib_text(_ib_adb_raw(mid, "adb shell wm size")).strip()
-        import re as _re
-        m = _re.search(r"(\d+)x(\d+)", size)
-        w, h = (int(m.group(1)), int(m.group(2))) if m else (720, 1280)
+        w, h = _screen_size(mid)
         cx, cy = int(body.get("x", w / 2)), int(body.get("y", h / 2))
         dx = {"left": -1, "right": 1}.get(direction, 0) * w * dist
         dy = {"up": -1, "down": 1}.get(direction, 0) * h * dist
@@ -2097,14 +2135,48 @@ google.accounts.id.renderButton(document.getElementById('gbtn'),
 
     @app.post("/api/android/{mid}/scroll", dependencies=[api])
     def android_scroll(request: Request, mid: str, body: dict = Body(...)) -> dict:
-        """Scroll. direction is what you want to SEE: down reveals content below."""
-        inverse = {"down": "up", "up": "down", "left": "right", "right": "left"}
-        d = str(body.get("direction", "down")).lower()
-        if d not in inverse:
+        """Scroll. direction is what you want to SEE: down reveals content below.
+
+        A slow drag that does not fling: `input swipe` lifts the finger while
+        it is still moving, so the list coasts past rows and a walk skips them.
+        Touch down, move in steps, hold still, then lift — via input
+        motionevent when the device knows it, else a slow swipe (600ms+)."""
+        direction = str(body.get("direction", "down")).lower()
+        if direction not in ("up", "down", "left", "right"):
             raise HTTPException(400, "direction must be down, up, left or right")
-        body = dict(body)
-        body["direction"] = inverse[d]
-        return android_swipe(request, mid, body)
+        amount = min(1.0, max(0.05, float(body.get("amount", 0.6))))
+        w, h = _screen_size(mid)
+        cx, cy = int(body.get("x", w / 2)), int(body.get("y", h / 2))
+        # content direction -> finger travel is the opposite sign
+        dx = {"left": 1, "right": -1}.get(direction, 0) * w * amount
+        dy = {"down": 1, "up": -1}.get(direction, 0) * h * amount
+        keep = lambda v, size: int(min(max(v, size * 0.06), size * 0.94))
+        x1, y1 = keep(cx - dx / 2, w), keep(cy - dy / 2, h)
+        x2, y2 = keep(cx + dx / 2, w), keep(cy + dy / 2, h)
+        n = 6
+        moves = " && ".join(
+            f"input motionevent MOVE {int(x1 + (x2 - x1) * i / n)} {int(y1 + (y2 - y1) * i / n)}"
+            for i in range(1, n + 1))
+        try:
+            _ib_adb_raw(mid, f"adb shell input motionevent DOWN {x1} {y1} && {moves} && sleep 0.2 && input motionevent UP {x2} {y2}")
+            mode = "motionevent"
+        except Exception:
+            travel = max(abs(x2 - x1), abs(y2 - y1))
+            _ib_adb_raw(mid, f"adb shell input swipe {x1} {y1} {x2} {y2} {max(600, int(travel * 4))}")
+            mode = "swipe-slow"
+        return {"ok": True, "direction": direction, "screen": [w, h], "mode": mode}
+
+    @app.post("/api/android/{mid}/scroll-step", dependencies=[api])
+    def android_scroll_step(request: Request, mid: str, body: dict = Body(...)) -> dict:
+        """One scroll, then the visible text before and after — so a bot can
+        tell whether the list moved (end-of-list = the screen stopped changing)."""
+        direction = str(body.get("direction", "down")).lower()
+        before = [n["text"] or n["desc"] for n in _ui_nodes(mid) if n["text"] or n["desc"]]
+        android_scroll(request, mid, body)
+        time.sleep(0.8)
+        after = [n["text"] or n["desc"] for n in _ui_nodes(mid) if n["text"] or n["desc"]]
+        return {"before": before[:40], "after": after[:40],
+                "moved": sorted(after) != sorted(before)}
 
     @app.post("/api/android/{mid}/wait-for-text", dependencies=[api])
     def android_wait_for_text(request: Request, mid: str, body: dict = Body(...)) -> dict:
@@ -2121,28 +2193,85 @@ google.accounts.id.renderButton(document.getElementById('gbtn'),
             time.sleep(1.5)
         return {"found": False, "visible": last_visible}
 
+    _WELL_KNOWN_APPS = {
+        "tiktok": ("com.zhiliaoapp.musically", "com.ss.android.ugc.trill"),
+        "x": ("com.twitter.android",), "twitter": ("com.twitter.android",),
+        "facebook": ("com.facebook.katana", "com.facebook.lite"),
+        "messenger": ("com.facebook.orca",),
+        "signal": ("org.thoughtcrime.securesms",),
+        "gmail": ("com.google.android.gm",),
+        "playstore": ("com.android.vending",), "googleplay": ("com.android.vending",),
+        "uber": ("com.ubercab",), "ubereats": ("com.ubercab.eats",),
+        "amazon": ("com.amazon.mShop.android.shopping",),
+        "googlemaps": ("com.google.android.apps.maps",),
+        "messages": ("com.google.android.apps.messaging",),
+        "phone": ("com.google.android.dialer", "com.android.dialer"),
+        "clock": ("com.google.android.deskclock", "com.android.deskclock"),
+        "files": ("com.google.android.documentsui", "com.android.documentsui"),
+        "camera": ("com.android.camera2",),
+        "gallery": ("com.android.gallery3d", "com.google.android.apps.photos"),
+        "calendar": ("com.google.android.calendar", "com.android.calendar"),
+        "contacts": ("com.google.android.contacts", "com.android.contacts"),
+        "settings": ("com.android.settings",),
+    }
+
+    @app.post("/api/android/{mid}/current-app", dependencies=[api])
+    def android_current_app(request: Request, mid: str) -> dict:
+        """The foreground app's package id, from the activity stack."""
+        import re as _re
+        out = _ib_text(_ib_adb_raw(mid, "adb shell dumpsys activity activities", 30))
+        m = (_re.search(r"topResumedActivity=ActivityRecord\{[^}]*?\bu\d+ ([\w.]+)/", out)
+             or _re.search(r"mResumedActivity: ActivityRecord\{[^}]*?\bu\d+ ([\w.]+)/", out))
+        return {"app": m.group(1) if m else None}
+
+    @app.post("/api/android/{mid}/wait-for-app", dependencies=[api])
+    def android_wait_for_app(request: Request, mid: str, body: dict = Body(...)) -> dict:
+        """Poll until `app` is the foreground app — the cheap verify after open-app."""
+        want = str(body.get("app", ""))
+        deadline = time.time() + min(30.0, max(1.0, float(body.get("timeout", 10))))
+        last = None
+        while time.time() < deadline:
+            last = android_current_app(request, mid).get("app")
+            if last and (last == want or want.lower() in last.lower()):
+                return {"running": True, "app": last}
+            time.sleep(0.6)
+        return {"running": False, "foreground": last}
+
     @app.post("/api/android/{mid}/open-app", dependencies=[api])
     def android_open_app(request: Request, mid: str, body: dict = Body(...)) -> dict:
-        """Launch an app by package name (com.x.y) or a fuzzy name ('settings')."""
+        """Launch an app. A package id, the name a person would say, or a
+        fragment of an id ('chrome' -> com.android.chrome). Android only knows
+        apps by package id and plenty of ids do not contain the brand, so a
+        name is tried as: exact id; a well-known name; a fragment of an id
+        (dots stripped, shortest match wins). Launch goes through
+        resolve-activity + am start -W, which waits for the app to come up."""
         import re as _re
         app = str(body.get("app", "")).strip()
         if not app:
             raise HTTPException(400, "app required")
-        if "." in app:
+        out = _ib_text(_ib_adb_raw(mid, "adb shell pm list packages", 60))
+        pkgs = _re.findall(r"package:(\S+)", out)
+        want = _re.sub(r"[^a-z0-9]+", "", app.lower())
+        target = None
+        if app in pkgs:
             target = app
-        else:
-            out = _ib_text(_ib_adb_raw(mid, "adb shell pm list packages"))
-            pkgs = _re.findall(r"package:(\S+)", out)
-            q = app.lower().replace(" ", "")
-            target = next((p for p in pkgs if q in p.lower()), None)
-            if not target:
-                return {"ok": False, "error": f"no installed package matches {app!r}", "installed": pkgs[:40]}
-        # Resolve the launchable activity and start it (monkey is unreliable on some boxes)
-        res = _ib_text(_ib_adb_raw(mid, f"adb shell cmd package resolve-activity --brief {target}"))
+        if target is None:
+            for p in _WELL_KNOWN_APPS.get(want, ()):
+                if p in pkgs:
+                    target = p
+                    break
+        if target is None:
+            hits = [p for p in pkgs if want and want in p.lower().replace(".", "")]
+            target = sorted(hits, key=len)[0] if hits else None
+        if target is None:
+            return {"ok": False, "error": f"no installed app matches {app!r}",
+                    "installed": sorted(pkgs)[:60]}
+        res = _ib_text(_ib_adb_raw(
+            mid, f"adb shell cmd package resolve-activity --brief -c android.intent.category.LAUNCHER {target}", 30))
         lines = [l.strip() for l in res.splitlines() if l.strip()]
-        activity = lines[-1] if lines and "/" in lines[-1] else ""
-        if activity and not activity.startswith("priority="):
-            _ib_adb_raw(mid, f"adb shell am start -n {activity}")
+        activity = lines[-1] if lines and "/" in lines[-1] and not lines[-1].startswith("priority=") else ""
+        if activity:
+            _ib_adb_raw(mid, f"adb shell am start -W -n {activity}", 60)
             return {"ok": True, "package": target, "activity": activity}
         _ib_adb_raw(mid, f"adb shell monkey -p {target} -c android.intent.category.LAUNCHER 1")
         return {"ok": True, "package": target, "activity": "(monkey)"}

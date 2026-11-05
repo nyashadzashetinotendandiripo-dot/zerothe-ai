@@ -757,6 +757,8 @@ export function SwarmView({ bots, busy, conn, account, onAvatar, onScreen }) {
   const [selSwarm, setSelSwarm] = useState(null);
   const [tasks, setTasks] = useState([]);
   const [loading, setLoading] = useState(false);
+  const [newName, setNewName] = useState('');
+  const [newTask, setNewTask] = useState('');
 
   const loadSwarm = useCallback(async (id) => {
     if (!id) return;
@@ -778,21 +780,23 @@ export function SwarmView({ bots, busy, conn, account, onAvatar, onScreen }) {
   useEffect(() => { if (selSwarm) loadSwarm(selSwarm.id); }, [selSwarm, loadSwarm]);
 
   const createSwarm = async () => {
-    const name = prompt('Swarm name:');
+    const name = (newName || '').trim();
     if (!name) return;
     const botIds = (bots || []).filter(b => !b.archived).map(b => b.id);
     try {
       await api('/api/swarms', { method: 'POST', body: JSON.stringify({ name, bot_ids: botIds, strategy: 'parallel' }) });
+      setNewName('');
       await loadSwarms();
     } catch (e) { Alert.alert('Error', String(e.message || e)); }
   };
 
   const runTask = async () => {
     if (!selSwarm) return;
-    const trigger = prompt('Task description:');
+    const trigger = (newTask || '').trim();
     if (!trigger) return;
     try {
       await api(`/api/swarms/${selSwarm.id}/task`, { method: 'POST', body: JSON.stringify({ trigger }) });
+      setNewTask('');
       await loadSwarm(selSwarm.id);
     } catch (e) { Alert.alert('Error', String(e.message || e)); }
   };
@@ -803,9 +807,10 @@ export function SwarmView({ bots, busy, conn, account, onAvatar, onScreen }) {
         account={account} onAvatar={onAvatar} />
       <ScrollView contentContainerStyle={{ paddingBottom: 30 }} showsVerticalScrollIndicator={false}>
         <View style={{ paddingHorizontal: 16, paddingTop: 10 }}>
-          <View style={{ flexDirection: 'row', gap: 8, marginBottom: 14 }}>
+          <View style={{ flexDirection: 'row', gap: 8, marginBottom: 14, alignItems: 'center' }}>
+            <TextInput style={[W.rowInput, { flex: 1 }]} value={newName} onChangeText={setNewName} placeholder="New swarm name" placeholderTextColor={C.muted} />
             <Pressable onPress={createSwarm} style={[W.tlChip, { backgroundColor: C.solid }]}>
-              <Text style={[W.tlChipT, { color: C.onSolid }]}>+ New Swarm</Text>
+              <Text style={[W.tlChipT, { color: C.onSolid }]}>Create</Text>
             </Pressable>
             <Pressable onPress={loadSwarms} style={W.tlChip}>
               <Text style={W.tlChipT}>Refresh</Text>
@@ -815,17 +820,18 @@ export function SwarmView({ bots, busy, conn, account, onAvatar, onScreen }) {
           {!selSwarm && (swarms.length ? (
             swarms.map((s) => (
               <Pressable key={s.id} onPress={() => setSelSwarm(s)} style={[W.tlChip, selSwarm?.id === s.id && { backgroundColor: C.solid }]}>
-                <Text style={[W.tlChipT, selSwarm?.id === s.id && { color: C.onSolid }]}>{s.emoji || '🐝'} {s.name}</Text>
+                <Text style={[W.tlChipT, selSwarm?.id === s.id && { color: C.onSolid }]}>{s.name}</Text>
                 <Text style={{ color: selSwarm?.id === s.id ? C.onSolid : C.muted, fontSize: 10 }}>{s.strategy}</Text>
               </Pressable>
             ))
-          )) : <Text style={W.mutedC}>No swarms yet. Create one to coordinate multiple bots.</text>}
+          )) : <Text style={W.mutedC}>No swarms yet. Create one to coordinate multiple bots.</Text>}
           {selSwarm && (
             <>
-              <View style={{ flexDirection: 'row', gap: 8, marginBottom: 14 }}>
-                <Text style={[W.section, { marginBottom: 0 }]}>{selSwarm.name}</Text>
+              <Text style={[W.section, { marginBottom: 8 }]}>{selSwarm.name}</Text>
+              <View style={{ flexDirection: 'row', gap: 8, marginBottom: 14, alignItems: 'center' }}>
+                <TextInput style={[W.rowInput, { flex: 1 }]} value={newTask} onChangeText={setNewTask} placeholder="Task for the swarm" placeholderTextColor={C.muted} />
                 <Pressable onPress={runTask} style={[W.tlChip, { backgroundColor: C.solid }]}>
-                  <Text style={[W.tlChipT, { color: C.onSolid }]}>+ New Task</Text>
+                  <Text style={[W.tlChipT, { color: C.onSolid }]}>Run</Text>
                 </Pressable>
               </View>
               <Text style={[W.section, { marginBottom: 8 }]}>Tasks</Text>
@@ -856,6 +862,7 @@ export function WorkflowView({ bots, conn, account, onAvatar }) {
   const [selWf, setSelWf] = useState(null);
   const [runs, setRuns] = useState([]);
   const [loading, setLoading] = useState(false);
+  const [newName, setNewName] = useState('');
 
   const loadWfs = useCallback(async () => {
     try { const d = await api('/api/workflows'); setWfs(d.workflows || []); } catch (e) { setWfs([]); }
@@ -874,10 +881,11 @@ export function WorkflowView({ bots, conn, account, onAvatar }) {
   useEffect(() => { if (selWf) loadWf(selWf.id); }, [selWf, loadWf]);
 
   const createWf = async () => {
-    const name = prompt('Workflow name:');
+    const name = (newName || '').trim();
     if (!name) return;
     try {
       await api('/api/workflows', { method: 'POST', body: JSON.stringify({ name, nodes: '[]', edges: '[]', trigger: 'manual' }) });
+      setNewName('');
       await loadWfs();
     } catch (e) { Alert.alert('Error', String(e.message || e)); }
   };
@@ -896,9 +904,10 @@ export function WorkflowView({ bots, conn, account, onAvatar }) {
         account={account} onAvatar={onAvatar} />
       <ScrollView contentContainerStyle={{ paddingBottom: 30 }} showsVerticalScrollIndicator={false}>
         <View style={{ paddingHorizontal: 16, paddingTop: 10 }}>
-          <View style={{ flexDirection: 'row', gap: 8, marginBottom: 14 }}>
+          <View style={{ flexDirection: 'row', gap: 8, marginBottom: 14, alignItems: 'center' }}>
+            <TextInput style={[W.rowInput, { flex: 1 }]} value={newName} onChangeText={setNewName} placeholder="New workflow name" placeholderTextColor={C.muted} />
             <Pressable onPress={createWf} style={[W.tlChip, { backgroundColor: C.solid }]}>
-              <Text style={[W.tlChipT, { color: C.onSolid }]}>+ New Workflow</Text>
+              <Text style={[W.tlChipT, { color: C.onSolid }]}>Create</Text>
             </Pressable>
             <Pressable onPress={loadWfs} style={W.tlChip}>
               <Text style={W.tlChipT}>Refresh</Text>
@@ -908,17 +917,17 @@ export function WorkflowView({ bots, conn, account, onAvatar }) {
           {!selWf && (wfs.length ? (
             wfs.map((w) => (
               <Pressable key={w.id} onPress={() => setSelWf(w)} style={[W.tlChip, selWf?.id === w.id && { backgroundColor: C.solid }]}>
-                <Text style={[W.tlChipT, selWf?.id === w.id && { color: C.onSolid }]}>🔧 {w.name}</Text>
+                <Text style={[W.tlChipT, selWf?.id === w.id && { color: C.onSolid }]}>{w.name}</Text>
                 <Text style={{ color: selWf?.id === w.id ? C.onSolid : C.muted, fontSize: 10 }}>{w.status}</Text>
               </Pressable>
             ))
-          )) : <Text style={W.mutedC}>No workflows yet.</text>}
+          )) : <Text style={W.mutedC}>No workflows yet.</Text>}
           {selWf && (
             <>
-              <View style={{ flexDirection: 'row', gap: 8, marginBottom: 14 }}>
-                <Text style={[W.section, { marginBottom: 0 }]}>{selWf.name}</Text>
+              <View style={{ flexDirection: 'row', gap: 8, marginBottom: 14, alignItems: 'center' }}>
+                <Text style={[W.section, { marginBottom: 0, flex: 1 }]}>{selWf.name}</Text>
                 <Pressable onPress={runWf} style={[W.tlChip, { backgroundColor: C.solid }]}>
-                  <Text style={[W.tlChipT, { color: C.onSolid }]}>▶ Run</Text>
+                  <Text style={[W.tlChipT, { color: C.onSolid }]}>Run</Text>
                 </Pressable>
               </View>
               <Text style={[W.section, { marginBottom: 8 }]}>Runs</Text>
@@ -928,7 +937,7 @@ export function WorkflowView({ bots, conn, account, onAvatar }) {
                     <View style={[W.tlDot, { backgroundColor: r.status === 'completed' ? C.ok : C.bad }]} />
                     <View style={{ flex: 1, minWidth: 0 }}>
                       <Text style={W.tlWho} numberOfLines={1}>Run #{r.id.slice(-4)}</Text>
-                      <Text style={W.tlWhen}>{r.status || 'unknown'} · ${r.steps || 0} steps</Text>
+                      <Text style={W.tlWhen}>{r.status || 'unknown'} · {r.steps || 0} steps</Text>
                     </View>
                   </View>
                 ))
@@ -1015,18 +1024,21 @@ export function AnalyticsView({ bots, conn, account, onAvatar }) {
 export function WebhookView({ conn, account, onAvatar }) {
   const [whs, setWhs] = useState([]);
   const [loading, setLoading] = useState(false);
+  const [whName, setWhName] = useState('');
+  const [whUrl, setWhUrl] = useState('');
 
   const loadWhs = useCallback(async () => {
     try { const d = await api('/api/webhooks'); setWhs(d.webhooks || []); } catch (e) { setWhs([]); }
   }, []);
 
   const createWh = async () => {
-    const name = prompt('Webhook name:');
-    if (!name) return;
-    const url = prompt('Webhook URL:');
-    if (!url) return;
+    const name = (whName || '').trim();
+    const url = (whUrl || '').trim();
+    if (!name || !url) return;
     try {
       await api('/api/webhooks', { method: 'POST', body: JSON.stringify({ name, url, events: ['message', 'turn_done'] }) });
+      setWhName('');
+      setWhUrl('');
       await loadWhs();
     } catch (e) { Alert.alert('Error', String(e.message || e)); }
   };
@@ -1046,10 +1058,14 @@ export function WebhookView({ conn, account, onAvatar }) {
         account={account} onAvatar={onAvatar} />
       <ScrollView contentContainerStyle={{ paddingBottom: 30 }} showsVerticalScrollIndicator={false}>
         <View style={{ paddingHorizontal: 16, paddingTop: 10 }}>
-          <Pressable onPress={createWh} style={[W.tlChip, { backgroundColor: C.solid }]}>
-            <Text style={[W.tlChipT, { color: C.onSolid }]}>+ New Webhook</Text>
-          </Pressable>
-          <Text style={[W.section, { marginBottom: 8, marginTop: 14 }]}>Webhooks</Text>
+          <View style={{ gap: 8, marginBottom: 14 }}>
+            <TextInput style={W.rowInput} value={whName} onChangeText={setWhName} placeholder="Webhook name" placeholderTextColor={C.muted} />
+            <TextInput style={W.rowInput} value={whUrl} onChangeText={setWhUrl} placeholder="https://hooks.example.com/..." placeholderTextColor={C.muted} autoCapitalize="none" />
+            <Pressable onPress={createWh} style={[W.tlChip, { backgroundColor: C.solid, alignSelf: 'flex-start' }]}>
+              <Text style={[W.tlChipT, { color: C.onSolid }]}>Create Webhook</Text>
+            </Pressable>
+          </View>
+          <Text style={[W.section, { marginBottom: 8 }]}>Webhooks</Text>
           {!whs.length ? <Text style={W.mutedC}>No webhooks yet.</Text> : (
             whs.map((w) => (
               <View key={w.id} style={W.tlRow}>
@@ -1078,6 +1094,8 @@ export function MemoryView({ bots, conn, account, onAvatar }) {
   const [mem, setMem] = useState([]);
   const [q, setQ] = useState('');
   const [loading, setLoading] = useState(false);
+  const [memText, setMemText] = useState('');
+  const [memKind, setMemKind] = useState('fact');
 
   const loadMem = useCallback(async (id) => {
     if (!id) return;
@@ -1091,11 +1109,11 @@ export function MemoryView({ bots, conn, account, onAvatar }) {
 
   const addMem = async () => {
     if (!botId) return;
-    const text = prompt('Memory text:');
+    const text = (memText || '').trim();
     if (!text) return;
-    const kind = prompt('Kind (fact/preference/voice/edge_case):', 'fact');
     try {
-      await api(`/api/bots/${botId}/memory/bulk`, { method: 'POST', body: JSON.stringify({ items: [{ text, kind }] }) });
+      await api(`/api/bots/${botId}/memory/bulk`, { method: 'POST', body: JSON.stringify({ items: [{ text, kind: memKind || 'fact' }] }) });
+      setMemText('');
       await loadMem(botId);
     } catch (e) { Alert.alert('Error', String(e.message || e)); }
   };
@@ -1114,15 +1132,17 @@ export function MemoryView({ bots, conn, account, onAvatar }) {
             </Pressable>
             {(bots || []).filter((b) => !b.archived).map((b) => (
               <Pressable key={b.id} onPress={() => setBotId(b.id)} style={[W.tlChip, botId === b.id && { backgroundColor: C.solid }]}>
-                <Text style={[W.tlChipT, botId === b.id && { color: C.onSolid }]}>{b.emoji || '🤖'} {b.name}</Text>
+                <Text style={[W.tlChipT, botId === b.id && { color: C.onSolid }]}>{b.name}</Text>
               </Pressable>
             ))}
           </View>
           {botId && (
             <>
-              <View style={{ flexDirection: 'row', gap: 8, marginBottom: 10 }}>
+              <View style={{ flexDirection: 'row', gap: 8, marginBottom: 10, alignItems: 'center' }}>
+                <TextInput style={[W.rowInput, { flex: 1 }]} value={memText} onChangeText={setMemText} placeholder="New memory text" placeholderTextColor={C.muted} />
+                <TextInput style={[W.rowInput, { width: 90 }]} value={memKind} onChangeText={setMemKind} placeholder="fact" placeholderTextColor={C.muted} />
                 <Pressable onPress={addMem} style={[W.tlChip, { backgroundColor: C.solid }]}>
-                  <Text style={[W.tlChipT, { color: C.onSolid }]}>+ Add Memory</Text>
+                  <Text style={[W.tlChipT, { color: C.onSolid }]}>Add</Text>
                 </Pressable>
               </View>
               <TextInput
@@ -3212,6 +3232,10 @@ export function AndroidBoxScreen({ conn, account, onAvatar }) {
                     style={[W.pillBtn, { backgroundColor: C.panel2, paddingHorizontal: 14 }]}>
                     <Text style={{ color: C.text, fontWeight: '700' }}>Home</Text>
                   </Pressable>
+                  <Pressable onPress={() => smart('current-app', {})} disabled={smartBusy}
+                    style={[W.pillBtn, { backgroundColor: C.panel2, paddingHorizontal: 14 }]}>
+                    <Text style={{ color: C.text, fontWeight: '700' }}>Current App</Text>
+                  </Pressable>
                 </View>
                 {smartOut && (
                   <View style={{ backgroundColor: C.panel2, borderRadius: 10, padding: 10 }}>
@@ -3220,6 +3244,101 @@ export function AndroidBoxScreen({ conn, account, onAvatar }) {
                 )}
               </View>
             </>
+          )}
+        </View>
+      </ScrollView>
+    </View>
+  );
+}
+
+// ---------------------------------------------------------------- audit logs
+export function AuditLogView({ conn, account, onAvatar }) {
+  const [logs, setLogs] = useState([]);
+
+  const load = useCallback(async () => {
+    try { const d = await api('/api/audit/logs'); setLogs(d.audit_logs || []); } catch (e) { setLogs([]); }
+  }, []);
+  useEffect(() => { load(); }, [load]);
+
+  return (
+    <View style={W.screen}>
+      <WebTopBar title="Audit Logs" showBack conn={conn} showSearch showNew={false}
+        account={account} onAvatar={onAvatar} />
+      <ScrollView contentContainerStyle={{ paddingBottom: 30 }} showsVerticalScrollIndicator={false}>
+        <View style={{ paddingHorizontal: 16, paddingTop: 10 }}>
+          <Pressable onPress={load} style={[W.tlChip, { backgroundColor: C.solid, alignSelf: 'flex-start' }]}>
+            <Text style={[W.tlChipT, { color: C.onSolid }]}>Refresh</Text>
+          </Pressable>
+          <Text style={[W.section, { marginBottom: 8, marginTop: 14 }]}>Audit Trail</Text>
+          {!logs.length ? <Text style={W.mutedC}>No audit entries yet.</Text> : (
+            logs.map((l) => (
+              <View key={l.id} style={W.tlRow}>
+                <View style={[W.tlDot, { backgroundColor: C.muted }]} />
+                <View style={{ flex: 1, minWidth: 0 }}>
+                  <Text style={W.tlWho} numberOfLines={1}>{l.action || 'event'}</Text>
+                  <Text style={W.tlWhen}>{agoTime(l.created_at)}{l.target ? ' · ' + l.target : ''}</Text>
+                  {l.details ? <Text style={{ color: C.muted, fontSize: 11 }}>{String(l.details).slice(0, 200)}</Text> : null}
+                </View>
+              </View>
+            ))
+          )}
+        </View>
+      </ScrollView>
+    </View>
+  );
+}
+
+// ---------------------------------------------------------------- api keys
+export function ApiKeysView({ conn, account, onAvatar }) {
+  const [keys, setKeys] = useState([]);
+  const [keyName, setKeyName] = useState('');
+  const [secret, setSecret] = useState('');
+
+  const load = useCallback(async () => {
+    try { const d = await api('/api/api-keys'); setKeys(d.keys || []); } catch (e) { setKeys([]); }
+  }, []);
+  useEffect(() => { load(); }, [load]);
+
+  const createKey = async () => {
+    const name = (keyName || '').trim();
+    if (!name) return;
+    try {
+      const d = await api('/api/api-keys', { method: 'POST', body: JSON.stringify({ name }) });
+      setSecret(d.secret || '');
+      setKeyName('');
+      await load();
+    } catch (e) { Alert.alert('Error', String(e.message || e)); }
+  };
+
+  return (
+    <View style={W.screen}>
+      <WebTopBar title="API Keys" showBack conn={conn} showSearch showNew={false}
+        account={account} onAvatar={onAvatar} />
+      <ScrollView contentContainerStyle={{ paddingBottom: 30 }} showsVerticalScrollIndicator={false}>
+        <View style={{ paddingHorizontal: 16, paddingTop: 10 }}>
+          <View style={{ flexDirection: 'row', gap: 8, marginBottom: 10, alignItems: 'center' }}>
+            <TextInput style={[W.rowInput, { flex: 1 }]} value={keyName} onChangeText={setKeyName} placeholder="Key name, e.g. My Script" placeholderTextColor={C.muted} />
+            <Pressable onPress={createKey} style={[W.tlChip, { backgroundColor: C.solid }]}>
+              <Text style={[W.tlChipT, { color: C.onSolid }]}>Create</Text>
+            </Pressable>
+          </View>
+          {secret ? (
+            <View style={[W.tlChip, { backgroundColor: C.panel2, marginBottom: 12 }]}>
+              <Text style={{ color: C.text, fontFamily: 'monospace', fontSize: 11 }}>{secret}</Text>
+              <Text style={{ color: C.muted, fontSize: 10, marginTop: 4 }}>Copy this secret now. It is not shown again.</Text>
+            </View>
+          ) : null}
+          <Text style={[W.section, { marginBottom: 8 }]}>Keys</Text>
+          {!keys.length ? <Text style={W.mutedC}>No API keys yet.</Text> : (
+            keys.map((k) => (
+              <View key={k.id} style={W.tlRow}>
+                <View style={[W.tlDot, { backgroundColor: k.active ? C.ok : C.bad }]} />
+                <View style={{ flex: 1, minWidth: 0 }}>
+                  <Text style={W.tlWho} numberOfLines={1}>{k.name}</Text>
+                  <Text style={W.tlWhen}>{k.active ? 'Active' : 'Inactive'} · created {agoTime(k.created_at)}</Text>
+                </View>
+              </View>
+            ))
           )}
         </View>
       </ScrollView>
