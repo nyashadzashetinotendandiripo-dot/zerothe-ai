@@ -2160,17 +2160,38 @@ google.accounts.id.renderButton(document.getElementById('gbtn'),
         _ib_adb_raw(mid, f"adb shell input swipe {x1} {y1} {x2} {y2} {max(600, int(travel * 4))}")
         return {"ok": True, "direction": direction, "screen": [w, h], "mode": "swipe-slow"}
 
+    def _screen_md5(mid: str) -> str:
+        """md5 of the current frame — detects motion where the accessibility
+        tree is stale (WebView keeps showing old text after a scroll)."""
+        import hashlib as _hashlib
+        import re as _re
+        out = _ib_text(_ib_adb_raw(
+            mid,
+            "adb shell screencap -p /sdcard/zh_frame.png && adb shell md5sum /sdcard/zh_frame.png && adb shell rm /sdcard/zh_frame.png",
+            60))
+        m = _re.search(r"([0-9a-f]{32})", out)
+        return m.group(1) if m else ""
+
     @app.post("/api/android/{mid}/scroll-step", dependencies=[api])
     def android_scroll_step(request: Request, mid: str, body: dict = Body(...)) -> dict:
         """One scroll, then the visible text before and after — so a bot can
-        tell whether the list moved (end-of-list = the screen stopped changing)."""
+        tell whether the list moved (end-of-list = the screen stopped changing).
+
+        WebView content often keeps a stale accessibility tree after scrolling,
+        so the screenshot hash is compared too: moved is true when either the
+        text or the pixels changed."""
         direction = str(body.get("direction", "down")).lower()
         before = [n["text"] or n["desc"] for n in _ui_nodes(mid) if n["text"] or n["desc"]]
+        hash_before = _screen_md5(mid)
         android_scroll(request, mid, body)
         time.sleep(0.8)
         after = [n["text"] or n["desc"] for n in _ui_nodes(mid) if n["text"] or n["desc"]]
+        hash_after = _screen_md5(mid)
+        text_moved = sorted(after) != sorted(before)
+        pixels_moved = bool(hash_before) and bool(hash_after) and hash_before != hash_after
         return {"before": before[:40], "after": after[:40],
-                "moved": sorted(after) != sorted(before)}
+                "textMoved": text_moved, "pixelsMoved": pixels_moved,
+                "moved": text_moved or pixels_moved}
 
     @app.post("/api/android/{mid}/wait-for-text", dependencies=[api])
     def android_wait_for_text(request: Request, mid: str, body: dict = Body(...)) -> dict:
