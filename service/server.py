@@ -2758,8 +2758,8 @@ google.accounts.id.renderButton(document.getElementById('gbtn'),
             "strategy": str(body.get("strategy", "parallel")),  # parallel, sequential, consensus
             "status": "active",
             "created_at": time.time(),
-            "tasks": [],
-            "results": [],
+            "tasks": "[]",
+            "results": "[]",
         }
         eng.db.insert("swarms", swarm)
         return {"ok": True, "swarm": swarm}
@@ -2801,7 +2801,7 @@ google.accounts.id.renderButton(document.getElementById('gbtn'),
             "strategy": row.get("strategy", "parallel"),
             "status": "running",
             "created_at": time.time(),
-            "results": [],
+            "results": "[]",
         }
         eng.db.insert("swarm_tasks", task)
         # Dispatch to all bots in swarm

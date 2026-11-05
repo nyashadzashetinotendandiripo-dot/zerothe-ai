@@ -824,7 +824,9 @@ export function SwarmView({ bots, busy, conn, account, onAvatar, onScreen }) {
                 <Text style={{ color: selSwarm?.id === s.id ? C.onSolid : C.muted, fontSize: 10 }}>{s.strategy}</Text>
               </Pressable>
             ))
-          )) : <Text style={W.mutedC}>No swarms yet. Create one to coordinate multiple bots.</Text>}
+          ) : (
+            <Text style={W.mutedC}>No swarms yet. Create one to coordinate multiple bots.</Text>
+          )}
           {selSwarm && (
             <>
               <Text style={[W.section, { marginBottom: 8 }]}>{selSwarm.name}</Text>
