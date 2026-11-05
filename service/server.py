@@ -2154,18 +2154,11 @@ google.accounts.id.renderButton(document.getElementById('gbtn'),
         keep = lambda v, size: int(min(max(v, size * 0.06), size * 0.94))
         x1, y1 = keep(cx - dx / 2, w), keep(cy - dy / 2, h)
         x2, y2 = keep(cx + dx / 2, w), keep(cy + dy / 2, h)
-        n = 6
-        moves = " && ".join(
-            f"input motionevent MOVE {int(x1 + (x2 - x1) * i / n)} {int(y1 + (y2 - y1) * i / n)}"
-            for i in range(1, n + 1))
-        try:
-            _ib_adb_raw(mid, f"adb shell input motionevent DOWN {x1} {y1} && {moves} && sleep 0.2 && input motionevent UP {x2} {y2}")
-            mode = "motionevent"
-        except Exception:
-            travel = max(abs(x2 - x1), abs(y2 - y1))
-            _ib_adb_raw(mid, f"adb shell input swipe {x1} {y1} {x2} {y2} {max(600, int(travel * 4))}")
-            mode = "swipe-slow"
-        return {"ok": True, "direction": direction, "screen": [w, h], "mode": mode}
+        # Slow drag that does not fling: a fast swipe lifts the finger while it
+        # is still moving, so the list coasts past rows and a walk skips them.
+        travel = max(abs(x2 - x1), abs(y2 - y1))
+        _ib_adb_raw(mid, f"adb shell input swipe {x1} {y1} {x2} {y2} {max(600, int(travel * 4))}")
+        return {"ok": True, "direction": direction, "screen": [w, h], "mode": "swipe-slow"}
 
     @app.post("/api/android/{mid}/scroll-step", dependencies=[api])
     def android_scroll_step(request: Request, mid: str, body: dict = Body(...)) -> dict:
