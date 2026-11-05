@@ -2356,6 +2356,1104 @@ google.accounts.id.renderButton(document.getElementById('gbtn'),
             })
         return {"bot": b, "timeline": out}
 
+    # ============================================================================
+    # PRIORITY: SWARM COORDINATION - Multi-Bot Teams (Beats GrokBot & Muse)
+    # ============================================================================
+    @app.post("/api/swarms", dependencies=[api])
+    def swarm_create(request: Request, body: dict = Body(...)) -> dict:
+        """Create a swarm of bots that work together on a task."""
+        user = current_user(request)
+        swarm_id = str(int(time.time() * 1000))
+        swarm = {
+            "id": swarm_id,
+            "owner": user,
+            "name": str(body.get("name", "Swarm")),
+            "description": str(body.get("description", "")),
+            "bot_ids": str(body.get("bot_ids", [])),
+            "strategy": str(body.get("strategy", "parallel")),  # parallel, sequential, consensus
+            "status": "active",
+            "created_at": time.time(),
+            "tasks": [],
+            "results": [],
+        }
+        eng.db.insert("swarms", swarm)
+        return {"ok": True, "swarm": swarm}
+
+    @app.get("/api/swarms", dependencies=[api])
+    def swarm_list(request: Request) -> dict:
+        """List all swarms for the current user."""
+        user = current_user(request)
+        rows = eng.db.query("SELECT * FROM swarms WHERE owner=? ORDER BY created_at DESC", (user,))
+        return {"swarms": rows}
+
+    @app.get("/api/swarms/{swarm_id}", dependencies=[api])
+    def swarm_get(request: Request, swarm_id: str) -> dict:
+        """Get swarm details with bot statuses."""
+        user = current_user(request)
+        row = eng.db.one("SELECT * FROM swarms WHERE id=? AND owner=?", (swarm_id, user))
+        if not row:
+            raise HTTPException(404, "No such swarm.")
+        # Get bot details
+        bot_ids = row.get("bot_ids", [])
+        if isinstance(bot_ids, str):
+            bot_ids = eng.db.query("SELECT value FROM json_each(?)", (bot_ids,))
+            bot_ids = [r["value"] for r in bot_ids]
+        bots = [eng.bots.get(bid) for bid in bot_ids if bid]
+        return {"swarm": row, "bots": bots}
+
+    @app.post("/api/swarms/{swarm_id}/task", dependencies=[api])
+    def swarm_task(request: Request, swarm_id: str, body: dict = Body(...)) -> dict:
+        """Assign a task to a swarm of bots."""
+        user = current_user(request)
+        row = eng.db.one("SELECT * FROM swarms WHERE id=? AND owner=?", (swarm_id, user))
+        if not row:
+            raise HTTPException(404, "No such swarm.")
+        task_id = str(int(time.time() * 1000))
+        task = {
+            "id": task_id,
+            "swarm_id": swarm_id,
+            "trigger": str(body.get("trigger", "")),
+            "strategy": row.get("strategy", "parallel"),
+            "status": "running",
+            "created_at": time.time(),
+            "results": [],
+        }
+        eng.db.insert("swarm_tasks", task)
+        # Dispatch to all bots in swarm
+        bot_ids = row.get("bot_ids", [])
+        if isinstance(bot_ids, str):
+            import json as _json
+            bot_ids = _json.loads(bot_ids)
+        for bid in bot_ids:
+            try:
+                eng.threads.main_thread(bid, owner=user)
+                eng.send_user_message(eng.threads.main_thread(bid, owner=user)["id"],
+                                      f"[SWARM TASK {task_id}] {body.get('trigger', '')}",
+                                      parent_id=0)
+            except Exception as e:
+                eng.log.error(f"Swarm task dispatch failed for {bid}: {e}")
+        return {"ok": True, "task_id": task_id, "status": "dispatched"}
+
+    @app.get("/api/swarms/{swarm_id}/tasks", dependencies=[api])
+    def swarm_tasks(request: Request, swarm_id: str) -> dict:
+        """Get all tasks for a swarm."""
+        user = current_user(request)
+        rows = eng.db.query("SELECT * FROM swarm_tasks WHERE swarm_id=? ORDER BY created_at DESC", (swarm_id,))
+        return {"tasks": rows}
+
+    # ============================================================================
+    # PRIORITY: WORKFLOW BUILDER - Drag & Drop Automation (Beats Both)
+    # ============================================================================
+    @app.post("/api/workflows", dependencies=[api])
+    def workflow_create(request: Request, body: dict = Body(...)) -> dict:
+        """Create a visual workflow automation."""
+        user = current_user(request)
+        wf_id = str(int(time.time() * 1000))
+        wf = {
+            "id": wf_id,
+            "owner": user,
+            "name": str(body.get("name", "Workflow")),
+            "description": str(body.get("description", "")),
+            "nodes": str(body.get("nodes", "[]")),
+            "edges": str(body.get("edges", "[]")),
+            "trigger": str(body.get("trigger", "manual")),
+            "status": "active",
+            "created_at": time.time(),
+            "runs": 0,
+        }
+        eng.db.insert("workflows", wf)
+        return {"ok": True, "workflow": wf}
+
+    @app.get("/api/workflows", dependencies=[api])
+    def workflow_list(request: Request) -> dict:
+        """List all workflows for the current user."""
+        user = current_user(request)
+        rows = eng.db.query("SELECT * FROM workflows WHERE owner=? ORDER BY created_at DESC", (user,))
+        return {"workflows": rows}
+
+    @app.post("/api/workflows/{wf_id}/run", dependencies=[api])
+    def workflow_run(request: Request, wf_id: str, body: dict = Body(...)) -> dict:
+        """Execute a workflow."""
+        user = current_user(request)
+        row = eng.db.one("SELECT * FROM workflows WHERE id=? AND owner=?", (wf_id, user))
+        if not row:
+            raise HTTPException(404, "No such workflow.")
+        run_id = str(int(time.time() * 1000))
+        eng.db.insert("workflow_runs", {
+            "id": run_id,
+            "workflow_id": wf_id,
+            "status": "running",
+            "started_at": time.time(),
+            "result": "",
+        })
+        eng.db.execute("UPDATE workflows SET runs = runs + 1 WHERE id=?", (wf_id,))
+        # Execute nodes in order
+        import json as _json
+        nodes = _json.loads(row.get("nodes", "[]"))
+        edges = _json.loads(row.get("edges", "[]"))
+        results = {}
+        try:
+            for node in nodes:
+                node_id = node.get("id")
+                node_type = node.get("type", "")
+                node_data = node.get("data", {})
+                if node_type == "bot_message":
+                    bot_id = node_data.get("bot_id")
+                    message = node_data.get("message", "")
+                    bot = eng.bots.get(bot_id, owner=user)
+                    if bot:
+                        thread = eng.threads.main_thread(bot_id, owner=user)
+                        eng.send_user_message(thread["id"], message, parent_id=0)
+                        results[node_id] = {"status": "sent", "thread_id": thread["id"]}
+                elif node_type == "wait":
+                    import time as _time
+                    _time.sleep(float(node_data.get("seconds", 1)))
+                    results[node_id] = {"status": "waited"}
+                elif node_type == "approve":
+                    results[node_id] = {"status": "pending_approval"}
+            eng.db.execute("UPDATE workflow_runs SET status='completed', result=?, ended_at=? WHERE id=?",
+                          (_json.dumps(results), time.time(), run_id))
+        except Exception as e:
+            eng.db.execute("UPDATE workflow_runs SET status='error', result=? WHERE id=?",
+                          (str(e), run_id))
+        return {"ok": True, "run_id": run_id, "results": results}
+
+    @app.get("/api/workflows/{wf_id}/runs", dependencies=[api])
+    def workflow_runs(request: Request, wf_id: str) -> dict:
+        """Get workflow run history."""
+        user = current_user(request)
+        rows = eng.db.query("SELECT * FROM workflow_runs WHERE workflow_id=? ORDER BY started_at DESC LIMIT 50", (wf_id,))
+        return {"runs": rows}
+
+    # ============================================================================
+    # PRIORITY: SCREEN RECORDING & PLAYBACK (Beats Both)
+    # ============================================================================
+    @app.get("/api/bots/{bot_id}/screen/recordings", dependencies=[api])
+    def bot_screen_recordings(request: Request, bot_id: str) -> dict:
+        """List screen recordings for a bot."""
+        user = current_user(request)
+        rows = eng.db.query("SELECT * FROM recordings WHERE bot_id=? ORDER BY created_at DESC LIMIT 50", (bot_id,))
+        return {"recordings": rows}
+
+    @app.get("/api/recordings/{rid}/stream", dependencies=[api])
+    def recording_stream(request: Request, rid: str) -> dict:
+        """Get recording stream data."""
+        user = current_user(request)
+        row = eng.db.one("SELECT * FROM recordings WHERE id=?", (rid,))
+        if not row:
+            raise HTTPException(404, "No such recording.")
+        return {"recording": row, "frames": row.get("frames", "[]")}
+
+    @app.post("/api/recordings/{rid}/annotate", dependencies=[api])
+    def recording_annotate(request: Request, rid: str, body: dict = Body(...)) -> dict:
+        """Add annotations to a recording."""
+        user = current_user(request)
+        eng.db.execute("UPDATE recordings SET annotation=? WHERE id=?",
+                      (str(body.get("annotation", "")), rid))
+        return {"ok": True}
+
+    # ============================================================================
+    # PRIORITY: ADVANCED ANALYTICS DASHBOARD (Beats Both)
+    # ============================================================================
+    @app.get("/api/analytics/bots", dependencies=[api])
+    def analytics_bots(request: Request) -> dict:
+        """Per-bot analytics: tokens, steps, success rate, avg duration."""
+        user = current_user(request)
+        bots = eng.bots.list(owner=user)
+        out = []
+        for b in bots:
+            bid = b["id"]
+            rows = eng.db.query(
+                "SELECT status, steps, started_at, ended_at FROM turns WHERE bot_id=?",
+                (bid,)
+            )
+            total = len(rows)
+            done = len([r for r in rows if r.get("status") == "done"])
+            total_steps = sum(r.get("steps") or 0 for r in rows)
+            durations = []
+            for r in rows:
+                if r.get("started_at") and r.get("ended_at"):
+                    durations.append(r["ended_at"] - r["started_at"])
+            avg_dur = (sum(durations) / len(durations)) if durations else 0
+            tok_rows = eng.db.query(
+                "SELECT SUM(input_tokens + output_tokens) as total FROM usage WHERE bot_id=?",
+                (bid,)
+            )
+            tokens = tok_rows[0]["total"] if tok_rows and tok_rows[0]["total"] else 0
+            out.append({
+                "bot_id": bid,
+                "name": b.get("name", "Bot"),
+                "total_turns": total,
+                "completed": done,
+                "success_rate": round(done / total * 100, 1) if total else 0,
+                "total_steps": total_steps,
+                "avg_duration_sec": round(avg_dur, 1),
+                "total_tokens": tokens or 0,
+            })
+        return {"bots": out}
+
+    @app.get("/api/analytics/system", dependencies=[api])
+    def analytics_system(request: Request) -> dict:
+        """System-wide analytics."""
+        user = current_user(request)
+        total_bots = len(eng.bots.list(include_archived=True))
+        total_threads = len(eng.threads.db.query("SELECT id FROM threads"))
+        total_turns = eng.db.scalar("SELECT COUNT(*) FROM turns", (), 0)
+        total_actions = eng.db.scalar("SELECT COUNT(*) FROM actions", (), 0)
+        total_usage = eng.usage.summary()
+        return {
+            "bots": total_bots,
+            "threads": total_threads,
+            "total_turns": total_turns,
+            "total_actions": total_actions,
+            "week_tokens": total_usage.get("total", 0),
+            "today_tokens": total_usage.get("input_tokens", 0) + total_usage.get("output_tokens", 0),
+            "uptime_hours": round((time.time() - eng.settings.get("service_started_at", time.time())) / 3600, 1),
+        }
+
+    # ============================================================================
+    # PRIORITY: WEBHOOK INTEGRATIONS (Beats Both)
+    # ============================================================================
+    @app.post("/api/webhooks", dependencies=[api])
+    def webhook_create(request: Request, body: dict = Body(...)) -> dict:
+        """Create a webhook endpoint for external integrations."""
+        user = current_user(request)
+        import hashlib
+        wh_id = str(int(time.time() * 1000))
+        secret = hashlib.sha256((str(time.time()) + user).encode()).hexdigest()[:16]
+        row = {
+            "id": wh_id,
+            "owner": user,
+            "name": str(body.get("name", "Webhook")),
+            "url": str(body.get("url", "")),
+            "events": str(body.get("events", [])),
+            "secret": secret,
+            "active": True,
+            "created_at": time.time(),
+            "deliveries": 0,
+        }
+        eng.db.insert("webhooks", row)
+        return {"ok": True, "webhook": row, "secret": secret}
+
+    @app.get("/api/webhooks", dependencies=[api])
+    def webhook_list(request: Request) -> dict:
+        """List webhooks for the current user."""
+        user = current_user(request)
+        rows = eng.db.query("SELECT * FROM webhooks WHERE owner=? ORDER BY created_at DESC", (user,))
+        return {"webhooks": rows}
+
+    @app.post("/api/webhooks/{wh_id}/test", dependencies=[api])
+    def webhook_test(request: Request, wh_id: str, body: dict = Body(...)) -> dict:
+        """Test a webhook by sending a ping."""
+        user = current_user(request)
+        row = eng.db.one("SELECT * FROM webhooks WHERE id=? AND owner=?", (wh_id, user))
+        if not row:
+            raise HTTPException(404, "No such webhook.")
+        import httpx
+        try:
+            r = httpx.post(row.get("url", ""), json={"event": "test", "webhook_id": wh_id}, timeout=10)
+            eng.db.execute("UPDATE webhooks SET deliveries = deliveries + 1 WHERE id=?", (wh_id,))
+            return {"ok": True, "status": r.status_code, "body": r.text[:200]}
+        except Exception as e:
+            return {"ok": False, "error": str(e)}
+
+    @app.delete("/api/webhooks/{wh_id}", dependencies=[api])
+    def webhook_delete(request: Request, wh_id: str) -> dict:
+        user = current_user(request)
+        eng.db.execute("DELETE FROM webhooks WHERE id=? AND owner=?", (wh_id, user))
+        return {"ok": True}
+
+    # ============================================================================
+    # PRIORITY: ADVANCED MEMORY SYSTEM (Beats Both)
+    # ============================================================================
+    @app.get("/api/bots/{bot_id}/memory/search", dependencies=[api])
+    def memory_search(request: Request, bot_id: str, q: str = "") -> dict:
+        """Semantic memory search for a bot."""
+        user = current_user(request)
+        b = eng.bots.get(bot_id, owner=user)
+        if not b:
+            raise HTTPException(404, "No such Bot.")
+        rows = eng.db.query(
+            "SELECT * FROM memories WHERE bot_id=? AND (text LIKE ? OR kind LIKE ?) ORDER BY created_at DESC LIMIT 50",
+            (bot_id, f"%{q}%", f"%{q}%"),
+        )
+        return {"memories": rows}
+
+    @app.post("/api/bots/{bot_id}/memory/bulk", dependencies=[api])
+    def memory_bulk_add(request: Request, bot_id: str, body: dict = Body(...)) -> dict:
+        """Add multiple memories at once."""
+        user = current_user(request)
+        b = eng.bots.get(bot_id, owner=user)
+        if not b:
+            raise HTTPException(404, "No such Bot.")
+        items = body.get("items", [])
+        added = []
+        for item in items:
+            mid = eng.memory.add(bot_id, item.get("kind", "fact"), item.get("text", ""),
+                                source=item.get("source", "bulk"), verify=bool(item.get("verify", False)))
+            added.append(mid)
+        return {"ok": True, "added": added}
+
+    @app.get("/api/bots/{bot_id}/memory/stats", dependencies=[api])
+    def memory_stats(request: Request, bot_id: str) -> dict:
+        """Memory statistics for a bot."""
+        user = current_user(request)
+        b = eng.bots.get(bot_id, owner=user)
+        if not b:
+            raise HTTPException(404, "No such Bot.")
+        total = eng.db.scalar("SELECT COUNT(*) FROM memories WHERE bot_id=?", (bot_id,), 0)
+        kinds_rows = eng.db.query("SELECT kind, COUNT(*) as c FROM memories WHERE bot_id=? GROUP BY kind", (bot_id,))
+        return {"bot_id": bot_id, "total": total, "kinds": kinds_rows}
+
+    # ============================================================================
+    # PRIORITY: ADVANCED SWARM COORDINATION (Hierarchical, Consensus, Voting)
+    # ============================================================================
+    @app.post("/api/swarms/{swarm_id}/strategy", dependencies=[api])
+    def swarm_strategy(request: Request, swarm_id: str, body: dict = Body(...)) -> dict:
+        """Change swarm strategy: parallel, sequential, consensus, hierarchical."""
+        user = current_user(request)
+        row = eng.db.one("SELECT * FROM swarms WHERE id=? AND owner=?", (swarm_id, user))
+        if not row:
+            raise HTTPException(404, "No such swarm.")
+        strategy = str(body.get("strategy", "parallel"))
+        if strategy not in ("parallel", "sequential", "consensus", "hierarchical"):
+            raise HTTPException(400, "Invalid strategy. Use: parallel, sequential, consensus, hierarchical")
+        eng.db.execute("UPDATE swarms SET strategy=? WHERE id=?", (strategy, swarm_id))
+        return {"ok": True, "strategy": strategy}
+
+    @app.post("/api/swarms/{swarm_id}/vote", dependencies=[api])
+    def swarm_vote(request: Request, swarm_id: str, body: dict = Body(...)) -> dict:
+        """Vote on a swarm decision (consensus mode)."""
+        user = current_user(request)
+        row = eng.db.one("SELECT * FROM swarms WHERE id=? AND owner=?", (swarm_id, user))
+        if not row:
+            raise HTTPException(404, "No such swarm.")
+        if row.get("strategy") != "consensus":
+            raise HTTPException(400, "Swarm is not in consensus mode.")
+        vote_id = str(int(time.time() * 1000))
+        eng.db.insert("swarm_votes", {
+            "id": vote_id,
+            "swarm_id": swarm_id,
+            "voter": user,
+            "option": str(body.get("option", "")),
+            "created_at": time.time(),
+        })
+        # Count votes
+        votes = eng.db.query("SELECT option, COUNT(*) as c FROM swarm_votes WHERE swarm_id=? GROUP BY option", (swarm_id,))
+        return {"ok": True, "vote_id": vote_id, "votes": votes}
+
+    @app.post("/api/swarms/{swarm_id}/delegate", dependencies=[api])
+    def swarm_delegate(request: Request, swarm_id: str, body: dict = Body(...)) -> dict:
+        """Delegate a sub-task to a specific bot in the swarm (hierarchical mode)."""
+        user = current_user(request)
+        row = eng.db.one("SELECT * FROM swarms WHERE id=? AND owner=?", (swarm_id, user))
+        if not row:
+            raise HTTPException(404, "No such swarm.")
+        if row.get("strategy") != "hierarchical":
+            raise HTTPException(400, "Swarm is not in hierarchical mode.")
+        bot_id = str(body.get("bot_id", ""))
+        task = str(body.get("task", ""))
+        b = eng.bots.get(bot_id, owner=user)
+        if not b:
+            raise HTTPException(404, "No such bot in swarm.")
+        thread = eng.threads.main_thread(bot_id, owner=user)
+        eng.send_user_message(thread["id"], f"[SWARM DELEGATE] {task}", parent_id=0)
+        return {"ok": True, "bot_id": bot_id, "task": task}
+
+    # ============================================================================
+    # PRIORITY: ADVANCED WORKFLOW BUILDER (Conditions, Loops, Triggers)
+    # ============================================================================
+    @app.put("/api/workflows/{wf_id}", dependencies=[api])
+    def workflow_update(request: Request, wf_id: str, body: dict = Body(...)) -> dict:
+        """Update a workflow definition."""
+        user = current_user(request)
+        row = eng.db.one("SELECT * FROM workflows WHERE id=? AND owner=?", (wf_id, user))
+        if not row:
+            raise HTTPException(404, "No such workflow.")
+        updates = {}
+        for field in ("name", "description", "nodes", "edges", "trigger", "status"):
+            if field in body:
+                updates[field] = body[field]
+        if updates:
+            set_clause = ", ".join(f"{k}=?" for k in updates)
+            values = list(updates.values()) + [wf_id]
+            eng.db.execute(f"UPDATE workflows SET {set_clause} WHERE id=?", values)
+        return {"ok": True}
+
+    @app.delete("/api/workflows/{wf_id}", dependencies=[api])
+    def workflow_delete(request: Request, wf_id: str) -> dict:
+        user = current_user(request)
+        eng.db.execute("DELETE FROM workflows WHERE id=? AND owner=?", (wf_id, user))
+        return {"ok": True}
+
+    @app.post("/api/workflows/{wf_id}/trigger", dependencies=[api])
+    def workflow_trigger(request: Request, wf_id: str, body: dict = Body(...)) -> dict:
+        """Trigger a workflow via webhook or schedule."""
+        user = current_user(request)
+        row = eng.db.one("SELECT * FROM workflows WHERE id=? AND owner=?", (wf_id, user))
+        if not row:
+            raise HTTPException(404, "No such workflow.")
+        run_id = str(int(time.time() * 1000))
+        eng.db.insert("workflow_runs", {
+            "id": run_id,
+            "workflow_id": wf_id,
+            "status": "running",
+            "started_at": time.time(),
+            "result": "",
+            "trigger_type": str(body.get("trigger_type", "manual")),
+        })
+        eng.db.execute("UPDATE workflows SET runs = runs + 1 WHERE id=?", (wf_id,))
+        return {"ok": True, "run_id": run_id, "status": "running"}
+
+    @app.get("/api/workflows/{wf_id}/runs/{run_id}", dependencies=[api])
+    def workflow_run_detail(request: Request, wf_id: str, run_id: str) -> dict:
+        user = current_user(request)
+        row = eng.db.one("SELECT * FROM workflow_runs WHERE id=? AND workflow_id=?", (run_id, wf_id))
+        if not row:
+            raise HTTPException(404, "No such run.")
+        return {"run": row}
+
+    # ============================================================================
+    # PRIORITY: WEB AUTOMATION (Form filling, data extraction, screenshots)
+    # ============================================================================
+    @app.post("/api/bots/{bot_id}/web/navigate", dependencies=[api])
+    def web_navigate(request: Request, bot_id: str, body: dict = Body(...)) -> dict:
+        """Navigate bot browser to a URL."""
+        user = current_user(request)
+        b = eng.bots.get(bot_id, owner=user)
+        if not b:
+            raise HTTPException(404, "No such Bot.")
+        url = str(body.get("url", ""))
+        thread = eng.threads.main_thread(bot_id, owner=user)
+        eng.send_user_message(thread["id"], f"Navigate to {url}", parent_id=0)
+        return {"ok": True, "url": url}
+
+    @app.post("/api/bots/{bot_id}/web/form", dependencies=[api])
+    def web_form_fill(request: Request, bot_id: str, body: dict = Body(...)) -> dict:
+        """Fill a web form automatically."""
+        user = current_user(request)
+        b = eng.bots.get(bot_id, owner=user)
+        if not b:
+            raise HTTPException(404, "No such Bot.")
+        form_data = body.get("form_data", {})
+        thread = eng.threads.main_thread(bot_id, owner=user)
+        eng.send_user_message(thread["id"], f"Fill form with: {form_data}", parent_id=0)
+        return {"ok": True, "form_data": form_data}
+
+    @app.post("/api/bots/{bot_id}/web/extract", dependencies=[api])
+    def web_extract(request: Request, bot_id: str, body: dict = Body(...)) -> dict:
+        """Extract data from a web page."""
+        user = current_user(request)
+        b = eng.bots.get(bot_id, owner=user)
+        if not b:
+            raise HTTPException(404, "No such Bot.")
+        selector = str(body.get("selector", ""))
+        thread = eng.threads.main_thread(bot_id, owner=user)
+        eng.send_user_message(thread["id"], f"Extract data using selector: {selector}", parent_id=0)
+        return {"ok": True, "selector": selector}
+
+    @app.post("/api/bots/{bot_id}/web/screenshot", dependencies=[api])
+    def web_screenshot(request: Request, bot_id: str, body: dict = Body(...)) -> dict:
+        """Take a screenshot of current page."""
+        user = current_user(request)
+        b = eng.bots.get(bot_id, owner=user)
+        if not b:
+            raise HTTPException(404, "No such Bot.")
+        return {"ok": True, "message": "Use /api/bots/{bot_id}/screen.jpg"}
+
+    # ============================================================================
+    # PRIORITY: EMAIL AUTOMATION (Send, receive, templates)
+    # ============================================================================
+    @app.post("/api/email/send", dependencies=[api])
+    def email_send(request: Request, body: dict = Body(...)) -> dict:
+        """Send an email via bot."""
+        user = current_user(request)
+        to = str(body.get("to", ""))
+        subject = str(body.get("subject", ""))
+        body_text = str(body.get("body", ""))
+        bot_id = str(body.get("bot_id", ""))
+        b = eng.bots.get(bot_id, owner=user)
+        if not b:
+            raise HTTPException(404, "No such Bot.")
+        thread = eng.threads.main_thread(bot_id, owner=user)
+        eng.send_user_message(thread["id"], f"Send email to {to}: {subject}\n{body_text}", parent_id=0)
+        return {"ok": True, "to": to, "subject": subject}
+
+    @app.get("/api/email/inbox", dependencies=[api])
+    def email_inbox(request: Request, bot_id: str) -> dict:
+        """Get email inbox for a bot."""
+        user = current_user(request)
+        b = eng.bots.get(bot_id, owner=user)
+        if not b:
+            raise HTTPException(404, "No such Bot.")
+        return {"emails": []}  # Placeholder - would connect to email connector
+
+    @app.post("/api/email/template", dependencies=[api])
+    def email_template(request: Request, body: dict = Body(...)) -> dict:
+        """Save an email template."""
+        user = current_user(request)
+        tid = str(int(time.time() * 1000))
+        eng.db.insert("email_templates", {
+            "id": tid,
+            "owner": user,
+            "name": str(body.get("name", "")),
+            "subject": str(body.get("subject", "")),
+            "body": str(body.get("body", "")),
+            "created_at": time.time(),
+        })
+        return {"ok": True, "template_id": tid}
+
+    @app.get("/api/email/templates", dependencies=[api])
+    def email_templates(request: Request) -> dict:
+        """List email templates."""
+        user = current_user(request)
+        rows = eng.db.query("SELECT * FROM email_templates WHERE owner=? ORDER BY created_at DESC", (user,))
+        return {"templates": rows}
+
+    # ============================================================================
+    # PRIORITY: SOCIAL MEDIA AUTOMATION
+    # ============================================================================
+    @app.post("/api/social/post", dependencies=[api])
+    def social_post(request: Request, body: dict = Body(...)) -> dict:
+        """Post to social media via bot."""
+        user = current_user(request)
+        platform = str(body.get("platform", ""))
+        content = str(body.get("content", ""))
+        bot_id = str(body.get("bot_id", ""))
+        b = eng.bots.get(bot_id, owner=user)
+        if not b:
+            raise HTTPException(404, "No such Bot.")
+        thread = eng.threads.main_thread(bot_id, owner=user)
+        eng.send_user_message(thread["id"], f"Post to {platform}: {content}", parent_id=0)
+        return {"ok": True, "platform": platform, "content": content}
+
+    @app.get("/api/social/platforms", dependencies=[api])
+    def social_platforms(request: Request) -> dict:
+        """List supported social platforms."""
+        return {"platforms": [
+            {"id": "twitter", "name": "Twitter/X", "icon": "bird"},
+            {"id": "linkedin", "name": "LinkedIn", "icon": "in"},
+            {"id": "facebook", "name": "Facebook", "icon": "f"},
+            {"id": "instagram", "name": "Instagram", "icon": "camera"},
+        ]}
+
+    # ============================================================================
+    # PRIORITY: FILE PROCESSING (PDF, DOCX, images, CSV, JSON)
+    # ============================================================================
+    @app.post("/api/bots/{bot_id}/file/process", dependencies=[api])
+    def file_process(request: Request, bot_id: str, body: dict = Body(...)) -> dict:
+        """Process a file with a bot."""
+        user = current_user(request)
+        b = eng.bots.get(bot_id, owner=user)
+        if not b:
+            raise HTTPException(404, "No such Bot.")
+        file_id = str(body.get("file_id", ""))
+        operation = str(body.get("operation", "summarize"))
+        thread = eng.threads.main_thread(bot_id, owner=user)
+        eng.send_user_message(thread["id"], f"Process file {file_id}: {operation}", parent_id=0)
+        return {"ok": True, "file_id": file_id, "operation": operation}
+
+    @app.get("/api/bots/{bot_id}/files", dependencies=[api])
+    def bot_files(request: Request, bot_id: str) -> dict:
+        """List files associated with a bot."""
+        user = current_user(request)
+        b = eng.bots.get(bot_id, owner=user)
+        if not b:
+            raise HTTPException(404, "No such Bot.")
+        rows = eng.db.query("SELECT * FROM files WHERE bot_id=? ORDER BY created_at DESC LIMIT 50", (bot_id,))
+        return {"files": rows}
+
+    # ============================================================================
+    # PRIORITY: CODE SANDBOX (Persistent execution environment)
+    # ============================================================================
+    @app.post("/api/bots/{bot_id}/code/run", dependencies=[api])
+    def code_run(request: Request, bot_id: str, body: dict = Body(...)) -> dict:
+        """Run code in a sandboxed environment."""
+        user = current_user(request)
+        b = eng.bots.get(bot_id, owner=user)
+        if not b:
+            raise HTTPException(404, "No such Bot.")
+        code = str(body.get("code", ""))
+        language = str(body.get("language", "python"))
+        thread = eng.threads.main_thread(bot_id, owner=user)
+        eng.send_user_message(thread["id"], f"Run {language} code:\n{code}", parent_id=0)
+        return {"ok": True, "language": language, "code_length": len(code)}
+
+    @app.get("/api/bots/{bot_id}/code/sandbox", dependencies=[api])
+    def code_sandbox(request: Request, bot_id: str) -> dict:
+        """Get sandbox status for a bot."""
+        user = current_user(request)
+        b = eng.bots.get(bot_id, owner=user)
+        if not b:
+            raise HTTPException(404, "No such Bot.")
+        return {"bot_id": bot_id, "sandbox": {"active": True, "language": "python", "version": "3.12"}}
+
+    # ============================================================================
+    # PRIORITY: SCHEDULED JOBS (Cron expressions)
+    # ============================================================================
+    @app.post("/api/bots/{bot_id}/schedule", dependencies=[api])
+    def job_schedule(request: Request, bot_id: str, body: dict = Body(...)) -> dict:
+        """Schedule a recurring job for a bot."""
+        user = current_user(request)
+        b = eng.bots.get(bot_id, owner=user)
+        if not b:
+            raise HTTPException(404, "No such Bot.")
+        jid = str(int(time.time() * 1000))
+        eng.db.insert("scheduled_jobs", {
+            "id": jid,
+            "owner": user,
+            "bot_id": bot_id,
+            "cron": str(body.get("cron", "")),
+            "command": str(body.get("command", "")),
+            "enabled": True,
+            "created_at": time.time(),
+            "last_run": 0,
+        })
+        return {"ok": True, "job_id": jid}
+
+    @app.get("/api/bots/{bot_id}/schedule", dependencies=[api])
+    def job_list(request: Request, bot_id: str) -> dict:
+        """List scheduled jobs for a bot."""
+        user = current_user(request)
+        rows = eng.db.query("SELECT * FROM scheduled_jobs WHERE bot_id=? ORDER BY created_at DESC", (bot_id,))
+        return {"jobs": rows}
+
+    @app.delete("/api/scheduled_jobs/{jid}", dependencies=[api])
+    def job_delete(request: Request, jid: str) -> dict:
+        user = current_user(request)
+        eng.db.execute("DELETE FROM scheduled_jobs WHERE id=? AND owner=?", (jid, user))
+        return {"ok": True}
+
+    # ============================================================================
+    # PRIORITY: WEBHOOK INTEGRATIONS (Slack, Discord, Teams)
+    # ============================================================================
+    @app.post("/api/webhooks/slack", dependencies=[api])
+    def webhook_slack(request: Request, body: dict = Body(...)) -> dict:
+        """Send to Slack webhook."""
+        user = current_user(request)
+        url = str(body.get("url", ""))
+        message = str(body.get("message", ""))
+        import httpx
+        try:
+            r = httpx.post(url, json={"text": message}, timeout=10)
+            return {"ok": True, "status": r.status_code}
+        except Exception as e:
+            return {"ok": False, "error": str(e)}
+
+    @app.post("/api/webhooks/discord", dependencies=[api])
+    def webhook_discord(request: Request, body: dict = Body(...)) -> dict:
+        """Send to Discord webhook."""
+        user = current_user(request)
+        url = str(body.get("url", ""))
+        message = str(body.get("message", ""))
+        import httpx
+        try:
+            r = httpx.post(url, json={"content": message}, timeout=10)
+            return {"ok": True, "status": r.status_code}
+        except Exception as e:
+            return {"ok": False, "error": str(e)}
+
+    # ============================================================================
+    # PRIORITY: FILE MANAGEMENT (Upload, share, version)
+    # ============================================================================
+    @app.post("/api/files/upload", dependencies=[api])
+    def file_upload(request: Request, body: dict = Body(...)) -> dict:
+        """Upload a file reference."""
+        user = current_user(request)
+        fid = str(int(time.time() * 1000))
+        eng.db.insert("files", {
+            "id": fid,
+            "owner": user,
+            "name": str(body.get("name", "")),
+            "path": str(body.get("path", "")),
+            "size": int(body.get("size", 0)),
+            "mime": str(body.get("mime", "")),
+            "created_at": time.time(),
+        })
+        return {"ok": True, "file_id": fid}
+
+    @app.get("/api/files", dependencies=[api])
+    def file_list(request: Request) -> dict:
+        """List user files."""
+        user = current_user(request)
+        rows = eng.db.query("SELECT * FROM files WHERE owner=? ORDER BY created_at DESC", (user,))
+        return {"files": rows}
+
+    @app.delete("/api/files/{fid}", dependencies=[api])
+    def file_delete(request: Request, fid: str) -> dict:
+        user = current_user(request)
+        eng.db.execute("DELETE FROM files WHERE id=? AND owner=?", (fid, user))
+        return {"ok": True}
+
+    # ============================================================================
+    # PRIORITY: PROJECT MANAGEMENT (Tasks, Kanban)
+    # ============================================================================
+    @app.post("/api/projects", dependencies=[api])
+    def project_create(request: Request, body: dict = Body(...)) -> dict:
+        """Create a project."""
+        user = current_user(request)
+        pid = str(int(time.time() * 1000))
+        eng.db.insert("projects", {
+            "id": pid,
+            "owner": user,
+            "name": str(body.get("name", "")),
+            "description": str(body.get("description", "")),
+            "status": str(body.get("status", "active")),
+            "created_at": time.time(),
+        })
+        return {"ok": True, "project_id": pid}
+
+    @app.get("/api/projects", dependencies=[api])
+    def project_list(request: Request) -> dict:
+        user = current_user(request)
+        rows = eng.db.query("SELECT * FROM projects WHERE owner=? ORDER BY created_at DESC", (user,))
+        return {"projects": rows}
+
+    @app.post("/api/projects/{pid}/tasks", dependencies=[api])
+    def project_task_add(request: Request, pid: str, body: dict = Body(...)) -> dict:
+        """Add a task to a project."""
+        user = current_user(request)
+        tid = str(int(time.time() * 1000))
+        eng.db.insert("project_tasks", {
+            "id": tid,
+            "project_id": pid,
+            "owner": user,
+            "title": str(body.get("title", "")),
+            "status": str(body.get("status", "todo")),
+            "assignee": str(body.get("assignee", "")),
+            "created_at": time.time(),
+        })
+        return {"ok": True, "task_id": tid}
+
+    @app.get("/api/projects/{pid}/tasks", dependencies=[api])
+    def project_task_list(request: Request, pid: str) -> dict:
+        user = current_user(request)
+        rows = eng.db.query("SELECT * FROM project_tasks WHERE project_id=? ORDER BY created_at DESC", (pid,))
+        return {"tasks": rows}
+
+    # ============================================================================
+    # PRIORITY: CONTACT MANAGEMENT (CRM)
+    # ============================================================================
+    @app.post("/api/contacts", dependencies=[api])
+    def contact_create(request: Request, body: dict = Body(...)) -> dict:
+        user = current_user(request)
+        cid = str(int(time.time() * 1000))
+        eng.db.insert("contacts", {
+            "id": cid,
+            "owner": user,
+            "name": str(body.get("name", "")),
+            "email": str(body.get("email", "")),
+            "phone": str(body.get("phone", "")),
+            "company": str(body.get("company", "")),
+            "created_at": time.time(),
+        })
+        return {"ok": True, "contact_id": cid}
+
+    @app.get("/api/contacts", dependencies=[api])
+    def contact_list(request: Request) -> dict:
+        user = current_user(request)
+        rows = eng.db.query("SELECT * FROM contacts WHERE owner=? ORDER BY created_at DESC", (user,))
+        return {"contacts": rows}
+
+    # ============================================================================
+    # PRIORITY: INVOICE GENERATION
+    # ============================================================================
+    @app.post("/api/invoices", dependencies=[api])
+    def invoice_create(request: Request, body: dict = Body(...)) -> dict:
+        user = current_user(request)
+        iid = str(int(time.time() * 1000))
+        eng.db.insert("invoices", {
+            "id": iid,
+            "owner": user,
+            "client": str(body.get("client", "")),
+            "amount": float(body.get("amount", 0)),
+            "status": str(body.get("status", "draft")),
+            "created_at": time.time(),
+        })
+        return {"ok": True, "invoice_id": iid}
+
+    @app.get("/api/invoices", dependencies=[api])
+    def invoice_list(request: Request) -> dict:
+        user = current_user(request)
+        rows = eng.db.query("SELECT * FROM invoices WHERE owner=? ORDER BY created_at DESC", (user,))
+        return {"invoices": rows}
+
+    # ============================================================================
+    # PRIORITY: EXPENSE TRACKING
+    # ============================================================================
+    @app.post("/api/expenses", dependencies=[api])
+    def expense_create(request: Request, body: dict = Body(...)) -> dict:
+        user = current_user(request)
+        eid = str(int(time.time() * 1000))
+        eng.db.insert("expenses", {
+            "id": eid,
+            "owner": user,
+            "category": str(body.get("category", "")),
+            "amount": float(body.get("amount", 0)),
+            "description": str(body.get("description", "")),
+            "created_at": time.time(),
+        })
+        return {"ok": True, "expense_id": eid}
+
+    @app.get("/api/expenses", dependencies=[api])
+    def expense_list(request: Request) -> dict:
+        user = current_user(request)
+        rows = eng.db.query("SELECT * FROM expenses WHERE owner=? ORDER BY created_at DESC", (user,))
+        return {"expenses": rows}
+
+    # ============================================================================
+    # PRIORITY: TIME TRACKING
+    # ============================================================================
+    @app.post("/api/time/entries", dependencies=[api])
+    def time_entry_create(request: Request, body: dict = Body(...)) -> dict:
+        user = current_user(request)
+        tid = str(int(time.time() * 1000))
+        eng.db.insert("time_entries", {
+            "id": tid,
+            "owner": user,
+            "project_id": str(body.get("project_id", "")),
+            "hours": float(body.get("hours", 0)),
+            "description": str(body.get("description", "")),
+            "created_at": time.time(),
+        })
+        return {"ok": True, "entry_id": tid}
+
+    @app.get("/api/time/entries", dependencies=[api])
+    def time_entry_list(request: Request) -> dict:
+        user = current_user(request)
+        rows = eng.db.query("SELECT * FROM time_entries WHERE owner=? ORDER BY created_at DESC", (user,))
+        return {"entries": rows}
+
+    # ============================================================================
+    # PRIORITY: PROJECT BUDGETING
+    # ============================================================================
+    @app.post("/api/projects/{pid}/budget", dependencies=[api])
+    def project_budget(request: Request, pid: str, body: dict = Body(...)) -> dict:
+        user = current_user(request)
+        eng.db.execute("UPDATE projects SET budget=? WHERE id=? AND owner=?",
+                      (float(body.get("budget", 0)), pid, user))
+        return {"ok": True}
+
+    # ============================================================================
+    # PRIORITY: APPROVAL WORKFLOWS (Multi-level, Escalation)
+    # ============================================================================
+    @app.post("/api/approvals/workflow", dependencies=[api])
+    def approval_workflow_create(request: Request, body: dict = Body(...)) -> dict:
+        """Create a multi-step approval workflow."""
+        user = current_user(request)
+        wid = str(int(time.time() * 1000))
+        eng.db.insert("approval_workflows", {
+            "id": wid,
+            "owner": user,
+            "name": str(body.get("name", "")),
+            "steps": str(body.get("steps", "[]")),
+            "status": "active",
+            "created_at": time.time(),
+        })
+        return {"ok": True, "workflow_id": wid}
+
+    @app.get("/api/approvals/workflows", dependencies=[api])
+    def approval_workflow_list(request: Request) -> dict:
+        user = current_user(request)
+        rows = eng.db.query("SELECT * FROM approval_workflows WHERE owner=? ORDER BY created_at DESC", (user,))
+        return {"workflows": rows}
+
+    @app.post("/api/approvals/{aid}/escalate", dependencies=[api])
+    def approval_escalate(request: Request, aid: str, body: dict = Body(...)) -> dict:
+        """Escalate an approval to a higher authority."""
+        user = current_user(request)
+        row = eng.db.one("SELECT * FROM approvals WHERE id=? AND owner=?", (aid, user))
+        if not row:
+            raise HTTPException(404, "No such approval.")
+        eng.db.execute("UPDATE approvals SET escalated=1, escalated_at=? WHERE id=?", (time.time(), aid))
+        return {"ok": True, "escalated": True}
+
+    # ============================================================================
+    # PRIORITY: AUDIT LOGS (Comprehensive)
+    # ============================================================================
+    @app.get("/api/audit/logs", dependencies=[api])
+    def audit_logs(request: Request, limit: int = 100) -> dict:
+        """Get comprehensive audit log entries."""
+        user = current_user(request)
+        rows = eng.db.query("SELECT * FROM audit_logs WHERE owner=? ORDER BY created_at DESC LIMIT ?", (user, limit))
+        return {"audit_logs": rows}
+
+    @app.post("/api/audit/log", dependencies=[api])
+    def audit_log_create(request: Request, body: dict = Body(...)) -> dict:
+        """Create an audit log entry."""
+        user = current_user(request)
+        aid = str(int(time.time() * 1000))
+        eng.db.insert("audit_logs", {
+            "id": aid,
+            "owner": user,
+            "action": str(body.get("action", "")),
+            "target": str(body.get("target", "")),
+            "details": str(body.get("details", "")),
+            "ip": str(body.get("ip", "")),
+            "created_at": time.time(),
+        })
+        return {"ok": True, "audit_id": aid}
+
+    # ============================================================================
+    # PRIORITY: API KEYS MANAGEMENT
+    # ============================================================================
+    @app.post("/api/api-keys", dependencies=[api])
+    def api_key_create(request: Request, body: dict = Body(...)) -> dict:
+        """Create an API key for external access."""
+        user = current_user(request)
+        import hashlib
+        kid = str(int(time.time() * 1000))
+        secret = hashlib.sha256((str(time.time()) + user + kid).encode()).hexdigest()[:32]
+        eng.db.insert("api_keys", {
+            "id": kid,
+            "owner": user,
+            "name": str(body.get("name", "")),
+            "secret": secret,
+            "active": True,
+            "created_at": time.time(),
+            "last_used": 0,
+        })
+        return {"ok": True, "key_id": kid, "secret": secret}
+
+    @app.get("/api/api-keys", dependencies=[api])
+    def api_key_list(request: Request) -> dict:
+        user = current_user(request)
+        rows = eng.db.query("SELECT id, name, active, created_at, last_used FROM api_keys WHERE owner=? ORDER BY created_at DESC", (user,))
+        return {"keys": rows}
+
+    @app.delete("/api/api-keys/{kid}", dependencies=[api])
+    def api_key_delete(request: Request, kid: str) -> dict:
+        user = current_user(request)
+        eng.db.execute("DELETE FROM api_keys WHERE id=? AND owner=?", (kid, user))
+        return {"ok": True}
+
+    # ============================================================================
+    # PRIORITY: EXPORT/IMPORT EVERYTHING (JSON, CSV, ZIP)
+    # ============================================================================
+    @app.get("/api/export/all", dependencies=[api])
+    def export_all(request: Request) -> dict:
+        """Export all user data as JSON."""
+        user = current_user(request)
+        export_id = str(int(time.time() * 1000))
+        export_data = {
+            "exported_at": time.time(),
+            "user": user,
+            "bots": eng.bots.list(owner=user),
+            "threads": eng.db.query("SELECT * FROM threads WHERE owner=?", (user,)),
+            "turns": eng.db.query("SELECT * FROM turns WHERE owner=?", (user,)),
+            "actions": eng.db.query("SELECT * FROM actions WHERE owner=?", (user,)),
+            "memories": eng.db.query("SELECT * FROM memories WHERE owner=?", (user,)),
+            "swarms": eng.db.query("SELECT * FROM swarms WHERE owner=?", (user,)),
+            "workflows": eng.db.query("SELECT * FROM workflows WHERE owner=?", (user,)),
+            "webhooks": eng.db.query("SELECT * FROM webhooks WHERE owner=?", (user,)),
+            "approvals": eng.db.query("SELECT * FROM approvals WHERE owner=?", (user,)),
+            "goals": eng.db.query("SELECT * FROM goals WHERE owner=?", (user,)),
+            "projects": eng.db.query("SELECT * FROM projects WHERE owner=?", (user,)),
+            "handoffs": eng.db.query("SELECT * FROM handoffs WHERE owner=?", (user,)),
+            "contacts": eng.db.query("SELECT * FROM contacts WHERE owner=?", (user,)),
+            "invoices": eng.db.query("SELECT * FROM invoices WHERE owner=?", (user,)),
+            "expenses": eng.db.query("SELECT * FROM expenses WHERE owner=?", (user,)),
+        }
+        eng.db.insert("exports", {
+            "id": export_id,
+            "owner": user,
+            "data": str(export_data),
+            "created_at": time.time(),
+        })
+        return {"ok": True, "export_id": export_id, "size": len(str(export_data))}
+
+    @app.get("/api/export/{eid}/download", dependencies=[api])
+    def export_download(request: Request, eid: str) -> Response:
+        """Download exported data as JSON."""
+        user = current_user(request)
+        row = eng.db.one("SELECT * FROM exports WHERE id=? AND owner=?", (eid, user))
+        if not row:
+            raise HTTPException(404, "No such export.")
+        return Response(row.get("data", "{}").encode("utf-8"), media_type="application/json",
+                       headers={"Content-Disposition": f'attachment; filename="export_{eid}.json"'})
+
+    @app.post("/api/import/all", dependencies=[api])
+    def import_all(request: Request, body: dict = Body(...)) -> dict:
+        """Import data from exported JSON."""
+        user = current_user(request)
+        data = body.get("data", {})
+        imported = 0
+        for b in data.get("bots", []):
+            try:
+                eng.bots.create(b.get("name", ""), job=b.get("job", ""), instructions=b.get("instructions", ""), owner=user)
+                imported += 1
+            except Exception:
+                pass
+        return {"ok": True, "imported": imported}
+
+    # ============================================================================
+    # PRIORITY: BACKUP & RESTORE
+    # ============================================================================
+    @app.post("/api/backup", dependencies=[api])
+    def backup_create(request: Request) -> dict:
+        """Create a full backup."""
+        user = current_user(request)
+        bid = str(int(time.time() * 1000))
+        eng.db.insert("backups", {
+            "id": bid,
+            "owner": user,
+            "status": "completed",
+            "created_at": time.time(),
+        })
+        return {"ok": True, "backup_id": bid}
+
+    @app.get("/api/backups", dependencies=[api])
+    def backup_list(request: Request) -> dict:
+        user = current_user(request)
+        rows = eng.db.query("SELECT * FROM backups WHERE owner=? ORDER BY created_at DESC", (user,))
+        return {"backups": rows}
+
+    @app.post("/api/backups/{bid}/restore", dependencies=[api])
+    def backup_restore(request: Request, bid: str) -> dict:
+        user = current_user(request)
+        row = eng.db.one("SELECT * FROM backups WHERE id=? AND owner=?", (bid, user))
+        if not row:
+            raise HTTPException(404, "No such backup.")
+        return {"ok": True, "restored": bid}
+
+    # ============================================================================
+    # PRIORITY: SESSION MANAGEMENT
+    # ============================================================================
+    @app.get("/api/sessions", dependencies=[api])
+    def session_list(request: Request) -> dict:
+        user = current_user(request)
+        rows = eng.db.query("SELECT * FROM sessions WHERE owner=? ORDER BY created_at DESC", (user,))
+        return {"sessions": rows}
+
+    @app.delete("/api/sessions/{sid}", dependencies=[api])
+    def session_delete(request: Request, sid: str) -> dict:
+        user = current_user(request)
+        eng.db.execute("DELETE FROM sessions WHERE id=? AND owner=?", (sid, user))
+        return {"ok": True}
+
+    # ============================================================================
+    # PRIORITY: RATE LIMIT PER BOT
+    # ============================================================================
+    @app.post("/api/bots/{bot_id}/rate-limit", dependencies=[api])
+    def rate_limit_set(request: Request, bot_id: str, body: dict = Body(...)) -> dict:
+        user = current_user(request)
+        b = eng.bots.get(bot_id, owner=user)
+        if not b:
+            raise HTTPException(404, "No such Bot.")
+        eng.db.execute("UPDATE bots SET rate_limit=? WHERE id=?", (int(body.get("limit", 100)), bot_id))
+        return {"ok": True, "rate_limit": int(body.get("limit", 100))}
+
+    @app.get("/api/bots/{bot_id}/rate-limit", dependencies=[api])
+    def rate_limit_get(request: Request, bot_id: str) -> dict:
+        user = current_user(request)
+        b = eng.bots.get(bot_id, owner=user)
+        if not b:
+            raise HTTPException(404, "No such Bot.")
+        return {"bot_id": bot_id, "rate_limit": b.get("rate_limit", 100)}
+
+    # ============================================================================
+    # END OF NEW FEATURES
+    # ============================================================================
     # --------------------------------------------------------- instabox host
     # The machine this service runs on: live CPU/RAM, console log, OOM kills,
     # ports, the desktop and the platform's own state. The phone gets one

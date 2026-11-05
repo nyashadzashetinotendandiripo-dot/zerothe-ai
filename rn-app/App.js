@@ -12,7 +12,7 @@ import Connect, { AuthModal } from './src/Connect';
 import Chat from './src/Chat';
 import ServerScreen from './src/ServerScreen';
 import { TopBar, DashboardScreen, MarketplaceScreen, ApprovalsScreen, RoutinesScreen, FilesScreen, WalletScreen, PluginItemsScreen } from './src/Screens';
-import { WebTopBar, TabSheet, BotsList, HomeView, InboxView, ComputerView, TimelineView, ScreenView, SkillsView, UsageView, ActionLogView, SearchPalette, PlanScreen, AdminStatsScreen, AdminUsersScreen, AdminUserDetailScreen, AdminSettingsScreen, ApprovalCenterView, MuseProfileView, ConnectorsView, IdeasView, GoalsView, FinanceView, EmailConfigScreen, SearchScreen, ImageUnderstandScreen, ImageGenerateScreen, CodeExecuteScreen, AgentCollaborateScreen, AndroidBoxScreen, TABS } from './src/WebUI';
+import { WebTopBar, TabSheet, BotsList, HomeView, InboxView, ComputerView, TimelineView, ScreenView, SkillsView, UsageView, ActionLogView, SearchPalette, PlanScreen, AdminStatsScreen, AdminUsersScreen, AdminUserDetailScreen, AdminSettingsScreen, ApprovalCenterView, MuseProfileView, ConnectorsView, IdeasView, GoalsView, FinanceView, EmailConfigScreen, SearchScreen, ImageUnderstandScreen, ImageGenerateScreen, CodeExecuteScreen, AgentCollaborateScreen, AndroidBoxScreen, TABS, SwarmView, WorkflowView, AnalyticsView, WebhookView, MemoryView, AuditLogView, ApiKeysView } from './src/WebUI';
 
 export default function App() {
   return (
@@ -452,6 +452,48 @@ function ZbRoot() {
     case 'timeline': return (
       <Shell upd={upd} onUpd={doUpdate} updState={updState}>
         <TimelineView bots={bots} busy={busy} conn={conn} account={email} onAvatar={() => setMenuOpen(true)} onScreen={takeScreen} />
+        {menuBlock}
+      </Shell>
+    );
+    case 'swarm': return (
+      <Shell upd={upd} onUpd={doUpdate} updState={updState}>
+        <SwarmView bots={bots} busy={busy} conn={conn} account={email} onAvatar={() => setMenuOpen(true)} onScreen={takeScreen} />
+        {menuBlock}
+      </Shell>
+    );
+    case 'workflow': return (
+      <Shell upd={upd} onUpd={doUpdate} updState={updState}>
+        <WorkflowView bots={bots} conn={conn} account={email} onAvatar={() => setMenuOpen(true)} />
+        {menuBlock}
+      </Shell>
+    );
+    case 'analytics': return (
+      <Shell upd={upd} onUpd={doUpdate} updState={updState}>
+        <AnalyticsView bots={bots} conn={conn} account={email} onAvatar={() => setMenuOpen(true)} />
+        {menuBlock}
+      </Shell>
+    );
+    case 'webhooks': return (
+      <Shell upd={upd} onUpd={doUpdate} updState={updState}>
+        <WebhookView conn={conn} account={email} onAvatar={() => setMenuOpen(true)} />
+        {menuBlock}
+      </Shell>
+    );
+    case 'memory': return (
+      <Shell upd={upd} onUpd={doUpdate} updState={updState}>
+        <MemoryView bots={bots} conn={conn} account={email} onAvatar={() => setMenuOpen(true)} />
+        {menuBlock}
+      </Shell>
+    );
+    case 'audit': return (
+      <Shell upd={upd} onUpd={doUpdate} updState={updState}>
+        <AuditLogView conn={conn} account={email} onAvatar={() => setMenuOpen(true)} />
+        {menuBlock}
+      </Shell>
+    );
+    case 'apiKeys': return (
+      <Shell upd={upd} onUpd={doUpdate} updState={updState}>
+        <ApiKeysView conn={conn} account={email} onAvatar={() => setMenuOpen(true)} />
         {menuBlock}
       </Shell>
     );
