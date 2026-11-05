@@ -94,6 +94,7 @@ print('manifest patched')
 PYEOF
 
 # Create accessibility_service_config.xml
+mkdir -p "$ANDROID_MAIN/res/xml"
 cat > "$ANDROID_MAIN/res/xml/accessibility_service_config.xml" <<'XMLEOF'
 <?xml version="1.0" encoding="utf-8"?>
 <accessibility-service xmlns:android="http://schemas.android.com/apk/res/android"
