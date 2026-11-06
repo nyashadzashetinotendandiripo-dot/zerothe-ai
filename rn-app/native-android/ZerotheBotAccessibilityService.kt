@@ -33,7 +33,7 @@ class ZerotheBotAccessibilityService : AccessibilityService() {
                          AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED
             feedbackType = AccessibilityServiceInfo.FEEDBACK_GENERIC
             flags = AccessibilityServiceInfo.FLAG_REPORT_VIEW_IDS or
-                    AccessibilityServiceInfo.FLAG_RETRIEVE_INTERACTIVE_WINDOW
+                    AccessibilityServiceInfo.FLAG_RETRIEVE_INTERACTIVE_WINDOWS
         }
         serviceInfo = info
     }
@@ -260,4 +260,9 @@ class ZerotheBotAccessibilityService : AccessibilityService() {
     companion object {
         const val SERVICE_NAME = "ai.zerothebot.app.accessibility.ZerotheBotAccessibilityService"
     }
+}
+
+/** Static holder so the RN bridge can reach the running service instance. */
+object ServiceHolder {
+    @Volatile var instance: ZerotheBotAccessibilityService? = null
 }

@@ -30,7 +30,7 @@ class AccessibilityModule(reactContext: ReactApplicationContext) : ReactContextB
     @ReactMethod
     fun isAccessibilityEnabled(promise: Promise) {
         try {
-            val manager = reactApplicationContext.getSystemService(Context.ACCESSIBILITY_SERVICE) as android.accessibilityservice.AccessibilityManager
+            val manager = reactApplicationContext.getSystemService(Context.ACCESSIBILITY_SERVICE) as android.view.accessibility.AccessibilityManager
             val services = manager.getEnabledAccessibilityServiceList(android.accessibilityservice.AccessibilityServiceInfo.FEEDBACK_ALL_MASK)
             val us = services.any { it.id?.contains("ai.zerothebot.app") == true }
             promise.resolve(us)
@@ -96,7 +96,7 @@ class AccessibilityModule(reactContext: ReactApplicationContext) : ReactContextB
                     }
                     promise.resolve(s.keyEvent(code))
                 }
-                "findText" -> promise.resolve(s.findTextOnScreen(a.getString("text") ?: "", a.getBoolean("exact", false)))
+                "findText" -> promise.resolve(s.findTextOnScreen(a.getString("text") ?: "", if (a.hasKey("exact")) a.getBoolean("exact") else false))
                 "scroll" -> promise.resolve(s.scrollScreen(a.getString("direction") ?: "down", (a.getDouble("amount") ?: 0.6).toFloat()))
                 "openApp" -> promise.resolve(s.launchApp(a.getString("app") ?: ""))
                 "currentApp" -> promise.resolve(s.getCurrentPackageName())
