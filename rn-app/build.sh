@@ -135,22 +135,21 @@ print('MainApplication patched')
 PYEOF
 elif [ -f "$ANDROID_MAIN/java/ai/zerothebot/app/MainApplication.kt" ]; then
   log "patching MainApplication.kt"
-  # Kotlin variant - similar injection
+  # Modern Expo template: `PackageList(this).packages.apply { ... }` — add our
+  # package inside the apply block so the native module registers.
   python3 - <<'PYEOF'
 p = 'android/app/src/main/java/ai/zerothebot/app/MainApplication.kt'
 try:
     s = open(p, encoding='utf-8').read()
 except FileNotFoundError:
     s = ''
-if 'AccessibilityModule' not in s:
-    s = s.replace(
-        'import com.facebook.react.PackageList',
-        'import com.facebook.react.PackageList\nimport ai.zerothebot.app.accessibility.AccessibilityModule'
-    )
-if 'AccessibilityModule(reactApplicationContext)' not in s:
-    old = 'mainReactPackage = MainReactPackage()'
-    if old in s:
-        s = s.replace(old, old + '\n        packages.add(AccessibilityModule(reactApplicationContext))')
+if 'AccessibilityPackage' not in s:
+    marker = 'PackageList(this).packages.apply {'
+    if marker in s:
+        s = s.replace(marker, marker + '\n            add(ai.zerothebot.app.accessibility.AccessibilityPackage())', 1)
+        print('MainApplication.kt: package added inside apply block')
+    else:
+        print('MainApplication.kt: WARNING - apply block marker not found')
 open(p, 'w', encoding='utf-8').write(s)
 print('MainApplication.kt patched')
 PYEOF

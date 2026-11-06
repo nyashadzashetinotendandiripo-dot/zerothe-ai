@@ -2,78 +2,84 @@ package ai.zerothebot.app.accessibility
 
 import android.app.Activity
 import android.content.Intent
+import android.graphics.Color
 import android.graphics.PixelFormat
+import android.graphics.drawable.GradientDrawable
 import android.os.Bundle
 import android.view.Gravity
-import android.view.LayoutInflater
 import android.view.MotionEvent
 import android.view.View
 import android.view.WindowManager
-import android.widget.ImageView
 import android.widget.TextView
-import androidx.appcompat.app.AppCompatActivity
 
-class FloatingBubbleActivity : AppCompatActivity(), View.OnTouchListener {
+/**
+ * Adds a small floating "ZB" bubble overlay, then finishes immediately so only
+ * the overlay remains. Tapping the bubble returns to ZerotheBot.
+ */
+class FloatingBubbleActivity : Activity() {
 
-    private lateinit var windowManager: WindowManager
-    private lateinit var bubbleView: View
-    private lateinit var bubbleParams: WindowManager.LayoutParams
+    private var windowManager: WindowManager? = null
+    private var bubbleView: View? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        // Don't show a normal activity UI; we only create the overlay window
         windowManager = getSystemService(WINDOW_SERVICE) as WindowManager
 
-        bubbleParams = WindowManager.LayoutParams().apply {
-            type = if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
-                WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
-            } else {
-                WindowManager.LayoutParams.TYPE_PHONE
+        val tv = TextView(this).apply {
+            text = "ZB"
+            setTextColor(Color.WHITE)
+            textSize = 14f
+            gravity = Gravity.CENTER
+            background = GradientDrawable().apply {
+                shape = GradientDrawable.OVAL
+                setColor(Color.parseColor("#1a73e8"))
             }
-            flags = WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
-                    WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL or
-                    WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON
-            format = PixelFormat.TRANSLUCENT
+        }
+
+        val params = WindowManager.LayoutParams(
+            120, 120,
+            WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
+            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+                    WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL,
+            PixelFormat.TRANSLUCENT
+        ).apply {
             gravity = Gravity.TOP or Gravity.START
-            x = 50
-            y = 200
-            width = 100
-            height = 100
+            x = 40
+            y = 300
         }
 
-        bubbleView = LayoutInflater.from(this).inflate(android.R.layout.simple_list_item_1, null)
-        bubbleView.setBackgroundResource(android.R.color.holo_blue_bright)
-        val tv = bubbleView.findViewById<android.widget.TextView>(android.R.id.text1)
-        tv.text = "ZB"
-        tv.setTextColor(android.graphics.Color.WHITE)
-        bubbleView.setOnTouchListener(this)
-
-        windowManager.addView(bubbleView, bubbleParams)
-
-        bubbleView.setOnClickListener {
-            // Return to ZerotheBot main activity
-            val intent = Intent(this, MainActivity::class.java)
-            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
-            startActivity(intent)
-            windowManager.removeView(bubbleView)
-            finish()
+        tv.setOnTouchListener { v, event ->
+            when (event.actionMasked) {
+                MotionEvent.ACTION_UP -> {
+                    val intent = packageManager.getLaunchIntentForPackage(packageName)
+                    if (intent != null) {
+                        intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP)
+                        startActivity(intent)
+                    }
+                    removeBubble()
+                    v.performClick()
+                    true
+                }
+                else -> false
+            }
         }
 
-        // Finish the activity immediately so only the overlay remains
+        try {
+            windowManager?.addView(tv, params)
+            bubbleView = tv
+        } catch (e: Exception) {
+            // no overlay permission — fail quietly
+        }
         finish()
     }
 
-    override fun onTouch(v: View?, event: MotionEvent?): Boolean {
-        if (event?.action == MotionEvent.ACTION_DOWN) {
-            bubbleParams.x = event.rawX.toInt() - bubbleView.width / 2
-            bubbleParams.y = event.rawY.toInt() - bubbleView.height / 2 - 50
-            windowManager.updateViewLayout(bubbleView, bubbleParams)
-        }
-        return false
+    private fun removeBubble() {
+        try { bubbleView?.let { windowManager?.removeView(it) } } catch (e: Exception) {}
+        bubbleView = null
     }
 
     override fun onDestroy() {
+        removeBubble()
         super.onDestroy()
-        try { windowManager.removeView(bubbleView) } catch (_: Exception) {}
     }
 }

@@ -4,32 +4,23 @@ import android.accessibilityservice.AccessibilityService
 import android.accessibilityservice.GestureDescription
 import android.accessibilityservice.AccessibilityServiceInfo
 import android.content.Intent
+import android.graphics.Rect
 import android.os.Handler
 import android.os.Looper
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
-import android.view.accessibility.AccessibilityWindowInfo
 import android.view.KeyEvent
 import android.graphics.Path
 import android.os.Bundle
-import android.content.ComponentName
-import android.content.pm.PackageManager
-import androidx.lifecycle.ProcessLifecycleOwner
-import androidx.lifecycle.DefaultLifecycleObserver
-import androidx.lifecycle.Lifecycle
-import androidx.lifecycle.LifecycleOwner
 
-class ZerotheBotAccessibilityService : AccessibilityService(), DefaultLifecycleObserver {
+class ZerotheBotAccessibilityService : AccessibilityService() {
 
     private val handler = Handler(Looper.getMainLooper())
     private var lastEvent: AccessibilityEvent? = null
-    private var commandCallback: ((Map<String, Any?>) -> Unit)? = null
-    private var screenCallback: ((String) -> Unit)? = null
 
     override fun onCreate() {
         super.onCreate()
         ServiceHolder.instance = this
-        ProcessLifecycleOwner.get().lifecycle.addObserver(this)
     }
 
     override fun onServiceConnected() {
@@ -52,62 +43,34 @@ class ZerotheBotAccessibilityService : AccessibilityService(), DefaultLifecycleO
     }
 
     override fun onInterrupt() {
-        // Service interrupted, nothing to do
+        // nothing to do
     }
 
     override fun onDestroy() {
         ServiceHolder.instance = null
-        ProcessLifecycleOwner.get().lifecycle.removeObserver(this)
         super.onDestroy()
     }
 
-    override fun onCreate(owner: LifecycleOwner) { }
-    override fun onStart(owner: LifecycleOwner) { }
-    override fun onResume(owner: LifecycleOwner) { }
-    override fun onPause(owner: LifecycleOwner) { }
-    override fun onStop(owner: LifecycleOwner) { }
-    override fun onDestroy(owner: LifecycleOwner) { }
-
-    // ---------- Public API for RN bridge ----------
-    fun setCommandCallback(cb: (Map<String, Any?>) -> Unit) {
-        commandCallback = cb
+    private fun boundsOf(node: AccessibilityNodeInfo): Rect {
+        val r = Rect()
+        node.getBoundsInScreen(r)
+        return r
     }
 
-    fun setScreenCallback(cb: (String) -> Unit) {
-        screenCallback = cb
-    }
+    // ---------- Public API for the RN bridge ----------
 
     fun getRootNodeAsJson(): String? {
         return try {
-            val root = rootInActiveWindow
-            if (root == null) null else nodeToJson(root)
+            val root = rootInActiveWindow ?: return null
+            nodeToJson(root, 0)
         } catch (e: Exception) {
             null
-        }
-    }
-
-    fun performGlobalActionNative(action: Int): Boolean {
-        return try {
-            performGlobalAction(action)
-            true
-        } catch (e: Exception) {
-            false
         }
     }
 
     fun tapNode(node: AccessibilityNodeInfo): Boolean {
         return try {
             node.performAction(AccessibilityNodeInfo.ACTION_CLICK)
-            true
-        } catch (e: Exception) {
-            false
-        }
-    }
-
-    fun longPressNode(node: AccessibilityNodeInfo, durationMs: Long): Boolean {
-        return try {
-            node.performAction(AccessibilityNodeInfo.ACTION_LONG_CLICK)
-            true
         } catch (e: Exception) {
             false
         }
@@ -115,12 +78,10 @@ class ZerotheBotAccessibilityService : AccessibilityService(), DefaultLifecycleO
 
     fun setNodeText(node: AccessibilityNodeInfo, text: String): Boolean {
         return try {
-            val action = AccessibilityNodeInfo.AccessibilityAction(AccessibilityNodeInfo.ACTION_SET_TEXT, null)
             val args = Bundle().apply {
                 putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, text)
             }
-            node.performAction(action, args)
-            true
+            node.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args)
         } catch (e: Exception) {
             false
         }
@@ -129,12 +90,11 @@ class ZerotheBotAccessibilityService : AccessibilityService(), DefaultLifecycleO
     fun swipe(x1: Float, y1: Float, x2: Float, y2: Float, durationMs: Long): Boolean {
         return try {
             val path = Path().apply { moveTo(x1, y1); lineTo(x2, y2) }
-            val duration = durationMs.coerceAtLeast(300).coerceAtMost(5000)
+            val duration = durationMs.coerceIn(100L, 10000L)
             val gesture = GestureDescription.Builder()
-                .addStroke(GestureDescription.StrokeDescription(path, 100, duration))
+                .addStroke(GestureDescription.StrokeDescription(path, 0, duration))
                 .build()
             dispatchGesture(gesture, null, null)
-            true
         } catch (e: Exception) {
             false
         }
@@ -142,116 +102,115 @@ class ZerotheBotAccessibilityService : AccessibilityService(), DefaultLifecycleO
 
     fun keyEvent(keyCode: Int): Boolean {
         return try {
-            dispatchKeyEvent(KeyEvent(keyCode))
-            true
+            performGlobalAction(AccessibilityService.GLOBAL_ACTION_HOME.takeIf { keyCode == KeyEvent.KEYCODE_HOME }
+                ?: AccessibilityService.GLOBAL_ACTION_BACK.takeIf { keyCode == KeyEvent.KEYCODE_BACK }
+                ?: AccessibilityService.GLOBAL_ACTION_RECENTS.takeIf { keyCode == KeyEvent.KEYCODE_MENU }
+                ?: return false)
         } catch (e: Exception) {
             false
         }
     }
 
     fun typeText(text: String): Boolean {
-        val focus = rootInActiveWindow?.findFocus(AccessibilityNodeInfo.FOCUS_INPUT)
-        return if (focus != null) setNodeText(focus, text) else false
+        val focus = rootInActiveWindow?.findFocus(AccessibilityNodeInfo.FOCUS_INPUT) ?: return false
+        return setNodeText(focus, text)
     }
 
-    fun findTextOnScreen(searchText: String, exact: Boolean = false): List<Map<String, Any?>> {
-        val results = mutableListOf<Map<String, Any?>>()
-        val root = rootInActiveWindow ?: return results
+    fun findTextOnScreen(searchText: String, exact: Boolean): String {
+        val results = StringBuilder("[")
+        val root = rootInActiveWindow ?: return "[]"
         collectNodesMatching(root, searchText, exact, results)
-        return results
+        results.append("]")
+        return results.toString()
     }
 
-    private fun collectNodesMatching(node: AccessibilityNodeInfo, search: String, exact: Boolean, out: MutableList<Map<String, Any?>>) {
+    private fun collectNodesMatching(node: AccessibilityNodeInfo?, search: String, exact: Boolean, out: StringBuilder) {
+        if (node == null) return
         val text = node.text?.toString() ?: ""
         val desc = node.contentDescription?.toString() ?: ""
         val matchText = if (exact) text == search else text.contains(search, ignoreCase = true)
         val matchDesc = if (exact) desc == search else desc.contains(search, ignoreCase = true)
         if (matchText || matchDesc) {
-            val bounds = node.boundsInScreen
-            out.add(mapOf(
-                "text" to text,
-                "desc" to desc,
-                "id" to node.viewIdResourceName ?: "",
-                "class" to node.className ?: "",
-                "clickable" to node.isClickable,
-                "x" to ((bounds.left + bounds.right) / 2),
-                "y" to ((bounds.top + bounds.bottom) / 2),
-                "w" to (bounds.right - bounds.left),
-                "h" to (bounds.bottom - bounds.top)
-            ))
+            val b = boundsOf(node)
+            if (out.length > 1) out.append(",")
+            out.append("{\"text\":\"").append(escapeJson(text))
+            out.append("\",\"desc\":\"").append(escapeJson(desc))
+            out.append("\",\"id\":\"").append(escapeJson(node.viewIdResourceName ?: ""))
+            out.append("\",\"class\":\"").append(escapeJson(node.className?.toString() ?: ""))
+            out.append("\",\"clickable\":").append(node.isClickable)
+            out.append(",\"x\":").append((b.left + b.right) / 2)
+            out.append(",\"y\":").append((b.top + b.bottom) / 2)
+            out.append(",\"w\":").append(b.right - b.left)
+            out.append(",\"h\":").append(b.bottom - b.top)
+            out.append("}")
         }
         for (i in 0 until node.childCount) {
             collectNodesMatching(node.getChild(i), search, exact, out)
         }
     }
 
-    // ---------- Helpers called by RN module ----------
-    fun findAndTapById(id: String): Boolean {
+    // ---------- Helpers called by the RN module ----------
+
+    fun findAndTapByText(searchText: String): Boolean {
         val root = rootInActiveWindow ?: return false
-        return findAndTapByIdRecursive(root, id)
+        val node = findNodeByText(root, searchText)
+        return node != null && tapNode(node)
     }
 
-    private fun findAndTapByIdRecursive(node: AccessibilityNodeInfo, id: String): Boolean {
-        if (node.viewIdResourceName == id) {
-            return tapNode(node)
+    private fun findNodeByText(node: AccessibilityNodeInfo, search: String): AccessibilityNodeInfo? {
+        val text = node.text?.toString() ?: ""
+        val desc = node.contentDescription?.toString() ?: ""
+        if (text.contains(search, ignoreCase = true) || desc.contains(search, ignoreCase = true)) {
+            if (node.isClickable) return node
         }
         for (i in 0 until node.childCount) {
             val child = node.getChild(i) ?: continue
-            if (findAndTapByIdRecursive(child, id)) return true
-        }
-        return false
-    }
-
-    fun tapAt(x: Float, y: Float): Boolean {
-        val root = rootInActiveWindow ?: return false
-        val node = findNodeAt(root, x, y)
-        return if (node != null) tapNode(node) else false
-    }
-
-    private fun findNodeAt(node: AccessibilityNodeInfo, x: Float, y: Float): AccessibilityNodeInfo? {
-        val bounds = node.boundsInScreen
-        if (x >= bounds.left && x <= bounds.right && y >= bounds.top && y <= bounds.bottom) {
-            // Check children first (deepest match)
-            for (i in 0 until node.childCount) {
-                val child = node.getChild(i) ?: continue
-                val found = findNodeAt(child, x, y)
-                if (found != null) return found
-            }
-            return node
+            val found = findNodeByText(child, search)
+            if (found != null) return found
         }
         return null
     }
 
+    fun tapAt(x: Float, y: Float): Boolean {
+        val path = Path().apply { moveTo(x, y); lineTo(x, y) }
+        val gesture = GestureDescription.Builder()
+            .addStroke(GestureDescription.StrokeDescription(path, 0, 60))
+            .build()
+        return dispatchGesture(gesture, null, null)
+    }
+
     fun longPressAt(x: Float, y: Float, durationMs: Long): Boolean {
-        val root = rootInActiveWindow ?: return false
-        val node = findNodeAt(root, x, y)
-        return if (node != null) longPressNode(node, durationMs) else false
+        val path = Path().apply { moveTo(x, y); lineTo(x, y) }
+        val duration = durationMs.coerceIn(500L, 5000L)
+        val gesture = GestureDescription.Builder()
+            .addStroke(GestureDescription.StrokeDescription(path, 0, duration))
+            .build()
+        return dispatchGesture(gesture, null, null)
     }
 
     fun scrollScreen(direction: String, amount: Float): Boolean {
         val root = rootInActiveWindow ?: return false
-        val bounds = root.boundsInScreen
-        val cx = (bounds.left + bounds.right) / 2f
-        val cy = (bounds.top + bounds.bottom) / 2f
-        val w = bounds.right - bounds.left
-        val h = bounds.bottom - bounds.top
-        val dist = (if (amount > 1f) 1f else amount).coerceAtLeast(0.05f)
-
-        val (dx, dy) = when (direction) {
-            "up" -> Pair(0f, -h * dist)
-            "down" -> Pair(0f, h * dist)
-            "left" -> Pair(-w * dist, 0f)
-            "right" -> Pair(w * dist, 0f)
-            else -> Pair(0f, h * dist)
+        val b = boundsOf(root)
+        val cx = (b.left + b.right) / 2f
+        val cy = (b.top + b.bottom) / 2f
+        val w = (b.right - b.left).toFloat()
+        val h = (b.bottom - b.top).toFloat()
+        val dist = amount.coerceIn(0.05f, 1.0f)
+        val dx: Float
+        val dy: Float
+        when (direction) {
+            "up" -> { dx = 0f; dy = -h * dist }
+            "left" -> { dx = -w * dist; dy = 0f }
+            "right" -> { dx = w * dist; dy = 0f }
+            else -> { dx = 0f; dy = h * dist }
         }
-
-        return swipe(cx - dx / 2, cy - dy / 2, cx + dx / 2, cy + dy / 2, (max(w, h) * 4).toLong().coerceAtLeast(600))
+        val dur = maxOf(w, h).times(2).toLong().coerceIn(400L, 2000L)
+        return swipe(cx - dx / 2, cy - dy / 2, cx + dx / 2, cy + dy / 2, dur)
     }
 
     fun launchApp(packageName: String): Boolean {
         return try {
-            val pm = packageManager
-            val intent = pm.getLaunchIntentForPackage(packageName)
+            val intent = packageManager.getLaunchIntentForPackage(packageName)
             if (intent == null) false else {
                 intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                 startActivity(intent)
@@ -263,41 +222,39 @@ class ZerotheBotAccessibilityService : AccessibilityService(), DefaultLifecycleO
     }
 
     fun getCurrentPackageName(): String? {
-        val events = lastEvent
-        return events?.packageName?.toString()
+        val ev = lastEvent
+        return ev?.packageName?.toString()
     }
 
-    private fun nodeToJson(node: AccessibilityNodeInfo, depth: Int = 0): String {
-        if (depth > 12) return ""
+    private fun nodeToJson(node: AccessibilityNodeInfo?, depth: Int): String {
+        if (node == null || depth > 12) return ""
         val sb = StringBuilder()
-        val text = node.text?.toString() ?: ""
-        val desc = node.contentDescription?.toString() ?: ""
-        val id = node.viewIdResourceName ?: ""
-        val clickable = node.isClickable
-        val bounds = node.boundsInScreen
-        sb.append("{")
-        sb.append("\"text\":\"${escapeJson(text)}\",")
-        sb.append("\"desc\":\"${escapeJson(desc)}\",")
-        sb.append("\"id\":\"${escapeJson(id)}\",")
-        sb.append("\"class\":\"${escapeJson(node.className ?: "")}\",")
-        sb.append("\"clickable\":$clickable,")
-        sb.append("\"x\":${(bounds.left + bounds.right) / 2},")
-        sb.append("\"y\":${(bounds.top + bounds.bottom) / 2},")
-        sb.append("\"w\":${bounds.right - bounds.left},")
-        sb.append("\"h\":${bounds.bottom - bounds.top},")
-        sb.append("\"children\":[")
-        val children = mutableListOf<String>()
+        val b = boundsOf(node)
+        sb.append("{\"text\":\"").append(escapeJson(node.text?.toString() ?: ""))
+        sb.append("\",\"desc\":\"").append(escapeJson(node.contentDescription?.toString() ?: ""))
+        sb.append("\",\"id\":\"").append(escapeJson(node.viewIdResourceName ?: ""))
+        sb.append("\",\"class\":\"").append(escapeJson(node.className?.toString() ?: ""))
+        sb.append("\",\"clickable\":").append(node.isClickable)
+        sb.append(",\"x\":").append((b.left + b.right) / 2)
+        sb.append(",\"y\":").append((b.top + b.bottom) / 2)
+        sb.append(",\"w\":").append(b.right - b.left)
+        sb.append(",\"h\":").append(b.bottom - b.top)
+        sb.append(",\"children\":[")
+        var first = true
         for (i in 0 until node.childCount) {
-            val child = node.getChild(i) ?: continue
-            children.add(nodeToJson(child, depth + 1))
+            val childJson = nodeToJson(node.getChild(i), depth + 1)
+            if (childJson.isNotEmpty()) {
+                if (!first) sb.append(",")
+                sb.append(childJson)
+                first = false
+            }
         }
-        sb.append(children.joinToString(","))
         sb.append("]}")
         return sb.toString()
     }
 
     private fun escapeJson(s: String): String {
-        return s.replace("\\", "\\\\").replace("\"", "\\\"").replace("\n", "\\n")
+        return s.replace("\\", "\\\\").replace("\"", "\\\"").replace("\n", "\\n").replace("\r", "\\r").replace("\t", "\\t")
     }
 
     companion object {

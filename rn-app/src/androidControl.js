@@ -106,14 +106,17 @@ export async function ui() {
  */
 export async function findText(text, exact = false) {
   const result = await sendCommand('findText', { text, exact });
-  return Array.isArray(result) ? result : [];
+  if (typeof result === 'string' && result.length > 1) {
+    try { return JSON.parse(result); } catch { return []; }
+  }
+  return [];
 }
 
 /**
- * Tap an element by its accessibility resource id.
+ * Tap the first clickable element containing this text.
  */
-export async function tapNode(id) {
-  await sendCommand('tapNode', { id });
+export async function tapText(text) {
+  return sendCommand('tapText', { text });
 }
 
 /**
@@ -246,7 +249,7 @@ export default {
   requestOverlayPermission,
   ui,
   findText,
-  tapNode,
+  tapText,
   tapAt,
   longPress,
   typeText,
