@@ -9,22 +9,21 @@
  * must grant it once in Android Settings).
  */
 
-import { NativeModules, Platform, AppState } from 'react-native';
-import { Alert } from 'react-native';
+import { NativeModules } from 'react-native';
 
 const { ZerotheBotAccessibility } = NativeModules;
 
 let isReady = false;
-let readyListeners: (() => void)[] = [];
+let readyListeners = [];
 
 /**
  * Check if the accessibility service is available and enabled.
  */
-export async function isAccessibilityAvailable(): Promise<boolean> {
+export async function isAccessibilityAvailable() {
   if (!ZerotheBotAccessibility) return false;
   try {
     const status = await ZerotheBotAccessibility.isAccessibilityEnabled();
-    return status?.ourServiceEnabled === true;
+    return status && status.ourServiceEnabled === true;
   } catch {
     return false;
   }
@@ -33,7 +32,7 @@ export async function isAccessibilityAvailable(): Promise<boolean> {
 /**
  * Open Android Settings > Accessibility so the user can enable ZerotheBot.
  */
-export function openAccessibilitySettings(): Promise<void> {
+export function openAccessibilitySettings() {
   if (!ZerotheBotAccessibility) {
     return Promise.reject(new Error('Native module not available'));
   }
@@ -45,7 +44,7 @@ export function openAccessibilitySettings(): Promise<void> {
 /**
  * Check if draw-overlays permission is granted (for the floating bubble).
  */
-export async function isOverlayEnabled(): Promise<boolean> {
+export async function isOverlayEnabled() {
   if (!ZerotheBotAccessibility) return false;
   try {
     return await ZerotheBotAccessibility.isOverlayEnabled();
@@ -57,7 +56,7 @@ export async function isOverlayEnabled(): Promise<boolean> {
 /**
  * Request draw-overlays permission.
  */
-export function requestOverlayPermission(): Promise<void> {
+export function requestOverlayPermission() {
   if (!ZerotheBotAccessibility) {
     return Promise.reject(new Error('Native module not available'));
   }
@@ -67,12 +66,12 @@ export function requestOverlayPermission(): Promise<void> {
 /**
  * Send a raw command to the accessibility service.
  */
-async function sendCommand(command: string, args: Record<string, any> = {}): Promise<any> {
+async function sendCommand(command, args = {}) {
   if (!ZerotheBotAccessibility) {
     throw new Error('Accessibility native module not loaded. Rebuild the APK.');
   }
   if (!isReady) {
-    await new Promise<void>((resolve) => {
+    await new Promise((resolve) => {
       readyListeners.push(resolve);
     });
   }
@@ -82,7 +81,7 @@ async function sendCommand(command: string, args: Record<string, any> = {}): Pro
 /**
  * When the native module signals it's ready, resolve pending calls.
  */
-export function onReady(cb: () => void) {
+export function onReady(cb) {
   if (isReady) { cb(); return; }
   readyListeners.push(cb);
 }
@@ -97,7 +96,7 @@ export function markReady() {
 /**
  * Dump the current screen accessibility tree as JSON text.
  */
-export async function ui(): Promise<string> {
+export async function ui() {
   const result = await sendCommand('getRootNode', {});
   return typeof result === 'string' ? result : '';
 }
@@ -105,7 +104,7 @@ export async function ui(): Promise<string> {
 /**
  * Find visible text on screen. Returns matching nodes with coordinates.
  */
-export async function findText(text: string, exact = false): Promise<Array<any>> {
+export async function findText(text, exact = false) {
   const result = await sendCommand('findText', { text, exact });
   return Array.isArray(result) ? result : [];
 }
@@ -113,42 +112,42 @@ export async function findText(text: string, exact = false): Promise<Array<any>>
 /**
  * Tap an element by its accessibility resource id.
  */
-export async function tapNode(id: string): Promise<void> {
+export async function tapNode(id) {
   await sendCommand('tapNode', { id });
 }
 
 /**
  * Tap at screen coordinates.
  */
-export async function tapAt(x: number, y: number): Promise<void> {
+export async function tapAt(x, y) {
   await sendCommand('tapCoords', { x, y });
 }
 
 /**
  * Long press at screen coordinates.
  */
-export async function longPress(x: number, y: number, durationMs = 800): Promise<void> {
+export async function longPress(x, y, durationMs = 800) {
   await sendCommand('longPress', { x, y, durationMs });
 }
 
 /**
  * Type text into the currently focused field.
  */
-export async function typeText(text: string): Promise<void> {
+export async function typeText(text) {
   await sendCommand('setText', { text });
 }
 
 /**
  * Swipe from (x1,y1) to (x2,y2) over durationMs.
  */
-export async function swipe(x1: number, y1: number, x2: number, y2: number, durationMs = 800): Promise<void> {
+export async function swipe(x1, y1, x2, y2, durationMs = 800) {
   await sendCommand('swipe', { x1, y1, x2, y2, durationMs });
 }
 
 /**
  * Press a hardware key: 'back', 'home', 'enter', 'menu'.
  */
-export async function key(key: string): Promise<void> {
+export async function key(key) {
   await sendCommand('key', { key });
 }
 
@@ -156,7 +155,7 @@ export async function key(key: string): Promise<void> {
  * Scroll the screen in a direction. direction: 'down' | 'up' | 'left' | 'right'.
  * amount: fraction of screen (0.05 - 1.0).
  */
-export async function scroll(direction: string, amount = 0.6): Promise<void> {
+export async function scroll(direction, amount = 0.6) {
   await sendCommand('scroll', { direction, amount });
 }
 
@@ -164,7 +163,7 @@ export async function scroll(direction: string, amount = 0.6): Promise<void> {
  * One scroll step. Returns { before, after, textMoved, pixelsMoved, moved }.
  * WebView text may stay stale, so pixelsMoved is the reliable signal there.
  */
-export async function scrollStep(direction = 'down', amount = 0.6): Promise<any> {
+export async function scrollStep(direction = 'down', amount = 0.6) {
   const before = await ui();
   await sendCommand('scroll', { direction, amount });
   // Give the screen time to settle
@@ -177,7 +176,7 @@ export async function scrollStep(direction = 'down', amount = 0.6): Promise<any>
     before,
     after,
     textMoved,
-    pixelsMoved: textMoved, // best-effort; no screenshot hash on-device
+    pixelsMoved: textMoved,
     moved: textMoved,
   };
 }
@@ -185,7 +184,7 @@ export async function scrollStep(direction = 'down', amount = 0.6): Promise<any>
 /**
  * Wait for specific text to appear on screen (polls).
  */
-export async function waitForText(text: string, timeoutSec = 10): Promise<boolean> {
+export async function waitForText(text, timeoutSec = 10) {
   const deadline = Date.now() + timeoutSec * 1000;
   while (Date.now() < deadline) {
     const found = await findText(text, false);
@@ -198,7 +197,7 @@ export async function waitForText(text: string, timeoutSec = 10): Promise<boolea
 /**
  * Wait until screen text stops changing.
  */
-export async function waitStable(timeoutSec = 10): Promise<boolean> {
+export async function waitStable(timeoutSec = 10) {
   const deadline = Date.now() + timeoutSec * 1000;
   let last = await ui();
   while (Date.now() < deadline) {
@@ -213,14 +212,14 @@ export async function waitStable(timeoutSec = 10): Promise<boolean> {
 /**
  * Open an app by package name or friendly name.
  */
-export async function openApp(app: string): Promise<any> {
+export async function openApp(app) {
   return sendCommand('openApp', { app });
 }
 
 /**
  * Get the currently foreground package name.
  */
-export async function currentApp(): Promise<string | null> {
+export async function currentApp() {
   const result = await sendCommand('currentApp', {});
   return typeof result === 'string' ? result : null;
 }
@@ -228,7 +227,7 @@ export async function currentApp(): Promise<string | null> {
 /**
  * Wait until a specific app is in the foreground.
  */
-export async function waitForApp(app: string, timeoutSec = 10): Promise<boolean> {
+export async function waitForApp(app, timeoutSec = 10) {
   const deadline = Date.now() + timeoutSec * 1000;
   while (Date.now() < deadline) {
     const current = await currentApp();
