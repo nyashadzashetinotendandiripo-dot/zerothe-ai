@@ -8,6 +8,7 @@ import {
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { api, conf, pluginsList, pluginConnect, pluginDisconnect, pluginConfig, mcpList, mcpSave, mcpDelete, mcpRestart } from './session';
+import * as androidControl from './androidControl';
 import { C } from './theme';
 import Avatar from './Avatar';
 
