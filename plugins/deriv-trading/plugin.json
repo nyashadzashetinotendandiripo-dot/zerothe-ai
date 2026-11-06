@@ -1,0 +1,190 @@
+{
+  "id": "deriv-trading",
+  "name": "Deriv Trading",
+  "version": "1.0.0",
+  "description": "Trade Deriv Synthetic Indices: live quotes, candles, technical indicators, backtest, buy/close with approval.",
+  "help": "Connects to Deriv's public WebSocket API (api.derivws.com). Read-only tools need no token. Account and trading tools need an API token. Every order requires user approval (risk=purchase).",
+  "kind": "python",
+  "entry": "plugin.py",
+  "needs_engine": true,
+  "timeout": 60,
+  "fields": [
+    {
+      "key": "api_token",
+      "label": "Deriv API Token",
+      "secret": true,
+      "required": false,
+      "description": "Deriv API token (demo token VRTC... can never trade real money). Leave empty for read-only tools."
+    },
+    {
+      "key": "app_id",
+      "label": "App ID",
+      "secret": false,
+      "required": false,
+      "default": "1089",
+      "description": "Deriv application ID. Register your own at https://developers.deriv.com"
+    },
+    {
+      "key": "allow_live",
+      "label": "Allow Live Trading",
+      "secret": false,
+      "required": false,
+      "default": "false",
+      "description": "Set 'true' to allow orders on a real account. Default false blocks all real-account orders."
+    },
+    {
+      "key": "max_stake",
+      "label": "Max Stake per Trade",
+      "secret": false,
+      "required": false,
+      "default": "1.0",
+      "description": "Maximum stake per contract in currency units (hard cap)."
+    },
+    {
+      "key": "max_open",
+      "label": "Max Open Positions",
+      "secret": false,
+      "required": false,
+      "default": "1",
+      "description": "Maximum number of concurrent open contracts."
+    },
+    {
+      "key": "daily_loss_limit",
+      "label": "Daily Loss Limit",
+      "secret": false,
+      "required": false,
+      "default": "10.0",
+      "description": "Session-level daily loss limit in currency units. Blocks new orders once reached."
+    }
+  ],
+  "tools": [
+    {
+      "name": "quote",
+      "description": "Live spot price (bid/ask) for a Deriv synthetic symbol. No token needed.",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "symbol": {"type": "string", "description": "Symbol code, e.g. R_75, BOOM500, CRASH500, JD50"}
+        },
+        "required": ["symbol"]
+      },
+      "risk": "safe"
+    },
+    {
+      "name": "candles",
+      "description": "OHLC candle history for a symbol. No token needed.",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "symbol": {"type": "string", "description": "Symbol code"},
+          "granularity": {"type": "integer", "description": "Candle interval in seconds (60, 300, 900, ...)", "default": 60},
+          "count": {"type": "integer", "description": "Number of candles", "default": 100}
+        },
+        "required": ["symbol"]
+      },
+      "risk": "safe"
+    },
+    {
+      "name": "symbols",
+      "description": "List all active synthetic symbols with display names and market status.",
+      "input_schema": {
+        "type": "object",
+        "properties": {}
+      },
+      "risk": "safe"
+    },
+    {
+      "name": "contracts_for",
+      "description": "Available contract types, durations, barriers, min/max stake for a symbol.",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "symbol": {"type": "string", "description": "Symbol code"}
+        },
+        "required": ["symbol"]
+      },
+      "risk": "safe"
+    },
+    {
+      "name": "indicators",
+      "description": "Technical indicators (RSI, EMA, ATR, Bollinger Bands) computed from recent candles.",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "symbol": {"type": "string", "description": "Symbol code"},
+          "granularity": {"type": "integer", "description": "Candle interval in seconds", "default": 60},
+          "count": {"type": "integer", "description": "Number of candles", "default": 200},
+          "indicator": {"type": "string", "description": "rsi | ema | atr | bollinger | all", "default": "all"}
+        },
+        "required": ["symbol"]
+      },
+      "risk": "safe"
+    },
+    {
+      "name": "account",
+      "description": "Account balance, currency, and demo/real status. Needs API token.",
+      "input_schema": {
+        "type": "object",
+        "properties": {}
+      },
+      "risk": "safe"
+    },
+    {
+      "name": "positions",
+      "description": "Open contracts with entry price, current P/L, and expiry. Needs API token.",
+      "input_schema": {
+        "type": "object",
+        "properties": {}
+      },
+      "risk": "safe"
+    },
+    {
+      "name": "backtest",
+      "description": "Walk-forward backtest of a strategy on historical ticks. Out-of-sample result only.",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "symbol": {"type": "string", "description": "Symbol code"},
+          "strategy": {"type": "string", "description": "mean-revert | fade-spike | momentum", "default": "mean-revert"},
+          "k": {"type": "number", "description": "Z-score threshold", "default": 2.0},
+          "hold": {"type": "integer", "description": "Hold bars", "default": 20},
+          "stake": {"type": "number", "description": "Stake fraction of equity per trade", "default": 0.02},
+          "stop_bp": {"type": "number", "description": "Stop-loss in basis points", "default": 30},
+          "take_bp": {"type": "number", "description": "Take-profit in basis points", "default": 60},
+          "spread_bp": {"type": "number", "description": "Round-trip spread cost in basis points", "default": 5}
+        },
+        "required": ["symbol"]
+      },
+      "risk": "safe"
+    },
+    {
+      "name": "buy",
+      "description": "Place a Deriv contract. Requires API token + user approval (risk=purchase).",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "symbol": {"type": "string", "description": "Symbol code"},
+          "contract_type": {"type": "string", "description": "Call | Put | Rise | Fall | Higher | Lower | ... (see contracts_for)"},
+          "stake": {"type": "number", "description": "Stake amount in currency units"},
+          "duration": {"type": "integer", "description": "Contract duration"},
+          "duration_unit": {"type": "string", "description": "t | s | m | h | d", "default": "t"},
+          "barrier": {"type": "string", "description": "Barrier level (for barrier contracts)"}
+        },
+        "required": ["symbol", "contract_type", "stake", "duration"]
+      },
+      "risk": "purchase"
+    },
+    {
+      "name": "close",
+      "description": "Sell an open contract. Requires API token + user approval (risk=purchase).",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "contract_id": {"type": "string", "description": "Open contract ID (from positions)"}
+        },
+        "required": ["contract_id"]
+      },
+      "risk": "purchase"
+    }
+  ]
+}
