@@ -100,10 +100,9 @@ cat > "$ANDROID_MAIN/res/xml/accessibility_service_config.xml" <<'XMLEOF'
 <accessibility-service xmlns:android="http://schemas.android.com/apk/res/android"
     android:description="@string/app_name"
     android:canRetrieveWindowContent="true"
-    android:flags="flagRequestTouchExplorationMode|flagReportViewIds|flagRetrieveInteractiveWindows"
+    android:accessibilityFlags="flagReportViewIds|flagRetrieveInteractiveWindows"
     android:accessibilityEventTypes="typeWindowStateChanged|typeViewFocused|typeViewClicked|typeViewTextChanged|typeWindowContentChanged"
     android:notificationTimeout="100"
-    android:settingsActivity="ai.zerothebot.app.accessibility.FloatingBubbleActivity"
 />
 XMLEOF
 
