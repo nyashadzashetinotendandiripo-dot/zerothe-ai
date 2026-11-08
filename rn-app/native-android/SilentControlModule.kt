@@ -1,6 +1,5 @@
 package ai.zerothebot.app.accessibility
 
-import android.app.AlarmManager
 import android.app.NotificationManager
 import android.content.ContentProviderOperation
 import android.content.Intent
@@ -183,12 +182,12 @@ class SilentControlModule(reactContext: ReactApplicationContext) :
     @ReactMethod
     fun setAlarm(hour: Double, minute: Double, label: String, promise: Promise) {
         try {
-            val i = Intent(AlarmManager.ACTION_SET_ALARM)
+            val i = Intent(android.provider.AlarmClock.ACTION_SET_ALARM)
             i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-            i.putExtra(AlarmManager.EXTRA_HOUR, hour.toInt())
-            i.putExtra(AlarmManager.EXTRA_MINUTES, minute.toInt())
-            if (label.isNotBlank()) i.putExtra(AlarmManager.EXTRA_MESSAGE, label)
-            i.putExtra(AlarmManager.EXTRA_SKIP_UI, true)
+            i.putExtra(android.provider.AlarmClock.EXTRA_HOUR, hour.toInt())
+            i.putExtra(android.provider.AlarmClock.EXTRA_MINUTES, minute.toInt())
+            if (label.isNotBlank()) i.putExtra(android.provider.AlarmClock.EXTRA_MESSAGE, label)
+            i.putExtra(android.provider.AlarmClock.EXTRA_SKIP_UI, true)
             ctx().startActivity(i)
             val o = Arguments.createMap()
             o.putBoolean("set", true); o.putInt("hour", hour.toInt()); o.putInt("minute", minute.toInt())
@@ -200,11 +199,11 @@ class SilentControlModule(reactContext: ReactApplicationContext) :
     @ReactMethod
     fun setTimer(seconds: Double, label: String, promise: Promise) {
         try {
-            val i = Intent(AlarmManager.ACTION_SET_TIMER)
+            val i = Intent(android.provider.AlarmClock.ACTION_SET_TIMER)
             i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-            i.putExtra(AlarmManager.EXTRA_LENGTH, seconds.toInt())
-            if (label.isNotBlank()) i.putExtra(AlarmManager.EXTRA_MESSAGE, label)
-            i.putExtra(AlarmManager.EXTRA_SKIP_UI, true)
+            i.putExtra(android.provider.AlarmClock.EXTRA_LENGTH, seconds.toInt())
+            if (label.isNotBlank()) i.putExtra(android.provider.AlarmClock.EXTRA_MESSAGE, label)
+            i.putExtra(android.provider.AlarmClock.EXTRA_SKIP_UI, true)
             ctx().startActivity(i)
             val o = Arguments.createMap()
             o.putBoolean("set", true); o.putInt("seconds", seconds.toInt())
