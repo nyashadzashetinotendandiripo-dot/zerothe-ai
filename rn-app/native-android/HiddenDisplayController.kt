@@ -1,7 +1,6 @@
 package ai.zerothebot.app.accessibility
 
 import android.content.Context
-import android.graphics.ImageFormat
 import android.hardware.display.DisplayManager
 import android.media.ImageReader
 import android.os.Build
@@ -55,7 +54,7 @@ object HiddenDisplayController {
             val w = width.coerceIn(320, 2160)
             val h = height.coerceIn(480, 2160)
             val d = dpi.coerceIn(120, 640)
-            val r = ImageReader.newInstance(w, h, ImageFormat.RGBA_8888, 2)
+            val r = ImageReader.newInstance(w, h, android.graphics.PixelFormat.RGBA_8888, 2)
             reader = r
             val dm = context.getSystemService(Context.DISPLAY_SERVICE) as DisplayManager
             val flags = DisplayManager.VIRTUAL_DISPLAY_FLAG_PUBLIC or
@@ -67,7 +66,7 @@ object HiddenDisplayController {
                 return INVALID
             }
             virtualDisplay = vd
-            displayId = vd.display.id
+            displayId = vd.display.displayId
             return displayId
         } catch (e: Exception) {
             close()
