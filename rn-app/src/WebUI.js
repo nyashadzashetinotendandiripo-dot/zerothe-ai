@@ -10,6 +10,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { api, conf, pluginsList, pluginConnect, pluginDisconnect, pluginConfig, mcpList, mcpSave, mcpDelete, mcpRestart } from './session';
 import * as androidControl from './androidControl';
 import * as silentControl from './silentControl';
+import * as hiddenScreen from './hiddenScreen';
 import { C } from './theme';
 import Avatar from './Avatar';
 
@@ -3263,6 +3264,7 @@ export function AndroidBoxScreen({ conn, account, onAvatar }) {
 export function SmartControlView({ conn, account, onAvatar }) {
   const [status, setStatus] = useState({ enabled: false, ourServiceEnabled: false, overlay: false });
   const [silent, setSilent] = useState({ available: false, listener: false, dndAccess: false });
+  const [hidden, setHidden] = useState({ available: false, supported: false, active: false, displayId: -1, service: false });
   const [busy, setBusy] = useState(false);
   const [output, setOutput] = useState('');
   const [query, setQuery] = useState('');
@@ -3279,6 +3281,8 @@ export function SmartControlView({ conn, account, onAvatar }) {
       } catch (e) { setStatus({ enabled: false, ourServiceEnabled: false, overlay: false }); }
       const sv = await silentControl.isSilentReady();
       setSilent(sv);
+      const hs = await hiddenScreen.status();
+      setHidden(hs);
     })();
   }, []);
 
@@ -3407,6 +3411,83 @@ export function SmartControlView({ conn, account, onAvatar }) {
                 </Pressable>
               )}
             </View>
+          </View>
+
+          <View style={[W.museCard, { marginBottom: 12 }]}>
+            <Text style={W.museSection} marginBottom={8}>Hidden Screen</Text>
+            <Text style={[W.gSub, { marginBottom: 8 }]}>
+              Bots open apps and work inside them on an invisible screen — your
+              display never changes, you stay right here. Needs Android 11 or newer;
+              other phones automatically fall back.
+            </Text>
+            {!hidden.supported ? (
+              <Text style={{ color: C.muted, fontSize: 12, fontWeight: '700' }}>
+                Not supported on this phone (needs Android 11 or newer).
+              </Text>
+            ) : (
+              <>
+                <Text style={{ color: hidden.active ? C.ok : C.muted, fontWeight: '700', fontSize: 12, marginBottom: 8 }}>
+                  {hidden.active ? `Hidden screen is on (display ${hidden.displayId}).` : 'Hidden screen is off.'}
+                </Text>
+                <View style={{ flexDirection: 'row', gap: 6, marginBottom: 8, flexWrap: 'wrap' }}>
+                  <Pressable onPress={async () => {
+                    setBusy(true); try {
+                      const r = await hiddenScreen.show();
+                      setHidden(await hiddenScreen.status());
+                      setOutput('Hidden screen: ' + JSON.stringify(r));
+                    } catch (e) { setOutput('Error: ' + (e.message || e)); } setBusy(false);
+                  }} disabled={busy}
+                    style={[W.pillBtn, { backgroundColor: C.panel2, paddingHorizontal: 14 }]}>
+                    <Text style={{ color: C.text, fontWeight: '700' }}>Turn On</Text>
+                  </Pressable>
+                  <Pressable onPress={async () => {
+                    setBusy(true); try {
+                      const app = (query || 'com.android.settings').trim();
+                      const r = await hiddenScreen.launchApp(app);
+                      setOutput('Launched on hidden screen: ' + JSON.stringify(r));
+                    } catch (e) { setOutput('Error: ' + (e.message || e)); } setBusy(false);
+                  }} disabled={busy}
+                    style={[W.pillBtn, { backgroundColor: C.panel2, paddingHorizontal: 14 }]}>
+                    <Text style={{ color: C.text, fontWeight: '700' }}>Open App Hidden</Text>
+                  </Pressable>
+                  <Pressable onPress={async () => {
+                    setBusy(true); try {
+                      const t = await hiddenScreen.dump();
+                      setOutput(t ? JSON.stringify(t).slice(0, 3000) : 'Nothing running on the hidden screen.');
+                    } catch (e) { setOutput('Error: ' + (e.message || e)); } setBusy(false);
+                  }} disabled={busy}
+                    style={[W.pillBtn, { backgroundColor: C.panel2, paddingHorizontal: 14 }]}>
+                    <Text style={{ color: C.text, fontWeight: '700' }}>Dump Hidden</Text>
+                  </Pressable>
+                  <Pressable onPress={async () => {
+                    setBusy(true); try {
+                      setOutput(JSON.stringify(await hiddenScreen.findText(query)) || 'no match');
+                    } catch (e) { setOutput('Error: ' + (e.message || e)); } setBusy(false);
+                  }} disabled={busy || !query.trim()}
+                    style={[W.pillBtn, { backgroundColor: C.panel2, paddingHorizontal: 14 }]}>
+                    <Text style={{ color: C.text, fontWeight: '700' }}>Find Text Hidden</Text>
+                  </Pressable>
+                  <Pressable onPress={async () => {
+                    setBusy(true); try {
+                      setOutput('Tapped: ' + JSON.stringify(await hiddenScreen.tapText(query)));
+                    } catch (e) { setOutput('Error: ' + (e.message || e)); } setBusy(false);
+                  }} disabled={busy || !query.trim()}
+                    style={[W.pillBtn, { backgroundColor: C.panel2, paddingHorizontal: 14 }]}>
+                    <Text style={{ color: C.text, fontWeight: '700' }}>Tap Text Hidden</Text>
+                  </Pressable>
+                  <Pressable onPress={async () => {
+                    setBusy(true); try {
+                      await hiddenScreen.hide();
+                      setHidden(await hiddenScreen.status());
+                      setOutput('Hidden screen closed.');
+                    } catch (e) { setOutput('Error: ' + (e.message || e)); } setBusy(false);
+                  }} disabled={busy}
+                    style={[W.pillBtn, { backgroundColor: C.panel2, paddingHorizontal: 14 }]}>
+                    <Text style={{ color: C.text, fontWeight: '700' }}>Turn Off</Text>
+                  </Pressable>
+                </View>
+              </>
+            )}
           </View>
 
           <View style={[W.museCard, { marginBottom: 12 }]}>

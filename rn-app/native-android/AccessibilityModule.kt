@@ -15,7 +15,7 @@ import com.facebook.react.uimanager.ViewManager
 
 class AccessibilityPackage : ReactPackage {
     override fun createNativeModules(reactContext: ReactApplicationContext): List<NativeModule> =
-        listOf(AccessibilityModule(reactContext), SilentControlModule(reactContext))
+        listOf(AccessibilityModule(reactContext), SilentControlModule(reactContext), HiddenScreenModule(reactContext))
 
     override fun createViewManagers(reactContext: ReactApplicationContext): List<ViewManager<*, *>> =
         emptyList()

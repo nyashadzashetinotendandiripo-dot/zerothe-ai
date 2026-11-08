@@ -3,12 +3,15 @@ package ai.zerothebot.app.accessibility
 import android.accessibilityservice.AccessibilityService
 import android.accessibilityservice.GestureDescription
 import android.accessibilityservice.AccessibilityServiceInfo
+import android.content.Context
 import android.content.Intent
 import android.graphics.Rect
+import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
+import android.view.accessibility.AccessibilityWindowInfo
 import android.view.KeyEvent
 import android.graphics.Path
 import android.os.Bundle
@@ -55,6 +58,96 @@ class ZerotheBotAccessibilityService : AccessibilityService() {
         val r = Rect()
         node.getBoundsInScreen(r)
         return r
+    }
+
+    // ---------- Hidden display (invisible workspace) support ----------
+
+    /** Root node of the app window on a specific display (e.g. the hidden one). */
+    fun getRootOnDisplay(displayId: Int): String? {
+        return try {
+            val win = topAppWindowOnDisplay(displayId) ?: return null
+            nodeToJson(win.root ?: return null, 0)
+        } catch (e: Exception) { null }
+    }
+
+    private fun topAppWindowOnDisplay(displayId: Int): AccessibilityWindowInfo? {
+        if (Build.VERSION.SDK_INT < 30) return null
+        val windows = getWindowsOnAllDisplays()
+        val list = windows.get(displayId) ?: return null
+        for (w in list) {
+            if (w.root != null) return w
+        }
+        return null
+    }
+
+    fun findTextOnDisplay(displayId: Int, searchText: String, exact: Boolean): String {
+        val results = StringBuilder("[")
+        val root = try {
+            val win = topAppWindowOnDisplay(displayId) ?: return "[]"
+            win.root ?: return "[]"
+        } catch (e: Exception) { return "[]" }
+        collectNodesMatching(root, searchText, exact, results)
+        results.append("]")
+        return results.toString()
+    }
+
+    fun tapTextOnDisplay(displayId: Int, searchText: String): Boolean {
+        val root = try {
+            val win = topAppWindowOnDisplay(displayId) ?: return false
+            win.root ?: return false
+        } catch (e: Exception) { return false }
+        val node = findNodeByText(root, searchText) ?: return false
+        return tapNode(node)
+    }
+
+    fun setTextOnDisplay(displayId: Int, search: String, text: String): Boolean {
+        val root = try {
+            val win = topAppWindowOnDisplay(displayId) ?: return false
+            win.root ?: return false
+        } catch (e: Exception) { return false }
+        val node = if (search.isBlank()) {
+            root.findFocus(AccessibilityNodeInfo.FOCUS_INPUT)
+        } else {
+            findNodeByText(root, search)
+        } ?: return false
+        return setNodeText(node, text)
+    }
+
+    fun scrollOnDisplay(displayId: Int, direction: String): Boolean {
+        val root = try {
+            val win = topAppWindowOnDisplay(displayId) ?: return false
+            win.root ?: return false
+        } catch (e: Exception) { return false }
+        val scrollable = findScrollableNode(root) ?: return false
+        val action = if (direction == "up") AccessibilityNodeInfo.ACTION_SCROLL_BACKWARD
+                     else AccessibilityNodeInfo.ACTION_SCROLL_FORWARD
+        return try { scrollable.performAction(action) } catch (e: Exception) { false }
+    }
+
+    private fun findScrollableNode(node: AccessibilityNodeInfo?): AccessibilityNodeInfo? {
+        if (node == null) return null
+        if (node.isScrollable) return node
+        for (i in 0 until node.childCount) {
+            val found = findScrollableNode(node.getChild(i))
+            if (found != null) return found
+        }
+        return null
+    }
+
+    /** Launch an app on a specific display via the official setLaunchDisplayId. */
+    fun launchAppOnDisplay(context: Context, packageName: String, displayId: Int): Boolean {
+        return try {
+            val intent = packageManager.getLaunchIntentForPackage(packageName)
+            if (intent == null) false else {
+                intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                val opts = android.app.ActivityOptions.makeBasic()
+                if (Build.VERSION.SDK_INT >= 26) opts.setLaunchDisplayId(displayId)
+                context.startActivity(intent, opts.toBundle())
+                true
+            }
+        } catch (e: Exception) {
+            false
+        }
     }
 
     // ---------- Public API for the RN bridge ----------
