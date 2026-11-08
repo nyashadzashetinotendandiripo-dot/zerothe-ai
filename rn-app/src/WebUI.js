@@ -9,6 +9,7 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { api, conf, pluginsList, pluginConnect, pluginDisconnect, pluginConfig, mcpList, mcpSave, mcpDelete, mcpRestart } from './session';
 import * as androidControl from './androidControl';
+import * as silentControl from './silentControl';
 import { C } from './theme';
 import Avatar from './Avatar';
 
@@ -3261,9 +3262,11 @@ export function AndroidBoxScreen({ conn, account, onAvatar }) {
 // ---------------------------------------------------------------- Smart Android Control (on-device)
 export function SmartControlView({ conn, account, onAvatar }) {
   const [status, setStatus] = useState({ enabled: false, ourServiceEnabled: false, overlay: false });
+  const [silent, setSilent] = useState({ available: false, listener: false, dndAccess: false });
   const [busy, setBusy] = useState(false);
   const [output, setOutput] = useState('');
   const [query, setQuery] = useState('');
+  const [msg, setMsg] = useState('Reply from ZerotheBot — sent silently, no app opened.');
 
   useEffect(() => {
     (async () => {
@@ -3274,6 +3277,8 @@ export function SmartControlView({ conn, account, onAvatar }) {
         ]);
         setStatus({ enabled: acc, ourServiceEnabled: acc, overlay: ov });
       } catch (e) { setStatus({ enabled: false, ourServiceEnabled: false, overlay: false }); }
+      const sv = await silentControl.isSilentReady();
+      setSilent(sv);
     })();
   }, []);
 
@@ -3318,9 +3323,91 @@ export function SmartControlView({ conn, account, onAvatar }) {
         <View style={{ paddingHorizontal: 16 }}>
           <Text style={W.museSection}>Smart Android Control</Text>
           <Text style={W.gSub} marginBottom={12}>
-            Bots can read your screen, tap, type, scroll, and open apps on this phone —
-            while ZerotheBot stays alive in the background.
+            Bots can work on this phone two ways: Silent Mode (official Android APIs —
+            nothing on your screen changes while you stay in ZerotheBot) and Screen
+            Control (the robot finger, used only when a task must tap something).
           </Text>
+
+          <View style={[W.museCard, { marginBottom: 12 }]}>
+            <Text style={W.museSection} marginBottom={8}>Silent Mode</Text>
+            <Text style={[W.gSub, { marginBottom: 8 }]}>
+              Bots read messages, reply, set alarms and timers, add calendar events,
+              add contacts, and change volume — all without leaving this screen.
+            </Text>
+            {!silent.listener && (
+              <View style={{ flexDirection: 'row', gap: 8, marginBottom: 8 }}>
+                <Pressable onPress={async () => {
+                  await silentControl.openNotificationAccessSettings();
+                  setTimeout(async () => setSilent(await silentControl.isSilentReady()), 3000);
+                }} disabled={busy}
+                  style={[W.pillBtn, { backgroundColor: C.solid, paddingHorizontal: 14 }]}>
+                  <Text style={{ color: '#fff', fontWeight: '800' }}>Allow Notification Access</Text>
+                </Pressable>
+                <Text style={W.gSub} numberOfLines={2}>
+                  One-time: allow ZerotheBot in Notification access so bots can act on messages silently.
+                </Text>
+              </View>
+            )}
+            {silent.listener && (
+              <Text style={{ color: C.ok, fontWeight: '700', fontSize: 12, marginBottom: 8 }}>
+                Silent Mode is active — bots can act on Android in the background.
+              </Text>
+            )}
+            <View style={{ flexDirection: 'row', gap: 6, marginBottom: 8, flexWrap: 'wrap' }}>
+              <TextInput style={[W.rowInput, { flex: 1, minWidth: 160 }]} value={msg} onChangeText={setMsg}
+                placeholder="Message text for silent actions" />
+            </View>
+            <View style={{ flexDirection: 'row', gap: 6, marginBottom: 8, flexWrap: 'wrap' }}>
+              <Pressable onPress={() => run(() => silentControl.readNotifications())} disabled={busy}
+                style={[W.pillBtn, { backgroundColor: C.panel2, paddingHorizontal: 14 }]}>
+                <Text style={{ color: C.text, fontWeight: '700' }}>Read Notifications</Text>
+              </Pressable>
+              <Pressable onPress={() => run(() => silentControl.replyToLatest(msg))} disabled={busy}
+                style={[W.pillBtn, { backgroundColor: C.panel2, paddingHorizontal: 14 }]}>
+                <Text style={{ color: C.text, fontWeight: '700' }}>Reply Silently</Text>
+              </Pressable>
+              <Pressable onPress={() => run(() => silentControl.dismissLatest())} disabled={busy}
+                style={[W.pillBtn, { backgroundColor: C.panel2, paddingHorizontal: 14 }]}>
+                <Text style={{ color: C.text, fontWeight: '700' }}>Dismiss Latest</Text>
+              </Pressable>
+            </View>
+            <View style={{ flexDirection: 'row', gap: 6, flexWrap: 'wrap' }}>
+              <Pressable onPress={() => run(() => silentControl.setAlarm(7, 30, 'ZerotheBot alarm'))} disabled={busy}
+                style={[W.pillBtn, { backgroundColor: C.panel2, paddingHorizontal: 14 }]}>
+                <Text style={{ color: C.text, fontWeight: '700' }}>Set Alarm 7:30</Text>
+              </Pressable>
+              <Pressable onPress={() => run(() => silentControl.setTimer(600, 'ZerotheBot timer'))} disabled={busy}
+                style={[W.pillBtn, { backgroundColor: C.panel2, paddingHorizontal: 14 }]}>
+                <Text style={{ color: C.text, fontWeight: '700' }}>Start Timer 10 Min</Text>
+              </Pressable>
+              <Pressable onPress={() => run(() => silentControl.addCalendarEvent(msg || 'ZerotheBot event', Date.now() + 3600000, 30))} disabled={busy}
+                style={[W.pillBtn, { backgroundColor: C.panel2, paddingHorizontal: 14 }]}>
+                <Text style={{ color: C.text, fontWeight: '700' }}>Add Calendar Event</Text>
+              </Pressable>
+              <Pressable onPress={() => run(() => silentControl.addContact('ZerotheBot Contact', '+263777000123'))} disabled={busy}
+                style={[W.pillBtn, { backgroundColor: C.panel2, paddingHorizontal: 14 }]}>
+                <Text style={{ color: C.text, fontWeight: '700' }}>Add Contact</Text>
+              </Pressable>
+              <Pressable onPress={() => run(() => silentControl.setVolume(40, 'music'))} disabled={busy}
+                style={[W.pillBtn, { backgroundColor: C.panel2, paddingHorizontal: 14 }]}>
+                <Text style={{ color: C.text, fontWeight: '700' }}>Volume 40%</Text>
+              </Pressable>
+              {!silent.dndAccess ? (
+                <Pressable onPress={async () => {
+                  await silentControl.openDndSettings();
+                  setTimeout(async () => setSilent(await silentControl.isSilentReady()), 3000);
+                }} disabled={busy}
+                  style={[W.pillBtn, { backgroundColor: C.panel2, paddingHorizontal: 14 }]}>
+                  <Text style={{ color: C.text, fontWeight: '700' }}>Allow DND Access</Text>
+                </Pressable>
+              ) : (
+                <Pressable onPress={() => run(() => silentControl.dnd(30))} disabled={busy}
+                  style={[W.pillBtn, { backgroundColor: C.panel2, paddingHorizontal: 14 }]}>
+                  <Text style={{ color: C.text, fontWeight: '700' }}>DND 30 Min</Text>
+                </Pressable>
+              )}
+            </View>
+          </View>
 
           <View style={[W.museCard, { marginBottom: 12 }]}>
             <Text style={W.museSection} marginBottom={8}>Permissions</Text>

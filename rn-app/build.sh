@@ -62,12 +62,17 @@ for perm in [
     'android.permission.FOREGROUND_SERVICE',
     'android.permission.POST_NOTIFICATIONS',
     'android.permission.INTERNET',
+    'com.android.alarm.permission.SET_ALARM',
+    'android.permission.READ_CONTACTS',
+    'android.permission.WRITE_CONTACTS',
+    'android.permission.READ_CALENDAR',
+    'android.permission.WRITE_CALENDAR',
 ]:
     if perm not in s:
         s = s.replace('</manifest>',
                       f'    <uses-permission android:name="{perm}" />\n</manifest>', 1)
 
-# Add AccessibilityService + FloatingBubbleActivity before </application>
+# Add AccessibilityService + FloatingBubbleActivity + NotificationListener before </application>
 inject = '''
     <service
         android:name="ai.zerothebot.app.accessibility.ZerotheBotAccessibilityService"
@@ -79,6 +84,14 @@ inject = '''
         <meta-data
             android:name="android.accessibilityservice"
             android:resource="@xml/accessibility_service_config" />
+    </service>
+    <service
+        android:name="ai.zerothebot.app.accessibility.ZerotheBotNotificationListener"
+        android:permission="android.permission.BIND_NOTIFICATION_LISTENER_SERVICE"
+        android:exported="false">
+        <intent-filter>
+            <action android:name="android.service.notification.NotificationListenerService" />
+        </intent-filter>
     </service>
     <activity
         android:name="ai.zerothebot.app.accessibility.FloatingBubbleActivity"
